@@ -19,7 +19,32 @@ release (Değişmez JSONL paketi + manifest.json)
 MESA Staging DB (Atomik, Idempotent Import & Rollback)
 ```
 
-## Hızlı Başlangıç
+## Web Yönetim Paneli (Vanilla HTML/CSS/JS + FastAPI)
+
+MESA Legal Data web yönetim paneli, tüm veri toplama, orkestrasyon, inceleme, release ve staging aktarım işlemlerini kullanıcı dostu sade bir HTML arayüz üzerinden gerçekleştirmenizi sağlar.
+
+### Web Panelini Başlatma
+```bash
+uv run mesa-data web --host 127.0.0.1 --port 8765
+```
+Tarayıcınızda `http://127.0.0.1:8765` adresini açınız.
+
+### Güvenlik & Admin Token
+- Web paneli varsayılan olarak yalnızca yerel bilgisayardan (`127.0.0.1`) erişilebilir durumdadır.
+- Dış ağa açılacak durumlarda `MESA_DATA_WEB_ADMIN_TOKEN` çevre değişkeninin ayarlanması zorunludur.
+- Tüm yazma isteklerinde (`POST`/`PUT`/`DELETE`) `X-MESA-Requested-With: web-admin` başlığı zorunlu tutulmaktadır.
+
+### Ekranlar ve Fonksiyonlar
+1. **📊 Genel Bakış (Dashboard):** Gerçek veritabanı sayaçları, son 10 belge, son işlemler ve aktif MESA release durumu.
+2. **➕ Veri Ekle:** Yerel dosya (PDF/HTML) veya resmî HTTPS URL üzerinden ham veri aktarımı (`raw`).
+3. **📄 Belgeler:** Tüm belgelerin listelenmesi, filtrelenmesi, artifact detayları ve tek tıkla pipeline orkestrasyonu.
+4. **🔍 İnceleme (Review):** İnceleme bekleyen canonical kayıtlar, metin önizlemeleri, blocker sorun uyarıları, insan onayı (`approve`) ve reddetme (`reject`).
+5. **📦 Release'ler:** Gerçek JSONL release paketleme (`build`), SHA-256 manifest doğrulaması (`verify`), yayınlama (`publish`), MESA staging DB aktarımı (`import`), geri alma (`rollback`) ve iptal (`revoke`).
+6. **⚙️ Sistem:** Sistem teşhisi (`doctor`), bütünlük denetimi (`audit`) ve yedekleme (`backup`).
+
+---
+
+## Hızlı Başlangıç (CLI)
 
 ### 1. Ortam Kurulumu
 ```bash

@@ -22,6 +22,9 @@ dependencies = [
     "typer>=0.15.1",
     "rich>=13.9.4",
     "puremagic>=1.23",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.12",
 ]
 
 [project.scripts]

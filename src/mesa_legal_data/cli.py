@@ -506,5 +506,32 @@ def provenance_cmd(
             typer.echo(f"  {k}: {v}")
 
 
+@app.command("web")
+def web_cmd(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host address to bind"),
+    port: int = typer.Option(8765, "--port", help="Port to listen on"),
+    reload: bool = typer.Option(False, "--reload", help="Enable dev auto-reload"),
+):
+    """Launches the MESA Legal Data Web Management Server."""
+    import os
+
+    import uvicorn
+
+    admin_token = os.environ.get("MESA_DATA_WEB_ADMIN_TOKEN", "").strip()
+    if host not in ("127.0.0.1", "::1", "localhost") and not admin_token:
+        typer.secho(
+            "ERROR: Binding to non-loopback host requires MESA_DATA_WEB_ADMIN_TOKEN to be set.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    typer.secho(
+        f"Starting MESA Web Admin on http://{host}:{port} ...",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    uvicorn.run("mesa_legal_data.web.app:create_app", factory=True, host=host, port=port, reload=reload)
+
+
 if __name__ == "__main__":
     app()

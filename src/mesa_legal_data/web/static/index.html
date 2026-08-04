@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MESA Legal Data — Yönetim Paneli</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-icon">⚖️</span>
+        <h2>MESA Data</h2>
+      </div>
+      <nav class="nav-menu">
+        <button class="nav-btn active" data-view="dashboard">
+          <span class="nav-icon">📊</span> Genel Bakış
+        </button>
+        <button class="nav-btn" data-view="add_data">
+          <span class="nav-icon">➕</span> Veri Ekle
+        </button>
+        <button class="nav-btn" data-view="documents">
+          <span class="nav-icon">📄</span> Belgeler
+        </button>
+        <button class="nav-btn" data-view="reviews">
+          <span class="nav-icon">🔍</span> İnceleme
+        </button>
+        <button class="nav-btn" data-view="releases">
+          <span class="nav-icon">📦</span> Release'ler
+        </button>
+        <button class="nav-btn" data-view="system">
+          <span class="nav-icon">⚙️</span> Sistem
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="status-indicator online">● Sürücü Bağlı</span>
+        <small id="app-version">v0.1.0</small>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <header class="top-header">
+        <h1 id="view-title">Genel Bakış</h1>
+        <div class="header-actions">
+          <button id="btn-token" class="btn btn-secondary">🔑 Admin Token</button>
+          <span id="busy-spinner" class="spinner hidden">İşleniyor...</span>
+        </div>
+      </header>
+
+      <!-- Toast Notification Container -->
+      <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+      <!-- Views Container -->
+      <div class="content-body">
+        
+        <!-- View 1: Dashboard -->
+        <section id="view-dashboard" class="view-panel active">
+          <div class="stats-grid">
+            <div class="stat-card">
+              <span class="stat-label">Toplam Belge</span>
+              <span class="stat-val" id="stat-docs">0</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Raw Artifact</span>
+              <span class="stat-val" id="stat-artifacts">0</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Canonical Kayıt</span>
+              <span class="stat-val" id="stat-records">0</span>
+            </div>
+            <div class="stat-card warning">
+              <span class="stat-label">İnceleme Bekleyen</span>
+              <span class="stat-val" id="stat-pending">0</span>
+            </div>
+            <div class="stat-card success">
+              <span class="stat-label">Onaylı Kayıt</span>
+              <span class="stat-val" id="stat-approved">0</span>
+            </div>
+            <div class="stat-card danger">
+              <span class="stat-label">Açık Blocker / Error</span>
+              <span class="stat-val" id="stat-issues">0</span>
+            </div>
+            <div class="stat-card primary">
+              <span class="stat-label">Published Release</span>
+              <span class="stat-val" id="stat-releases">0</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Aktif MESA Release</span>
+              <span class="stat-val text-sm" id="stat-active-release">YOK</span>
+            </div>
+          </div>
+
+          <div class="dashboard-sections">
+            <div class="panel-box">
+              <h3>Son Güncellenen Belgeler</h3>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Document ID</th>
+                      <th>Tür</th>
+                      <th>Başlık</th>
+                      <th>Durum</th>
+                      <th>Güncelleme</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-recent-docs"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel-box">
+              <h3>Son İşlem Geçmişi</h3>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Run ID</th>
+                      <th>Komut</th>
+                      <th>Durum</th>
+                      <th>Başlangıç</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-recent-runs"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- View 2: Add Data -->
+        <section id="view-add_data" class="view-panel hidden">
+          <div class="panel-box">
+            <div class="tab-buttons">
+              <button class="tab-btn active" data-tab="tab-file">📁 Dosyadan Yükle</button>
+              <button class="tab-btn" data-tab="tab-url">🔗 Resmî URL'den Yükle</button>
+            </div>
+
+            <!-- Tab 1: File Upload Form -->
+            <form id="form-upload-file" class="tab-content active">
+              <div class="form-group">
+                <label for="file-source">Kaynak</label>
+                <select id="file-source" required>
+                  <option value="mevzuat">mevzuat (Resmî Mevzuat Portalı)</option>
+                  <option value="aym">aym (Anayasa Mahkemesi)</option>
+                  <option value="yargitay">yargitay (Yargıtay Karar Bankası)</option>
+                  <option value="resmi_gazete">resmi_gazete (T.C. Resmî Gazete)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="file-family">Belge Ailesi</label>
+                <select id="file-family" required>
+                  <option value="legislation">legislation (Mevzuat)</option>
+                  <option value="decision">decision (Yargı Kararı)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="file-input">Dosya Seç (PDF / HTML)</label>
+                <input type="file" id="file-input" required>
+              </div>
+              <div class="form-group">
+                <label for="file-doc-id">Document ID</label>
+                <input type="text" id="file-doc-id" placeholder="tr:legislation:law:4721" required>
+              </div>
+              <div class="form-group">
+                <label for="file-title">Başlık (Opsiyonel)</label>
+                <input type="text" id="file-title" placeholder="Türk Medeni Kanunu">
+              </div>
+              <button type="submit" class="btn btn-primary" id="btn-submit-file">Yükle</button>
+            </form>
+
+            <!-- Tab 2: URL Import Form -->
+            <form id="form-upload-url" class="tab-content hidden">
+              <div class="form-group">
+                <label for="url-source">Kaynak</label>
+                <select id="url-source" required>
+                  <option value="mevzuat">mevzuat (https://www.mevzuat.gov.tr)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="url-input">Resmî HTTPS URL</label>
+                <input type="url" id="url-input" placeholder="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf" required>
+              </div>
+              <div class="form-group">
+                <label for="url-doc-id">Document ID</label>
+                <input type="text" id="url-doc-id" placeholder="tr:legislation:constitution:2709" required>
+              </div>
+              <div class="form-group">
+                <label for="url-title">Başlık (Opsiyonel)</label>
+                <input type="text" id="url-title" placeholder="Türkiye Cumhuriyeti Anayasası">
+              </div>
+              <button type="submit" class="btn btn-primary" id="btn-submit-url">İndir ve İçe Aktar</button>
+            </form>
+          </div>
+        </section>
+
+        <!-- View 3: Documents -->
+        <section id="view-documents" class="view-panel hidden">
+          <div class="panel-box">
+            <div class="filter-bar">
+              <input type="text" id="filter-doc-q" placeholder="Document ID veya başlık ara...">
+              <select id="filter-doc-status">
+                <option value="">Tüm Durumlar</option>
+                <option value="fetched">fetched</option>
+                <option value="needs_review">needs_review</option>
+                <option value="approved">approved</option>
+              </select>
+              <button id="btn-doc-filter" class="btn btn-secondary">Filtrele</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Document ID</th>
+                    <th>Aile / Tür</th>
+                    <th>Başlık</th>
+                    <th>Durum</th>
+                    <th>Artifact</th>
+                    <th>Güncelleme</th>
+                    <th>İşlemler</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-docs"></tbody>
+              </table>
+            </div>
+            <div class="pagination-bar">
+              <button id="btn-doc-prev" class="btn btn-sm">‹ Önceki</button>
+              <span id="lbl-doc-page">Sayfa 1</span>
+              <button id="btn-doc-next" class="btn btn-sm">Sonraki ›</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- View 4: Reviews -->
+        <section id="view-reviews" class="view-panel hidden">
+          <div class="panel-box">
+            <div class="filter-bar">
+              <select id="filter-review-status">
+                <option value="pending">İnceleme Bekleyenler (pending)</option>
+                <option value="approved">Onaylılar (approved)</option>
+                <option value="rejected">Reddedilenler (rejected)</option>
+              </select>
+              <button id="btn-review-filter" class="btn btn-secondary">Yenile</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Record ID</th>
+                    <th>Tür</th>
+                    <th>Document ID</th>
+                    <th>Validation</th>
+                    <th>Onay Durumu</th>
+                    <th>Oluşturulma</th>
+                    <th>İşlemler</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-reviews"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- View 5: Releases -->
+        <section id="view-releases" class="view-panel hidden">
+          <div class="panel-box">
+            <div class="release-build-card">
+              <h3>Yeni Release Paketle</h3>
+              <div class="form-row">
+                <input type="text" id="txt-release-id" placeholder="legal-core-2026-v1">
+                <button id="btn-build-release" class="btn btn-primary">Package Release</button>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Release ID</th>
+                    <th>Durum</th>
+                    <th>Mevzuat</th>
+                    <th>Madde</th>
+                    <th>Karar</th>
+                    <th>Atıf</th>
+                    <th>Oluşturulma</th>
+                    <th>Aksiyonlar</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-releases"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- View 6: System -->
+        <section id="view-system" class="view-panel hidden">
+          <div class="panel-box">
+            <h3>Sistem Teşhisi ve Sağlık Durumu</h3>
+            <div class="system-actions">
+              <button id="btn-sys-doctor" class="btn btn-secondary">🏥 Doctor Çalıştır</button>
+              <button id="btn-sys-backup" class="btn btn-secondary">💾 Catalog Backup Al</button>
+            </div>
+            <pre id="sys-status-output" class="code-box">Yükleniyor...</pre>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal: Token Entry -->
+  <div id="modal-token" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <h3>🔑 Admin Token Kimlik Doğrulama</h3>
+      <p>Sunucuya erişmek için admin token'ınızı giriniz.</p>
+      <input type="password" id="txt-token-input" placeholder="Admin Token">
+      <div class="modal-actions">
+        <button id="btn-save-token" class="btn btn-primary">Kaydet</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Document Detail -->
+  <div id="modal-doc-detail" class="modal-backdrop hidden">
+    <div class="modal-card large">
+      <div class="modal-header">
+        <h3 id="doc-modal-title">Belge Detayı</h3>
+        <button class="btn-close" data-close="modal-doc-detail">×</button>
+      </div>
+      <div id="doc-modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Modal: Record Review Detail -->
+  <div id="modal-record-detail" class="modal-backdrop hidden">
+    <div class="modal-card large">
+      <div class="modal-header">
+        <h3 id="record-modal-title">Kayıt İnceleme</h3>
+        <button class="btn-close" data-close="modal-record-detail">×</button>
+      </div>
+      <div id="record-modal-body" class="modal-body"></div>
+      <div class="modal-footer">
+        <input type="text" id="txt-reviewer-name" placeholder="İnceleyen Adı (ör: yasin)" value="yasin">
+        <input type="text" id="txt-reviewer-note" placeholder="İnceleme Notu (opsiyonel)">
+        <button id="btn-record-approve" class="btn btn-success">Onayla</button>
+        <button id="btn-record-reject" class="btn btn-danger">Reddet</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
