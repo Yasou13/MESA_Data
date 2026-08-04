@@ -17,6 +17,22 @@ from mesa_legal_data.release.verifier import verify_release
 from mesa_legal_data.schema_validation import validate_record
 
 
+class ReleaseNotFound(Exception):
+    pass
+
+
+class ReleaseNotPublished(Exception):
+    pass
+
+
+class ReleaseRevoked(Exception):
+    pass
+
+
+class ReleaseStateChanged(Exception):
+    pass
+
+
 class ImportRollbackError(Exception):
     pass
 
@@ -66,12 +82,31 @@ def init_staging_db(conn: sqlite3.Connection):
     """)
 
 
-def import_release_to_staging(release_id: str) -> dict[str, Any]:
+def import_release_to_staging(release_id: str, batch_size: int = 2000) -> dict[str, Any]:
     """
     Imports a published, verified release package into the MESA staging database.
-    Guarantees atomic execution and idempotency.
+    Enforces catalog 'published' status check, streaming JSONL reading, and atomic rollback.
     """
-    # 1. Verify release package integrity first
+    # 0. Check catalog database status first
+    cat_conn = get_catalog_connection()
+    c = cat_conn.cursor()
+    c.execute("SELECT release_id, status FROM releases WHERE release_id = ?", (release_id,))
+    row = c.fetchone()
+    cat_conn.close()
+
+    if not row:
+        raise ReleaseNotFound(f"RELEASE_NOT_FOUND: Release '{release_id}' not found in catalog")
+
+    _, cat_status = row
+    if cat_status == "revoked":
+        raise ReleaseRevoked(f"RELEASE_REVOKED: Release '{release_id}' has been revoked")
+
+    if cat_status != "published":
+        raise ReleaseNotPublished(
+            f"RELEASE_NOT_PUBLISHED: Release '{release_id}' is in status '{cat_status}', must be 'published'"
+        )
+
+    # 1. Verify release package integrity on disk
     verify_release(release_id)
 
     settings = load_settings()
@@ -108,50 +143,72 @@ def import_release_to_staging(release_id: str) -> dict[str, Any]:
                 f"Release {release_id} already imported with different manifest SHA-256 collision"
             )
 
-    # 2. Parse and validate JSONL records
+    # 2. Stream JSONL records in batches
     data_dir = release_dir / "data"
-    jsonl_files = list(data_dir.glob("*.jsonl"))
+    jsonl_files = sorted(list(data_dir.glob("*.jsonl")))
 
-    records_to_insert = []
     type_counts = {"legislation": 0, "article": 0, "decision": 0, "citation": 0}
-
-    for jf in jsonl_files:
-        with open(jf, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        for idx, line in enumerate(lines, start=1):
-            line_str = line.strip()
-            if not line_str:
-                continue
-
-            rec_obj = json.loads(line_str)
-            validate_record(rec_obj)
-
-            r_id = rec_obj["id"]
-            r_type = rec_obj["record_type"]
-            rec_sha = hashlib.sha256(line.encode("utf-8")).hexdigest()
-
-            if r_type in type_counts:
-                type_counts[r_type] += 1
-
-            records_to_insert.append((release_id, r_id, r_type, rec_sha, json_str_deterministic(rec_obj)))
-
     now_iso = datetime.now(UTC).isoformat()
+    records_batch: list[tuple[str, str, str, str, str]] = []
 
-    # 3. Perform atomic transaction in staging DB
     try:
         stg_conn.execute("BEGIN TRANSACTION;")
 
         stg_conn.execute(
-            "INSERT INTO imported_releases (release_id, manifest_sha256, imported_at, status) VALUES (?, ?, ?, 'imported')",
+            "INSERT INTO imported_releases (release_id, manifest_sha256, imported_at, status) VALUES (?, ?, ?, 'importing')",
             (release_id, manifest_sha256, now_iso),
         )
 
-        for rel_id, r_id, r_type, r_sha, payload in records_to_insert:
-            stg_conn.execute(
+        for jf in jsonl_files:
+            with open(jf, "r", encoding="utf-8") as f:
+                for idx, line in enumerate(f, start=1):
+                    line_str = line.strip()
+                    if not line_str:
+                        continue
+
+                    rec_obj = json.loads(line_str)
+                    validate_record(rec_obj)
+
+                    r_id = rec_obj["id"]
+                    r_type = rec_obj["record_type"]
+                    rec_sha = hashlib.sha256(line.encode("utf-8")).hexdigest()
+
+                    if r_type in type_counts:
+                        type_counts[r_type] += 1
+
+                    records_batch.append((release_id, r_id, r_type, rec_sha, json_str_deterministic(rec_obj)))
+
+                    if len(records_batch) >= batch_size:
+                        stg_conn.executemany(
+                            "INSERT INTO staging_records (release_id, record_id, record_type, record_sha256, payload_json) VALUES (?, ?, ?, ?, ?)",
+                            records_batch,
+                        )
+                        records_batch.clear()
+
+        if records_batch:
+            stg_conn.executemany(
                 "INSERT INTO staging_records (release_id, record_id, record_type, record_sha256, payload_json) VALUES (?, ?, ?, ?, ?)",
-                (rel_id, r_id, r_type, r_sha, payload),
+                records_batch,
             )
+            records_batch.clear()
+
+        # Re-check catalog status before committing & updating active pointer
+        cat_conn = get_catalog_connection()
+        c = cat_conn.cursor()
+        c.execute("SELECT status FROM releases WHERE release_id = ?", (release_id,))
+        latest_row = c.fetchone()
+        cat_conn.close()
+
+        if not latest_row or latest_row[0] != "published":
+            latest_status = latest_row[0] if latest_row else "missing"
+            raise ReleaseStateChanged(
+                f"RELEASE_STATE_CHANGED: Release '{release_id}' status is '{latest_status}', expected 'published'"
+            )
+
+        stg_conn.execute(
+            "UPDATE imported_releases SET status = 'imported' WHERE release_id = ?",
+            (release_id,),
+        )
 
         stg_conn.execute(
             "INSERT OR REPLACE INTO active_release (singleton_id, release_id, activated_at) VALUES (1, ?, ?)",
@@ -162,6 +219,9 @@ def import_release_to_staging(release_id: str) -> dict[str, Any]:
     except Exception as e:
         stg_conn.execute("ROLLBACK;")
         stg_conn.close()
+
+        if isinstance(e, (ReleaseNotFound, ReleaseNotPublished, ReleaseRevoked, ReleaseStateChanged)):
+            raise e
         raise ImportRollbackError(f"Failed staging import for release {release_id}: {e}") from e
 
     stg_conn.close()

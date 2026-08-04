@@ -76,14 +76,16 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             if not c_abs_path.exists():
                 raise ReleaseBuildError(f"Canonical file missing for record {r_id}: {c_abs_path}")
 
+            line_str = None
             with open(c_abs_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+                for current_idx, line in enumerate(f, start=1):
+                    if current_idx == c_line_num:
+                        line_str = line
+                        break
 
-            line_idx = c_line_num - 1
-            if line_idx < 0 or line_idx >= len(lines):
+            if line_str is None:
                 raise ReleaseBuildError(f"Line number {c_line_num} out of bounds in {c_abs_path}")
 
-            line_str = lines[line_idx]
             actual_hash = hashlib.sha256(line_str.encode("utf-8")).hexdigest()
             if actual_hash.lower() != expected_hash.lower():
                 raise ReleaseBuildError(f"Record hash mismatch for {r_id}: expected {expected_hash}, got {actual_hash}")

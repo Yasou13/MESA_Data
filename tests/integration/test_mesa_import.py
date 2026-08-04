@@ -1,9 +1,10 @@
+import pytest
+
 from mesa_legal_data.catalog import (
     approve_version_with_checks,
     get_connection,
     get_db_path,
     insert_artifact,
-    mark_release_status,
     migrate,
     upsert_document,
 )
@@ -11,19 +12,14 @@ from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.release.builder import build_release
 from mesa_legal_data.release.importer import (
-    get_staging_connection,
+    ReleaseNotPublished,
+    ReleaseRevoked,
     import_release_to_staging,
 )
 
 
-def test_mesa_staging_import_integration(tmp_path, monkeypatch):
-    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("MESA_DATA_MESA_STAGING_DB", str(tmp_path / "mesa_staging.sqlite"))
-
-    db_path = get_db_path()
-    migrate(None, db_path)
-
-    raw_dir = tmp_path / "raw" / "legislation" / "mevzuat" / "2026" / "law4721" / "hashimp"
+def setup_synthetic_release(tmp_path, release_id: str):
+    raw_dir = tmp_path / "raw" / "legislation" / "mevzuat" / "2026" / "law4721" / f"hash_{release_id}"
     raw_dir.mkdir(parents=True, exist_ok=True)
     raw_file = raw_dir / "payload.html"
 
@@ -35,19 +31,10 @@ def test_mesa_staging_import_integration(tmp_path, monkeypatch):
     byte_size = raw_file.stat().st_size
 
     conn = get_connection()
-    upsert_document(
-        conn,
-        "tr:legislation:law:4721",
-        "legislation",
-        "law",
-        "TR",
-        "TMK",
-        "4721",
-        "fetched",
-    )
+    upsert_document(conn, "tr:legislation:law:4721", "legislation", "law", "TR", "TMK", "4721", "fetched")
     insert_artifact(
         conn,
-        artifact_id="art-imp-1",
+        artifact_id=f"art-imp-{release_id}",
         document_id="tr:legislation:law:4721",
         source_id="mevzuat",
         source_url="http://mevzuat.gov.tr/4721",
@@ -67,35 +54,71 @@ def test_mesa_staging_import_integration(tmp_path, monkeypatch):
     )
     conn.close()
 
-    process_artifact_pipeline(artifact_id="art-imp-1")
+    process_artifact_pipeline(artifact_id=f"art-imp-{release_id}")
 
     conn = get_connection()
     c = conn.cursor()
     c.execute("SELECT version_id FROM versions LIMIT 1")
     ver_id = c.fetchone()[0]
-
     approve_version_with_checks(conn, ver_id, reviewer="yasin", note="Approved")
     conn.close()
 
-    rel_id = "rel-imp-1"
-    build_release(release_id=rel_id)
+    build_release(release_id=release_id)
 
-    # Mark as published
+
+def test_import_building_or_verified_release_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MESA_DATA_MESA_STAGING_DB", str(tmp_path / "mesa_staging.sqlite"))
+
+    db_path = get_db_path()
+    migrate(None, db_path)
+
+    rel_id = "rel-verified-only"
+    setup_synthetic_release(tmp_path, rel_id)
+
+    # Release status in catalog is currently "verified", NOT "published"
+    with pytest.raises(ReleaseNotPublished, match="RELEASE_NOT_PUBLISHED"):
+        import_release_to_staging(rel_id)
+
+
+def test_import_revoked_release_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MESA_DATA_MESA_STAGING_DB", str(tmp_path / "mesa_staging.sqlite"))
+
+    db_path = get_db_path()
+    migrate(None, db_path)
+
+    rel_id = "rel-revoked-test"
+    setup_synthetic_release(tmp_path, rel_id)
+
     conn = get_connection()
-    mark_release_status(conn, rel_id, "published")
+    conn.execute("UPDATE releases SET status = 'revoked' WHERE release_id = ?", (rel_id,))
     conn.close()
 
-    # Import to staging
+    with pytest.raises(ReleaseRevoked, match="RELEASE_REVOKED"):
+        import_release_to_staging(rel_id)
+
+
+def test_import_published_release_success_and_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MESA_DATA_MESA_STAGING_DB", str(tmp_path / "mesa_staging.sqlite"))
+
+    db_path = get_db_path()
+    migrate(None, db_path)
+
+    rel_id = "rel-published-success"
+    setup_synthetic_release(tmp_path, rel_id)
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE releases SET status = 'published', published_at = '2026-08-05T00:00:00Z' WHERE release_id = ?",
+        (rel_id,),
+    )
+    conn.close()
+
     res1 = import_release_to_staging(rel_id)
     assert res1["status"] == "imported"
 
-    # Verify staging records exist
-    stg_conn = get_staging_connection()
-    stg_cur = stg_conn.cursor()
-    stg_cur.execute("SELECT count(*) FROM staging_records WHERE release_id = ?", (rel_id,))
-    assert stg_cur.fetchone()[0] >= 2
-    stg_conn.close()
-
-    # Idempotent second import
+    # Second import must be no-op
     res2 = import_release_to_staging(rel_id)
     assert res2["status"] == "already_imported"

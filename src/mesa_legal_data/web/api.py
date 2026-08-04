@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -20,6 +21,10 @@ from mesa_legal_data.config import load_settings, load_sources
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.release import build_release, verify_release
 from mesa_legal_data.release.importer import (
+    ReleaseNotFound,
+    ReleaseNotPublished,
+    ReleaseRevoked,
+    ReleaseStateChanged,
     get_record_provenance,
     get_staging_connection,
     import_release_to_staging,
@@ -423,11 +428,12 @@ def get_record_detail(record_id: str):
     c_abs_path = settings.data_root_path / str(rec_data["canonical_path"])
     text_preview = None
     if c_abs_path.exists():
+        target_line = int(rec_data["canonical_line"])
         with open(c_abs_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        line_idx = int(rec_data["canonical_line"]) - 1
-        if 0 <= line_idx < len(lines):
-            text_preview = lines[line_idx][:20000]
+            for idx, line in enumerate(f, start=1):
+                if idx == target_line:
+                    text_preview = line[:20000]
+                    break
 
     blockers = list_open_blocking_issues(conn, subject_id=record_id)
     conn.close()
@@ -574,10 +580,25 @@ async def publish_release_endpoint(release_id: str):
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
+            c = conn.cursor()
+            c.execute("SELECT status FROM releases WHERE release_id = ?", (release_id,))
+            row = c.fetchone()
+            if not row:
+                error_response("RELEASE_NOT_FOUND", f"Release {release_id} not found", status_code=404)
+            if row[0] != "verified":
+                error_response(
+                    "INVALID_STATE", f"Cannot publish release in status '{row[0]}', must be 'verified'", status_code=409
+                )
+
             verify_release(release_id)
-            conn.execute("UPDATE releases SET status = 'published' WHERE release_id = ?", (release_id,))
+            now_iso = datetime.now(UTC).isoformat()
+            conn.execute(
+                "UPDATE releases SET status = 'published', published_at = ? WHERE release_id = ?", (now_iso, release_id)
+            )
             return ok_response({"release_id": release_id, "status": "published"})
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
             error_response("RELEASE_PUBLISH_FAILED", str(e), status_code=400)
         finally:
             conn.close()
@@ -589,6 +610,10 @@ async def import_release_endpoint(release_id: str):
         try:
             res = import_release_to_staging(release_id)
             return ok_response(res)
+        except ReleaseNotFound as e:
+            error_response("RELEASE_NOT_FOUND", str(e), status_code=404)
+        except (ReleaseNotPublished, ReleaseRevoked, ReleaseStateChanged) as e:
+            error_response("RELEASE_NOT_PUBLISHED", str(e), status_code=409)
         except Exception as e:
             error_response("RELEASE_IMPORT_FAILED", str(e), status_code=400)
 

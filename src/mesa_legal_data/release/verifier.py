@@ -81,30 +81,30 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
                 )
             continue
 
+        actual_count = 0
         with open(jsonl_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+            for idx, line in enumerate(f, start=1):
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                actual_count += 1
+                try:
+                    rec_obj = json.loads(line_str)
+                except Exception as e:
+                    raise ReleaseVerificationError(f"Invalid JSON at line {idx} in {rel_path}: {e}") from e
 
-        if len(lines) != expected_count:
+                # Validate record schema
+                validate_record(rec_obj)
+
+                r_id = rec_obj.get("id")
+                if r_id in seen_record_ids:
+                    raise ReleaseVerificationError(f"Duplicate record ID '{r_id}' found in release in {rel_path}")
+                seen_record_ids.add(r_id)
+
+        if actual_count != expected_count:
             raise ReleaseVerificationError(
-                f"Count mismatch in {rel_path}: expected {expected_count}, found {len(lines)} lines"
+                f"Count mismatch in {rel_path}: expected {expected_count}, found {actual_count} lines"
             )
-
-        for idx, line in enumerate(lines, start=1):
-            line_str = line.strip()
-            if not line_str:
-                continue
-            try:
-                rec_obj = json.loads(line_str)
-            except Exception as e:
-                raise ReleaseVerificationError(f"Invalid JSON at line {idx} in {rel_path}: {e}") from e
-
-            # Validate record schema
-            validate_record(rec_obj)
-
-            r_id = rec_obj.get("id")
-            if r_id in seen_record_ids:
-                raise ReleaseVerificationError(f"Duplicate record ID '{r_id}' found in release in {rel_path}")
-            seen_record_ids.add(r_id)
 
     return True
 

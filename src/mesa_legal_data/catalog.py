@@ -637,14 +637,17 @@ def approve_record_with_checks(
         raise CatalogError(f"Canonical file missing: {c_path}")
 
     # Verify record SHA256 against line in canonical JSONL file
+    target_line = None
+    target_idx = rec["canonical_line"]
     with open(c_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+        for idx, line in enumerate(f, start=1):
+            if idx == target_idx:
+                target_line = line
+                break
 
-    line_idx = rec["canonical_line"] - 1
-    if line_idx < 0 or line_idx >= len(lines):
+    if target_line is None:
         raise CatalogError(f"Canonical line {rec['canonical_line']} out of bounds in {c_path}")
 
-    target_line = lines[line_idx]
     actual_hash = hashlib.sha256(target_line.encode("utf-8")).hexdigest()
     if actual_hash.lower() != rec["record_sha256"].lower():
         raise CatalogError(f"Record hash mismatch for {record_id}: expected {rec['record_sha256']}, got {actual_hash}")

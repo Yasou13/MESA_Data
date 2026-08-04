@@ -66,6 +66,7 @@ class SourceConfig(BaseModel):
     editorial_note_required: bool = False
     http: HttpConfig
     allowed_content_types: list[str]
+    allowed_redirect_hosts: list[str] = Field(default_factory=list)
 
 
 class SourcesConfig(BaseModel):
