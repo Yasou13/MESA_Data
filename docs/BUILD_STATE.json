@@ -1,6 +1,9 @@
 {
-  "current_task": "COMPLETED",
-  "completed": [
+  "status": "in_progress",
+  "current_task": "MVP-000",
+  "completed": [],
+  "failed": [],
+  "legacy_claimed_completed": [
     "TASK-001", "TASK-002", "TASK-003", "TASK-004", "TASK-005",
     "TASK-006", "TASK-007", "TASK-008", "TASK-009", "TASK-010",
     "TASK-011", "TASK-012", "TASK-013", "TASK-014", "TASK-015",
@@ -12,8 +15,7 @@
     "TASK-041", "TASK-042", "TASK-043", "TASK-044", "TASK-045",
     "TASK-046", "TASK-047", "TASK-048", "TASK-049", "TASK-050"
   ],
-  "failed": [],
   "last_test_command": "uv run pytest",
   "last_test_result": "passed",
-  "updated_at": "2026-08-05T01:00:00+03:00"
+  "updated_at": "2026-08-05T02:00:00+03:00"
 }

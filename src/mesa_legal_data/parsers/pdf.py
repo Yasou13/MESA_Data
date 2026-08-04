@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from pypdf import PdfReader
 
 from mesa_legal_data.parsers.text_normalizer import normalize_text
@@ -12,7 +13,6 @@ class OCRRequiredError(PDFParseError):
     """
     Raised when a PDF contains no extractable text (image-only / requires OCR).
     """
-    pass
 
 
 def parse_pdf(pdf_path: Path) -> str:

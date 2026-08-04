@@ -23,7 +23,8 @@ def validate_legal_metadata(record: dict) -> bool:
         raise LegalMetadataValidationError(f"Invalid jurisdiction: {record.get('jurisdiction')}")
 
     if record_type == "legislation":
-        if not record.get("title") or not record.get("title").strip():
+        title = record.get("title")
+        if not title or not isinstance(title, str) or not title.strip():
             raise LegalMetadataValidationError("Legislation must have a non-empty title")
 
         publication = record.get("publication")

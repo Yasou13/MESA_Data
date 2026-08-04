@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
-from mesa_legal_data.hashing import hash_stream
+
 from mesa_legal_data.content_types import detect_mime_type
+from mesa_legal_data.hashing import hash_stream
 
 
 class TransportValidationError(Exception):

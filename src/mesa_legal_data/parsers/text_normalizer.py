@@ -1,6 +1,7 @@
 import re
 import unicodedata
 
+
 def normalize_text(text: str) -> str:
     """
     Normalizes legal text while preserving Turkish characters, punctuation, and structure.

@@ -1,5 +1,6 @@
 from mesa_legal_data.parsers.decision import parse_decision_text
 
+
 def test_parse_decision_text():
     sample = """
     YARGITAY 3. HUKUK DAİRESİ
@@ -16,5 +17,5 @@ def test_parse_decision_text():
     assert "3. HUKUK DAİRESİ" in parsed.chamber
     assert parsed.esas_no == "2023/4125"
     assert parsed.karar_no == "2024/1872"
-    assert parsed.decision_date == "15.03.2024"
+    assert parsed.decision_date == "2024-03-15"
     assert "GEREKÇE" in parsed.text

@@ -1,22 +1,22 @@
+from .citations import Citation, extract_citations
+from .decision import ParsedDecision, parse_decision_text
+from .html import HTMLParseError, parse_html
+from .legislation import ParsedArticle, ParsedLegislation, parse_legislation_text
+from .pdf import OCRRequiredError, PDFParseError, parse_pdf
 from .text_normalizer import normalize_text
-from .pdf import parse_pdf, OCRRequiredError, PDFParseError
-from .html import parse_html, HTMLParseError
-from .legislation import parse_legislation_text, ParsedArticle, ParsedLegislation
-from .decision import parse_decision_text, ParsedDecision
-from .citations import extract_citations, Citation
 
 __all__ = [
-    "normalize_text",
-    "parse_pdf",
+    "Citation",
+    "HTMLParseError",
     "OCRRequiredError",
     "PDFParseError",
-    "parse_html",
-    "HTMLParseError",
-    "parse_legislation_text",
     "ParsedArticle",
-    "ParsedLegislation",
-    "parse_decision_text",
     "ParsedDecision",
+    "ParsedLegislation",
     "extract_citations",
-    "Citation",
+    "normalize_text",
+    "parse_decision_text",
+    "parse_html",
+    "parse_legislation_text",
+    "parse_pdf",
 ]

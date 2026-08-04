@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from typing import List, Optional
+
 from pydantic import BaseModel, ConfigDict
 
 LAW_ALIASES = {
@@ -30,7 +30,9 @@ class Citation(BaseModel):
 
     raw_text: str
     target_legislation_id: str
-    target_article_id: Optional[str] = None
+    target_article_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
 
 
 def _to_ascii_upper(s: str) -> str:
@@ -39,11 +41,11 @@ def _to_ascii_upper(s: str) -> str:
     return unicodedata.normalize("NFKD", s_tr).encode("ASCII", "ignore").decode("utf-8").upper()
 
 
-def extract_citations(text: str) -> List[Citation]:
+def extract_citations(text: str) -> list[Citation]:
     if not text:
         return []
 
-    citations: List[Citation] = []
+    citations: list[Citation] = []
     ascii_text = _to_ascii_upper(text)
 
     # 1. Matching law numbers (e.g. 4721 sayılı Kanun'un 1. maddesi)
@@ -65,6 +67,8 @@ def extract_citations(text: str) -> List[Citation]:
                 raw_text=text[start:end],
                 target_legislation_id=leg_id,
                 target_article_id=art_id,
+                char_start=start,
+                char_end=end,
             )
         )
 
@@ -89,6 +93,8 @@ def extract_citations(text: str) -> List[Citation]:
                 raw_text=raw,
                 target_legislation_id=leg_id,
                 target_article_id=art_id,
+                char_start=start,
+                char_end=end,
             )
 
             if cit not in citations:

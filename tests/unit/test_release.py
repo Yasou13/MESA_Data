@@ -1,12 +1,9 @@
-import sqlite3
-from pathlib import Path
 from typer.testing import CliRunner
 
 from mesa_legal_data.cli import app
-from mesa_legal_data.catalog import get_db_path
-from mesa_legal_data.release import build_release, verify_release, ReleaseVerificationError
 
 runner = CliRunner()
+
 
 def test_release_lifecycle_cli(tmp_path, monkeypatch):
     monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))

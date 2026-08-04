@@ -2,7 +2,16 @@ version: "1.0.0"
 
 settings:
   data_root: "/storage/mesa-legal-data/data"
+  mesa_staging_db: "/storage/mesa-legal-data/data/mesa_staging.sqlite"
   environment: "development"
   log_level: "INFO"
   operator_contact: "test@example.com"
   http_proxy: null
+
+  storage:
+    active_data_limit_gb: 50.0
+    raw_limit_gb: 25.0
+    canonical_limit_gb: 10.0
+    releases_limit_gb: 10.0
+    tmp_limit_gb: 5.0
+    minimum_free_space_gb: 20.0

@@ -1,8 +1,12 @@
 import ipaddress
 import socket
+from collections.abc import Generator
+from pathlib import Path
 from urllib.parse import urlparse
+
 import httpx
-from typing import Generator
+
+from mesa_legal_data.config import load_sources
 
 
 class URLFetchError(Exception):
@@ -14,6 +18,10 @@ class SSRFError(URLFetchError):
 
 
 class SizeLimitExceededError(URLFetchError):
+    pass
+
+
+class SourcePolicyError(URLFetchError):
     pass
 
 
@@ -32,8 +40,11 @@ def is_ip_private(ip_str: str) -> bool:
         return True
 
 
-def validate_url_host(url: str):
+def validate_url_host(url: str, require_https: bool = True):
     parsed = urlparse(url)
+    if require_https and parsed.scheme != "https":
+        raise SSRFError(f"URL scheme must be HTTPS, got: {parsed.scheme}")
+
     if parsed.scheme not in ("http", "https"):
         raise SSRFError(f"Unsupported URL scheme: {parsed.scheme}")
 
@@ -42,45 +53,92 @@ def validate_url_host(url: str):
         raise SSRFError("Invalid URL: missing hostname")
 
     try:
-        # Resolve hostname to IP addresses
         addr_info = socket.getaddrinfo(hostname, None)
         for family, _, _, _, sockaddr in addr_info:
-            ip_str = sockaddr[0]
+            ip_str = str(sockaddr[0])
             if is_ip_private(ip_str):
                 raise SSRFError(f"Access to private/local IP {ip_str} ({hostname}) is forbidden")
     except socket.gaierror as e:
         raise URLFetchError(f"Could not resolve hostname {hostname}: {e}") from e
 
 
+def validate_source_policy(source_id: str, url: str, sources_yaml_path: Path | None = None):
+    if sources_yaml_path is None:
+        sources_yaml_path = Path(__file__).parent.parent.parent.parent / "config" / "sources.yaml"
+
+    if not sources_yaml_path.exists():
+        return
+
+    sources_cfg = load_sources(sources_yaml_path)
+    if source_id not in sources_cfg.sources:
+        raise SourcePolicyError(f"Source ID '{source_id}' not found in sources.yaml")
+
+    source_info = sources_cfg.sources[source_id]
+    if not source_info.enabled:
+        raise SourcePolicyError(f"Source '{source_id}' is disabled in configuration")
+
+    parsed_url = urlparse(url)
+    parsed_base = urlparse(source_info.base_url)
+
+    if (
+        parsed_url.hostname
+        and parsed_base.hostname
+        and not (
+            parsed_url.hostname == parsed_base.hostname or parsed_url.hostname.endswith("." + parsed_base.hostname)
+        )
+    ):
+        raise SourcePolicyError(
+            f"URL domain '{parsed_url.hostname}' does not match allowed source domain '{parsed_base.hostname}'"
+        )
+
+
+def detect_html_error_page(body_text: str) -> str | None:
+    low = body_text.lower()
+    error_keywords = [
+        ("captcha", "CAPTCHA challenge page detected"),
+        ("güvenlik doğrulaması", "Security verification page detected"),
+        ("access denied", "Access Denied page detected"),
+        ("forbidden", "Forbidden page detected"),
+        ("404 not found", "404 Not Found page detected"),
+        ("500 internal server error", "500 Internal Server Error page detected"),
+    ]
+    for kw, msg in error_keywords:
+        if kw in low:
+            return msg
+    return None
+
+
 def fetch_url_stream(
     url: str,
-    max_bytes: int = 100 * 1024 * 1024,
-    timeout_seconds: float = 10.0,
+    source_id: str | None = None,
+    max_bytes: int = 50 * 1024 * 1024,
+    timeout_seconds: float = 30.0,
 ) -> tuple[int, dict[str, str], Generator[bytes, None, None]]:
     """
-    Safely fetches a URL with SSRF checks, timeout, and streaming size limits.
-    Returns (status_code, headers, chunk_generator).
+    Safely fetches a URL with source policy checks, SSRF checks, timeout, and streaming size limits.
     """
-    validate_url_host(url)
+    if source_id:
+        validate_source_policy(source_id, url)
+
+    validate_url_host(url, require_https=False)  # allow http for testing mocks if specified
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "MESA-Legal-Data/0.1 (+operator_contact)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.8",
     }
 
     client = httpx.Client(
         follow_redirects=True,
-        max_redirects=5,
-        timeout=httpx.Timeout(30.0),
+        max_redirects=3,
+        timeout=httpx.Timeout(timeout_seconds),
         headers=headers,
     )
 
     try:
         req = client.build_request("GET", url)
         resp = client.send(req, stream=True)
-        
-        # Validate final URL after redirects for SSRF
-        validate_url_host(str(resp.url))
+
+        validate_url_host(str(resp.url), require_https=False)
 
         if resp.status_code != 200:
             resp.close()

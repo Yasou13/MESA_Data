@@ -1,10 +1,9 @@
-import os
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from mesa_legal_data.config import load_settings, load_sources, SettingsModel
+from mesa_legal_data.config import SettingsModel, load_settings, load_sources
 
 
 def test_load_settings_defaults():
@@ -18,7 +17,7 @@ def test_load_settings_defaults():
 def test_load_settings_from_env(monkeypatch):
     monkeypatch.setenv("MESA_DATA_DATA_ROOT", "/custom/path")
     monkeypatch.setenv("MESA_DATA_ENVIRONMENT", "production")
-    
+
     settings = load_settings()
     assert settings.data_root == "/custom/path"
     assert settings.environment == "production"

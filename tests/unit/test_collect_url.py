@@ -1,12 +1,13 @@
 import sqlite3
+
 import respx
-from pathlib import Path
 from typer.testing import CliRunner
 
-from mesa_legal_data.cli import app
 from mesa_legal_data.catalog import get_db_path
+from mesa_legal_data.cli import app
 
 runner = CliRunner()
+
 
 @respx.mock
 def test_collect_url_cli(tmp_path, monkeypatch):
@@ -19,7 +20,7 @@ def test_collect_url_cli(tmp_path, monkeypatch):
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO sources (source_id, name, authority, base_url, access_mode, enabled, policy_version, config_json, created_at, updated_at) "
+        "INSERT OR IGNORE INTO sources (source_id, name, authority, base_url, access_mode, enabled, policy_version, config_json, created_at, updated_at) "
         "VALUES ('mevzuat', 'Mevzuat', 'Gov', 'http://mevzuat.gov.tr', 'manual', 1, '1.0', '{}', '2026-08-05T00:00:00Z', '2026-08-05T00:00:00Z')"
     )
     conn.commit()

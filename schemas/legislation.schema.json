@@ -29,8 +29,8 @@
     "publication": {
       "type": ["object", "null"],
       "properties": {
-        "date": { "type": "string" },
-        "gazette_number": { "type": "string" }
+        "date": { "type": ["string", "null"] },
+        "gazette_number": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
@@ -50,8 +50,28 @@
     "full_text": { "type": "string" },
     "schema_version": { "type": "string" },
     "created_at": { "type": "string" },
-    "source": { "type": "object" },
-    "provenance": { "type": "object" }
+    "source": {
+      "type": "object",
+      "required": ["source_id", "source_url", "retrieved_at", "artifact_sha256"],
+      "properties": {
+        "source_id": { "type": "string" },
+        "source_url": { "type": "string" },
+        "retrieved_at": { "type": "string" },
+        "artifact_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "artifact_path": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["parser_name", "parser_version", "pipeline_run_id"],
+      "properties": {
+        "parser_name": { "type": "string" },
+        "parser_version": { "type": "string" },
+        "pipeline_run_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

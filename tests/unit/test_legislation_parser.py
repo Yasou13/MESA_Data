@@ -1,5 +1,6 @@
 from mesa_legal_data.parsers.legislation import parse_legislation_text
 
+
 def test_parse_legislation_text():
     sample_text = """
     TÜRK MEDENİ KANUNU

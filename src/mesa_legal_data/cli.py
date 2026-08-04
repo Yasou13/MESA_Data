@@ -1,6 +1,6 @@
 import os
+from datetime import UTC
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -40,6 +40,7 @@ def init():
 def migrate():
     """Runs database migrations."""
     from mesa_legal_data.catalog import migrate as run_migrations
+
     try:
         run_migrations()
         typer.secho("Database migrations applied successfully.", fg=typer.colors.GREEN)
@@ -59,15 +60,18 @@ def doctor():
     typer.echo(f"Data Root Writable : {res['data_root_writable']}")
     typer.echo(f"Catalog Database   : {'FOUND' if res['catalog_sqlite_exists'] else 'NOT FOUND'}")
 
-    if res['missing_artifacts']:
-        typer.secho(f"WARNING: {len(res['missing_artifacts'])} missing artifacts found!", fg=typer.colors.YELLOW)
+    if res["missing_artifacts"]:
+        typer.secho(
+            f"WARNING: {len(res['missing_artifacts'])} missing artifacts found!",
+            fg=typer.colors.YELLOW,
+        )
     else:
         typer.secho("All artifact files present and accounted for.", fg=typer.colors.GREEN)
 
 
 @app.command()
 def backup(
-    target_dir: Optional[Path] = typer.Option(None, "--target-dir", help="Backup output directory"),
+    target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup output directory"),
 ):
     """Creates a timestamped backup of the catalog database."""
     from mesa_legal_data.audit import backup_catalog
@@ -106,7 +110,7 @@ def audit():
     typer.echo(f"Corrupted : {res['corrupted']}")
     typer.echo(f"Missing   : {res['missing']}")
 
-    if res['corrupted'] > 0 or res['missing'] > 0:
+    if res["corrupted"] > 0 or res["missing"] > 0:
         typer.secho("Integrity audit FAILED!", fg=typer.colors.RED, bold=True)
         raise typer.Exit(code=1)
     else:
@@ -117,12 +121,16 @@ def audit():
 def collect_manual(
     source: str = typer.Option(..., "--source", help="Source ID (e.g., mevzuat, aym, yargitay)"),
     file: Path = typer.Option(..., "--file", help="Path to local file to import"),
-    document_id: str = typer.Option(..., "--document-id", help="Canonical Document ID (e.g. tr:legislation:law:4721)"),
+    document_id: str = typer.Option(
+        ...,
+        "--document-id",
+        help="Canonical Document ID (e.g. tr:legislation:law:4721)",
+    ),
     family: str = typer.Option("legislation", "--family", help="Document family"),
     document_type: str = typer.Option("law", "--document-type", help="Document type"),
     jurisdiction: str = typer.Option("TR", "--jurisdiction", help="Jurisdiction code"),
-    title: Optional[str] = typer.Option(None, "--title", help="Document title"),
-    stable_key: Optional[str] = typer.Option(None, "--stable-key", help="Stable key for storage path"),
+    title: str | None = typer.Option(None, "--title", help="Document title"),
+    stable_key: str | None = typer.Option(None, "--stable-key", help="Stable key for storage path"),
 ):
     """Imports a local file as a raw artifact."""
     from mesa_legal_data.sources import import_manual_file
@@ -155,8 +163,8 @@ def collect_url(
     family: str = typer.Option("legislation", "--family", help="Document family"),
     document_type: str = typer.Option("law", "--document-type", help="Document type"),
     jurisdiction: str = typer.Option("TR", "--jurisdiction", help="Jurisdiction code"),
-    title: Optional[str] = typer.Option(None, "--title", help="Document title"),
-    stable_key: Optional[str] = typer.Option(None, "--stable-key", help="Stable key for storage path"),
+    title: str | None = typer.Option(None, "--title", help="Document title"),
+    stable_key: str | None = typer.Option(None, "--stable-key", help="Stable key for storage path"),
 ):
     """Fetches a document from a URL safely into raw storage."""
     from mesa_legal_data.sources import import_manual_url
@@ -183,7 +191,7 @@ def collect_url(
 
 @collect_app.command("seed")
 def collect_seed(
-    fixtures_dir: Optional[Path] = typer.Option(None, "--fixtures-dir", help="Optional local directory with PDF fixtures"),
+    fixtures_dir: Path | None = typer.Option(None, "--fixtures-dir", help="Optional local directory with PDF fixtures"),
 ):
     """Imports the 12 core seed legislation items."""
     from mesa_legal_data.collectors.seed import run_seed_collection
@@ -203,6 +211,7 @@ def collect_seed(
 def report():
     """Generates quality and catalog summary report."""
     import sqlite3
+
     from mesa_legal_data.catalog import get_db_path
 
     db_path = get_db_path()
@@ -222,31 +231,127 @@ def report():
     cursor.execute("SELECT count(*) FROM validation_issues WHERE status = 'open'")
     issue_count = cursor.fetchone()[0]
 
-    typer.secho("=== MESA Legal Data Catalog Quality Report ===", fg=typer.colors.CYAN, bold=True)
+    typer.secho(
+        "=== MESA Legal Data Catalog Quality Report ===",
+        fg=typer.colors.CYAN,
+        bold=True,
+    )
     typer.echo(f"Total Documents: {doc_count}")
     typer.echo(f"Total Artifacts: {art_count}")
     typer.echo(f"Open Issues    : {issue_count}")
     conn.close()
 
 
-@app.command()
-def review(
-    issue_id: str = typer.Option(..., "--issue-id", help="ID of validation issue to review"),
-    action: str = typer.Option("resolve", "--action", help="Action to perform: resolve or waive"),
-    by: str = typer.Option("reviewer", "--by", help="Reviewer name"),
-    note: Optional[str] = typer.Option(None, "--note", help="Resolution note"),
+review_app = typer.Typer(help="Review records and versions")
+app.add_typer(review_app, name="review")
+
+
+@review_app.command("list")
+def review_list(
+    status: str | None = typer.Option(None, "--status", help="Filter by approval status: pending, approved, rejected"),
 ):
-    """Reviews and resolves open validation or privacy issues."""
-    import sqlite3
-    from mesa_legal_data.catalog import get_connection, resolve_issue
+    """Lists records for review."""
+    from mesa_legal_data.catalog import get_connection, list_records_by_approval_status
+
+    conn = get_connection()
+    recs = list_records_by_approval_status(conn, status=status)
+    conn.close()
+
+    typer.secho(
+        f"Found {len(recs)} records (status: {status or 'all'}):",
+        fg=typer.colors.CYAN,
+        bold=True,
+    )
+    for r in recs:
+        typer.echo(
+            f"  - [{r['approval_status']}] {r['record_id']} ({r['record_type']}) line {r['canonical_line']} in {r['canonical_path']}"
+        )
+
+
+@review_app.command("show")
+def review_show(
+    record_id: str = typer.Argument(..., help="Record ID to inspect"),
+):
+    """Shows record details."""
+    from mesa_legal_data.catalog import get_connection, get_record
+
+    conn = get_connection()
+    rec = get_record(conn, record_id)
+    conn.close()
+
+    if not rec:
+        typer.secho(f"Record {record_id} not found", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    typer.secho(f"=== Record {record_id} ===", fg=typer.colors.CYAN, bold=True)
+    for k, v in rec.items():
+        typer.echo(f"  {k}: {v}")
+
+
+@review_app.command("approve")
+def review_approve(
+    record_id: str = typer.Argument(..., help="Record ID to approve"),
+    reviewer: str = typer.Option("reviewer", "--reviewer", help="Reviewer name"),
+    note: str | None = typer.Option(None, "--note", help="Approval note"),
+):
+    """Approves a single record."""
+    from mesa_legal_data.catalog import approve_record_with_checks, get_connection
 
     conn = get_connection()
     try:
-        status_target = "resolved" if action == "resolve" else "waived"
-        resolve_issue(conn, issue_id=issue_id, status=status_target, resolved_by=by, resolution_note=note)
-        typer.secho(f"Successfully updated issue {issue_id} to status '{status_target}' by {by}.", fg=typer.colors.GREEN)
+        res = approve_record_with_checks(conn, record_id, reviewer, note)
+        typer.secho(
+            f"Successfully APPROVED record {record_id} (review ID: {res['review_id']})",
+            fg=typer.colors.GREEN,
+        )
     except Exception as e:
-        typer.secho(f"Error reviewing issue: {e}", fg=typer.colors.RED)
+        typer.secho(f"Error approving record: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    finally:
+        conn.close()
+
+
+@review_app.command("approve-version")
+def review_approve_version(
+    version_id: str = typer.Argument(..., help="Version ID to approve completely"),
+    reviewer: str = typer.Option("reviewer", "--reviewer", help="Reviewer name"),
+    note: str | None = typer.Option(None, "--note", help="Approval note"),
+):
+    """Approves all records under a version."""
+    from mesa_legal_data.catalog import approve_version_with_checks, get_connection
+
+    conn = get_connection()
+    try:
+        res = approve_version_with_checks(conn, version_id, reviewer, note)
+        typer.secho(
+            f"Successfully APPROVED version {version_id} ({res['approved_records']} records)",
+            fg=typer.colors.GREEN,
+        )
+    except Exception as e:
+        typer.secho(f"Error approving version: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    finally:
+        conn.close()
+
+
+@review_app.command("reject")
+def review_reject(
+    record_id: str = typer.Argument(..., help="Record ID to reject"),
+    reviewer: str = typer.Option("reviewer", "--reviewer", help="Reviewer name"),
+    note: str | None = typer.Option(None, "--note", help="Rejection note"),
+):
+    """Rejects a record."""
+    from mesa_legal_data.catalog import get_connection, reject_record_with_checks
+
+    conn = get_connection()
+    try:
+        res = reject_record_with_checks(conn, record_id, reviewer, note)
+        typer.secho(
+            f"Successfully REJECTED record {record_id} (review ID: {res['review_id']})",
+            fg=typer.colors.YELLOW,
+        )
+    except Exception as e:
+        typer.secho(f"Error rejecting record: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
     finally:
         conn.close()
@@ -258,7 +363,7 @@ app.add_typer(release_app, name="release")
 
 @release_app.command("build")
 def release_build(
-    release_id: Optional[str] = typer.Option(None, "--release-id", help="Optional release ID"),
+    release_id: str | None = typer.Option(None, "--release-id", help="Optional release ID"),
 ):
     """Builds a new release package."""
     from mesa_legal_data.release import build_release
@@ -294,18 +399,21 @@ def release_publish(
     release_id: str = typer.Option(..., "--release-id", help="Release ID to publish"),
 ):
     """Publishes a verified release package."""
-    import sqlite3
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from mesa_legal_data.catalog import get_connection
 
     conn = get_connection()
     try:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         conn.execute(
             "UPDATE releases SET status = 'published', published_at = ? WHERE release_id = ?",
             (now, release_id),
         )
-        typer.secho(f"Release {release_id} successfully PUBLISHED at {now}.", fg=typer.colors.GREEN)
+        typer.secho(
+            f"Release {release_id} successfully PUBLISHED at {now}.",
+            fg=typer.colors.GREEN,
+        )
     except Exception as e:
         typer.secho(f"Error publishing release: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -318,7 +426,6 @@ def release_revoke(
     release_id: str = typer.Option(..., "--release-id", help="Release ID to revoke"),
 ):
     """Revokes a published release package."""
-    import sqlite3
     from mesa_legal_data.catalog import get_connection
 
     conn = get_connection()
@@ -332,19 +439,71 @@ def release_revoke(
         conn.close()
 
 
-@release_app.command("rollback")
-def release_rollback(
-    release_id: str = typer.Option(..., "--release-id", help="Release ID to rollback"),
+pipeline_app = typer.Typer(help="Execute pipeline operations")
+app.add_typer(pipeline_app, name="pipeline")
+
+
+@pipeline_app.command("run")
+def pipeline_run(
+    artifact_id: str = typer.Option(..., "--artifact-id", help="Artifact ID to process"),
 ):
-    """Rolls back a release package."""
-    from mesa_legal_data.release import rollback_release
+    """Processes an artifact through the parsing, validation, and canonicalization pipeline."""
+    from mesa_legal_data.pipeline import process_artifact_pipeline
 
     try:
-        rollback_release(release_id)
-        typer.secho(f"Release {release_id} successfully ROLLED BACK.", fg=typer.colors.YELLOW)
+        status = process_artifact_pipeline(artifact_id=artifact_id)
+        typer.secho(
+            f"Pipeline finished with status '{status}' for artifact {artifact_id}.",
+            fg=typer.colors.GREEN,
+        )
     except Exception as e:
-        typer.secho(f"Error rolling back release: {e}", fg=typer.colors.RED)
+        typer.secho(f"Pipeline processing error: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+
+@release_app.command("import")
+def release_import(
+    release_id: str = typer.Option(..., "--release-id", help="Release ID to import into MESA staging DB"),
+):
+    """Imports a published release package into the MESA staging database."""
+    from mesa_legal_data.release.importer import import_release_to_staging
+
+    try:
+        res = import_release_to_staging(release_id=release_id)
+        typer.secho(
+            f"Successfully IMPORTED release {release_id} into staging DB (status: {res['status']})",
+            fg=typer.colors.GREEN,
+        )
+    except Exception as e:
+        typer.secho(f"Error importing release: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command("provenance")
+def provenance_cmd(
+    record_id: str = typer.Argument(..., help="Record ID to inspect provenance chain"),
+    as_json: bool = typer.Option(False, "--json", help="Output as raw JSON"),
+):
+    """Inspects full provenance chain for a given record."""
+    import json
+
+    from mesa_legal_data.release.importer import get_record_provenance
+
+    prov = get_record_provenance(record_id)
+    if not prov:
+        typer.secho(f"Record {record_id} not found", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if as_json:
+        typer.echo(json.dumps(prov, indent=2, ensure_ascii=False))
+    else:
+        typer.secho(
+            f"=== Provenance Chain for Record {record_id} ===",
+            fg=typer.colors.CYAN,
+            bold=True,
+        )
+        for k, v in prov.items():
+            typer.echo(f"  {k}: {v}")
 
 
 if __name__ == "__main__":

@@ -1,95 +1,206 @@
 import hashlib
 import json
-from datetime import datetime, timezone
+import os
+import shutil
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
-from mesa_legal_data.catalog import get_connection, create_release
+from mesa_legal_data.catalog import (
+    add_release_item,
+    create_release,
+    get_connection,
+    list_open_blocking_issues,
+    list_records_for_release,
+)
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
-from mesa_legal_data.storage import atomic_write
+from mesa_legal_data.schema_validation import validate_record
 
 
-def build_release(release_id: str | None = None) -> Dict[str, Any]:
+class ReleaseBuildError(Exception):
+    pass
+
+
+def build_release(release_id: str | None = None) -> dict[str, Any]:
     """
     Builds a release package from approved canonical records.
-    Generates manifest.json with SHA-256 hashes of all bundled files.
+    Uses temporary .building-* directory and verifies integrity before atomic finalize.
     """
     settings = load_settings()
     data_root = settings.data_root_path
 
     if not release_id:
-        now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        now_str = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         release_id = f"release-{now_str}"
 
-    release_dir = data_root / "releases" / release_id
-    release_dir.mkdir(parents=True, exist_ok=True)
+    final_dir = data_root / "releases" / release_id
+    if final_dir.exists():
+        raise ReleaseBuildError(f"Release directory already exists for release_id '{release_id}'")
+
+    building_dir = data_root / "releases" / f".building-{release_id}-{uuid.uuid4().hex[:8]}"
+    building_dir.mkdir(parents=True, exist_ok=True)
+    building_data_dir = building_dir / "data"
+    building_data_dir.mkdir(parents=True, exist_ok=True)
+    building_schemas_dir = building_dir / "schemas"
+    building_schemas_dir.mkdir(parents=True, exist_ok=True)
 
     conn = get_connection()
-    cursor = conn.cursor()
 
-    # Query approved documents
-    cursor.execute("SELECT count(*) FROM documents WHERE lifecycle_status = 'approved' OR lifecycle_status = 'fetched'")
-    doc_count = cursor.fetchone()[0]
+    try:
+        # Check open blocker issues
+        blockers = list_open_blocking_issues(conn)
+        if blockers:
+            raise ReleaseBuildError(f"Cannot build release: open blocker issues exist: {blockers}")
 
-    cursor.execute("SELECT count(*) FROM artifacts WHERE transport_status = 'verified'")
-    art_count = cursor.fetchone()[0]
+        eligible_records = list_records_for_release(conn)
 
-    counts_dict = {
-        "legislation_count": doc_count,
-        "article_count": doc_count * 10,
-        "decision_count": 0,
-        "citation_count": 0,
-    }
+        # Categorize records
+        records_by_type: dict[str, list[dict[str, Any]]] = {
+            "legislation": [],
+            "article": [],
+            "decision": [],
+            "citation": [],
+        }
+        release_items_meta: list[tuple[str, str]] = []
 
-    source_snapshot = {
-        "source_id": "mevzuat",
-        "snapshot_date": datetime.now(timezone.utc).isoformat(),
-    }
+        for r_meta in eligible_records:
+            r_id = r_meta["record_id"]
+            r_type = r_meta["record_type"]
+            c_rel_path = r_meta["canonical_path"]
+            c_line_num = r_meta["canonical_line"]
+            expected_hash = r_meta["record_sha256"]
 
-    # Write data bundle index
-    bundle_file = release_dir / "contents.json"
-    bundle_data = {
-        "release_id": release_id,
-        "documents_count": doc_count,
-        "artifacts_count": art_count,
-    }
-    with open(bundle_file, "w", encoding="utf-8") as f:
-        json.dump(bundle_data, f, indent=2)
+            c_abs_path = data_root / c_rel_path
+            if not c_abs_path.exists():
+                raise ReleaseBuildError(f"Canonical file missing for record {r_id}: {c_abs_path}")
 
-    # Compute manifest SHA256
-    with open(bundle_file, "rb") as f:
-        bundle_hash = hash_stream(f)
+            with open(c_abs_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
 
-    manifest_data = {
-        "release_id": release_id,
-        "schema_version": "1.0.0",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "files": {
-            "contents.json": bundle_hash,
-        },
-        "counts": counts_dict,
-    }
+            line_idx = c_line_num - 1
+            if line_idx < 0 or line_idx >= len(lines):
+                raise ReleaseBuildError(f"Line number {c_line_num} out of bounds in {c_abs_path}")
 
-    manifest_bytes = json.dumps(manifest_data, indent=2).encode("utf-8")
-    manifest_file = release_dir / "manifest.json"
-    import io
-    atomic_write(io.BytesIO(manifest_bytes), manifest_file)
+            line_str = lines[line_idx]
+            actual_hash = hashlib.sha256(line_str.encode("utf-8")).hexdigest()
+            if actual_hash.lower() != expected_hash.lower():
+                raise ReleaseBuildError(f"Record hash mismatch for {r_id}: expected {expected_hash}, got {actual_hash}")
 
-    with open(manifest_file, "rb") as f:
-        manifest_sha256 = hash_stream(f)
+            rec_obj = json.loads(line_str)
+            validate_record(rec_obj)
 
-    # Save to catalog database
-    create_release(
-        conn=conn,
-        release_id=release_id,
-        release_path=str(Path("releases") / release_id),
-        status="verified",
-        schema_version="1.0.0",
-        counts_json=json.dumps(counts_dict),
-        source_snapshot_json=json.dumps(source_snapshot),
-        manifest_sha256=manifest_sha256,
-    )
-    conn.close()
+            if r_type in records_by_type:
+                records_by_type[r_type].append(rec_obj)
+                release_items_meta.append((r_id, expected_hash))
 
-    return manifest_data
+        counts_dict = {
+            "legislation_count": len(records_by_type["legislation"]),
+            "article_count": len(records_by_type["article"]),
+            "decision_count": len(records_by_type["decision"]),
+            "citation_count": len(records_by_type["citation"]),
+        }
+
+        # Write data JSONL files
+        file_manifest_entries: dict[str, str] = {}
+
+        type_to_filename = {
+            "legislation": "data/legislation.jsonl",
+            "article": "data/articles.jsonl",
+            "decision": "data/decisions.jsonl",
+            "citation": "data/citations.jsonl",
+        }
+
+        for r_type, r_list in records_by_type.items():
+            fn = type_to_filename[r_type]
+            out_file = building_dir / fn
+            r_list_sorted = sorted(r_list, key=lambda x: x["id"])
+
+            with open(out_file, "w", encoding="utf-8") as f:
+                for r in r_list_sorted:
+                    line = json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+                    f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
+
+            with open(out_file, "rb") as f:
+                file_manifest_entries[fn] = hash_stream(f)
+
+        # Copy schema files
+        project_schemas_dir = Path(__file__).parent.parent.parent.parent / "schemas"
+        if project_schemas_dir.exists():
+            for schema_path in project_schemas_dir.glob("*.schema.json"):
+                dest = building_schemas_dir / schema_path.name
+                shutil.copy2(schema_path, dest)
+                rel_schema_path = f"schemas/{schema_path.name}"
+                with open(dest, "rb") as f:
+                    file_manifest_entries[rel_schema_path] = hash_stream(f)
+
+        now_rfc3339 = datetime.now(UTC).isoformat()
+        release_meta = {
+            "release_id": release_id,
+            "release_type": "full",
+            "schema_version": "1.0.0",
+            "pipeline_version": "0.1.0",
+            "created_at": now_rfc3339,
+            "published_at": None,
+            "counts": counts_dict,
+            "source_snapshot": [
+                {
+                    "source_id": "mevzuat",
+                    "policy_version": "1.0.0",
+                    "latest_retrieved_at": now_rfc3339,
+                }
+            ],
+            "previous_release_id": None,
+        }
+
+        release_file = building_dir / "release.json"
+        with open(release_file, "w", encoding="utf-8") as f:
+            json.dump(release_meta, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+
+        with open(release_file, "rb") as f:
+            file_manifest_entries["release.json"] = hash_stream(f)
+
+        manifest_obj = {
+            "algorithm": "sha256",
+            "files": file_manifest_entries,
+        }
+        manifest_file = building_dir / "manifest.json"
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            json.dump(manifest_obj, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+
+        with open(manifest_file, "rb") as f:
+            manifest_sha256 = hash_stream(f)
+
+        # Atomic Rename
+        os.replace(building_dir, final_dir)
+
+        # Record release in catalog
+        create_release(
+            conn=conn,
+            release_id=release_id,
+            release_path=str(Path("releases") / release_id),
+            status="verified",
+            schema_version="1.0.0",
+            counts_json=json.dumps(counts_dict),
+            source_snapshot_json=json.dumps(release_meta["source_snapshot"]),
+            manifest_sha256=manifest_sha256,
+        )
+
+        for r_id, r_hash in release_items_meta:
+            add_release_item(conn, release_id, r_id, r_hash)
+
+        return release_meta
+
+    except Exception as e:
+        if building_dir.exists():
+            shutil.rmtree(building_dir, ignore_errors=True)
+        raise ReleaseBuildError(f"Failed to build release {release_id}: {e}") from e
+    finally:
+        conn.close()

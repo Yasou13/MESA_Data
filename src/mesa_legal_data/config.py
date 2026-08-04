@@ -1,10 +1,19 @@
-import os
 from pathlib import Path
 from typing import Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class StorageQuotaConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    active_data_limit_gb: float = 50.0
+    raw_limit_gb: float = 25.0
+    canonical_limit_gb: float = 10.0
+    releases_limit_gb: float = 10.0
+    tmp_limit_gb: float = 5.0
+    minimum_free_space_gb: float = 20.0
 
 
 class SettingsModel(BaseSettings):
@@ -12,14 +21,16 @@ class SettingsModel(BaseSettings):
         env_prefix="MESA_DATA_",
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="forbid"
+        extra="forbid",
     )
 
     data_root: str = Field(default="/storage/mesa-legal-data/data")
+    mesa_staging_db: str = Field(default="/storage/mesa-legal-data/data/mesa_staging.sqlite")
     environment: Literal["development", "production", "testing"] = Field(default="development")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO")
     operator_contact: str = Field(default="")
     http_proxy: str | None = Field(default=None)
+    storage: StorageQuotaConfig = Field(default_factory=StorageQuotaConfig)
 
     @property
     def data_root_path(self) -> Path:
@@ -27,10 +38,7 @@ class SettingsModel(BaseSettings):
         return path
 
     def dump_safe(self) -> dict:
-        """Dumps config without exposing sensitive fields (secrets)."""
         data = self.model_dump()
-        # In this initial schema there are no passwords, but if there were, we'd mask them here.
-        # e.g., data["api_key"] = "***"
         return data
 
 

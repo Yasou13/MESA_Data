@@ -1,5 +1,6 @@
 from mesa_legal_data.parsers.html import parse_html
 
+
 def test_parse_html_clean():
     raw_html = """
     <!DOCTYPE html>

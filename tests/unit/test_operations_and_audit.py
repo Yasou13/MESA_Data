@@ -1,12 +1,9 @@
-import sqlite3
-from pathlib import Path
 from typer.testing import CliRunner
 
 from mesa_legal_data.cli import app
-from mesa_legal_data.catalog import get_db_path
-from mesa_legal_data.audit import run_doctor_check, backup_catalog, restore_catalog, run_integrity_audit
 
 runner = CliRunner()
+
 
 def test_operations_and_audit_cli(tmp_path, monkeypatch):
     monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
@@ -26,7 +23,7 @@ def test_operations_and_audit_cli(tmp_path, monkeypatch):
     assert res_b.exit_code == 0
     assert "Successfully backed up catalog" in res_b.output
 
-    backup_file = list(b_dir.glob("*.sqlite"))[0]
+    backup_file = next(iter(b_dir.glob("*.sqlite")))
 
     # 4. Test Restore CLI
     res_r = runner.invoke(app, ["restore", "--backup-file", str(backup_file)])

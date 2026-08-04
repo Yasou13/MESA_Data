@@ -1,5 +1,6 @@
 from mesa_legal_data.models import DiscoveredItem, FetchedArtifact
 
+
 def test_discovered_item():
     item = DiscoveredItem(
         document_id="doc1",
@@ -7,10 +8,11 @@ def test_discovered_item():
         document_type="type",
         jurisdiction="TR",
         stable_key="key",
-        source_url="http://test"
+        source_url="http://test",
     )
     assert item.document_id == "doc1"
     assert item.fetch_method == "GET"
+
 
 def test_fetched_artifact():
     artifact = FetchedArtifact(
@@ -26,6 +28,6 @@ def test_fetched_artifact():
         byte_size=10,
         sha256="hash",
         raw_path="path",
-        transport_status="verified"
+        transport_status="verified",
     )
     assert artifact.artifact_id == "art1"

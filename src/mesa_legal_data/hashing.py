@@ -1,6 +1,7 @@
 import hashlib
 from typing import BinaryIO
 
+
 def hash_stream(stream: BinaryIO, chunk_size: int = 8192) -> str:
     """
     Reads from a binary stream in chunks and computes the SHA-256 hash.

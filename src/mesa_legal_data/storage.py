@@ -1,5 +1,4 @@
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import BinaryIO
@@ -30,13 +29,13 @@ def atomic_write(source_stream: BinaryIO, target_path: Path):
 
     # Ensure target parent directory exists
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     tmp_dir = get_tmp_dir()
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    
+
     fd, temp_path_str = tempfile.mkstemp(dir=tmp_dir, prefix=".tmp_write_")
     temp_path = Path(temp_path_str)
-    
+
     try:
         with os.fdopen(fd, "wb") as f:
             # Chunked read to avoid loading large files into memory
@@ -45,10 +44,10 @@ def atomic_write(source_stream: BinaryIO, target_path: Path):
                 if not chunk:
                     break
                 f.write(chunk)
-            
+
             f.flush()
             os.fsync(f.fileno())
-            
+
         # Atomic rename (POSIX guarantees atomicity for rename, on Windows os.replace is used under the hood in Path.replace)
         temp_path.replace(target_path)
     except Exception as e:

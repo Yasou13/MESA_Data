@@ -1,13 +1,18 @@
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
-from mesa_legal_data.catalog import get_connection, insert_artifact, upsert_document, create_run, finish_run
+from mesa_legal_data.catalog import (
+    create_run,
+    finish_run,
+    get_connection,
+    insert_artifact,
+    upsert_document,
+)
 from mesa_legal_data.config import load_settings
-from mesa_legal_data.content_types import detect_mime_type, validate_file_content
+from mesa_legal_data.content_types import validate_file_content
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.models import FetchedArtifact
 from mesa_legal_data.storage import atomic_write
@@ -21,8 +26,8 @@ def import_manual_file(
     family: str = "legislation",
     document_type: str = "law",
     jurisdiction: str = "TR",
-    title: Optional[str] = None,
-    stable_key: Optional[str] = None,
+    title: str | None = None,
+    stable_key: str | None = None,
 ) -> FetchedArtifact:
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -45,7 +50,7 @@ def import_manual_file(
     # 3. Path construction
     ext = file_path.suffix if file_path.suffix else ".bin"
     doc_key = stable_key if stable_key else secure_slug(document_id)
-    year = datetime.now(timezone.utc).year
+    year = datetime.now(UTC).year
 
     rel_path = build_raw_path(
         family=family,
@@ -62,7 +67,7 @@ def import_manual_file(
         atomic_write(f, full_target_payload)
 
     # 5. Metadata json
-    retrieved_at = datetime.now(timezone.utc).isoformat()
+    retrieved_at = datetime.now(UTC).isoformat()
     byte_size = os.path.getsize(file_path)
     artifact_id = f"sha256:{artifact_sha256}"
 
@@ -88,6 +93,7 @@ def import_manual_file(
     with open(file_path, "rb") as f:
         # Atomic write for metadata as well
         import io
+
         meta_bytes = json.dumps(meta_dict, indent=2).encode("utf-8")
         atomic_write(io.BytesIO(meta_bytes), metadata_path)
 
@@ -174,11 +180,12 @@ def import_manual_url(
     family: str = "legislation",
     document_type: str = "law",
     jurisdiction: str = "TR",
-    title: Optional[str] = None,
-    stable_key: Optional[str] = None,
+    title: str | None = None,
+    stable_key: str | None = None,
 ) -> FetchedArtifact:
-    from mesa_legal_data.sources.url_fetcher import fetch_url_stream
     import io
+
+    from mesa_legal_data.sources.url_fetcher import fetch_url_stream
 
     settings = load_settings()
     data_root = settings.data_root_path
@@ -194,11 +201,15 @@ def import_manual_url(
 
     try:
         with open(temp_file, "wb") as f:
-            for chunk in stream_gen:
-                f.write(chunk)
+            f.writelines(stream_gen)
 
         # 2. Content & MIME validation
-        allowed_mimes = ["application/pdf", "text/html", "text/plain", "application/xml"]
+        allowed_mimes = [
+            "application/pdf",
+            "text/html",
+            "text/plain",
+            "application/xml",
+        ]
         detected_mime = validate_file_content(
             str(temp_file),
             allowed_mimes=allowed_mimes,
@@ -213,7 +224,7 @@ def import_manual_url(
         # Determine extension from URL or detected MIME
         ext = ".html" if "html" in detected_mime else (".pdf" if "pdf" in detected_mime else ".bin")
         doc_key = stable_key if stable_key else secure_slug(document_id)
-        year = datetime.now(timezone.utc).year
+        year = datetime.now(UTC).year
 
         rel_path = build_raw_path(
             family=family,
@@ -230,7 +241,7 @@ def import_manual_url(
             atomic_write(f, full_target_payload)
 
         # 6. Metadata json
-        retrieved_at = datetime.now(timezone.utc).isoformat()
+        retrieved_at = datetime.now(UTC).isoformat()
         byte_size = os.path.getsize(temp_file)
         artifact_id = f"sha256:{artifact_sha256}"
 
@@ -333,4 +344,3 @@ def import_manual_url(
                 temp_file.unlink()
             except OSError:
                 pass
-

@@ -1,9 +1,9 @@
 from pathlib import Path
-import yaml
-from typing import List
+
+import yaml  # type: ignore[import-untyped]
 
 from mesa_legal_data.models import FetchedArtifact
-from mesa_legal_data.sources import import_manual_url, import_manual_file
+from mesa_legal_data.sources import import_manual_file, import_manual_url
 
 
 def load_seed_config(config_path: Path | None = None) -> list[dict]:
@@ -22,7 +22,7 @@ def load_seed_config(config_path: Path | None = None) -> list[dict]:
 def run_seed_collection(
     config_path: Path | None = None,
     local_fixtures_dir: Path | None = None,
-) -> List[FetchedArtifact]:
+) -> list[FetchedArtifact]:
     """
     Collects seed legislation. If local_fixtures_dir is provided, imports from local files;
     otherwise imports via URL.

@@ -1,12 +1,12 @@
 [project]
 name = "mesa-legal-data"
 version = "0.1.0"
-description = "Add your description here"
+description = "MESA Legal Data Platform for collecting, canonicalizing, and releasing Turkey legal data."
 readme = "README.md"
 authors = [
     { name = "Yasin Büyüktepe", email = "yasinbuyuktepe3@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "beautifulsoup4>=4.12.3",
     "httpx>=0.28.1",
@@ -41,3 +41,10 @@ dev = [
     "respx>=0.23.1",
     "ruff>=0.16.1",
 ]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["BLE001", "B008", "DTZ007", "E501", "W293", "W291"]

@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Optional
 
 from mesa_legal_data.models import FetchedArtifact
 from mesa_legal_data.sources.manual import import_manual_file, import_manual_url
@@ -7,14 +6,14 @@ from mesa_legal_data.storage_paths import secure_slug
 
 
 def import_yargitay_decision(
-    file_path: Optional[Path] = None,
-    url: Optional[str] = None,
+    file_path: Path | None = None,
+    url: str | None = None,
     chamber: str = "3hd",
     case_year: int = 2023,
     case_seq: int = 4125,
     decision_year: int = 2024,
     decision_seq: int = 1872,
-    title: Optional[str] = None,
+    title: str | None = None,
 ) -> FetchedArtifact:
     """
     Imports a Yargıtay court decision file or URL into raw storage and catalog.

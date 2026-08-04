@@ -1,9 +1,10 @@
 import sqlite3
 from pathlib import Path
 
-from mesa_legal_data.sources.aym import import_aym_decision
-from mesa_legal_data.parsers import parse_decision_text, parse_html
 from mesa_legal_data.catalog import get_db_path, migrate
+from mesa_legal_data.parsers import parse_decision_text, parse_html
+from mesa_legal_data.sources.aym import import_aym_decision
+
 
 def test_aym_golden_import_and_parse(tmp_path, monkeypatch):
     monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
@@ -14,7 +15,7 @@ def test_aym_golden_import_and_parse(tmp_path, monkeypatch):
 
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO sources (source_id, name, authority, base_url, access_mode, enabled, policy_version, config_json, created_at, updated_at) "
+        "INSERT OR IGNORE INTO sources (source_id, name, authority, base_url, access_mode, enabled, policy_version, config_json, created_at, updated_at) "
         "VALUES ('aym', 'AYM', 'Gov', 'http://kararlarbilgibankasi.anayasa.gov.tr', 'manual', 1, '1.0', '{}', '2026-08-05T00:00:00Z', '2026-08-05T00:00:00Z')"
     )
     conn.commit()

@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
 
 from mesa_legal_data.parsers.text_normalizer import normalize_text
@@ -8,14 +8,14 @@ from mesa_legal_data.parsers.text_normalizer import normalize_text
 class ParsedDecision(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    court: Optional[str] = None
-    chamber: Optional[str] = None
-    esas_no: Optional[str] = None
-    karar_no: Optional[str] = None
-    decision_date: Optional[str] = None
-    summary: Optional[str] = None
+    court: str | None = None
+    chamber: str | None = None
+    esas_no: str | None = None
+    karar_no: str | None = None
+    decision_date: str | None = None
+    summary: str | None = None
     text: str = ""
-    verdict: Optional[str] = None
+    verdict: str | None = None
 
 
 ESAS_NO_PATTERN = re.compile(r"Esas\s*No\s*[:\s]*([0-9]{4}\s*/\s*[0-9]+)", re.IGNORECASE)
@@ -37,7 +37,16 @@ def parse_decision_text(text: str) -> ParsedDecision:
 
     esas_no = esas_match.group(1).replace(" ", "") if esas_match else None
     karar_no = karar_match.group(1).replace(" ", "") if karar_match else None
-    decision_date = tarih_match.group(1) if tarih_match else None
+    raw_date = tarih_match.group(1) if tarih_match else None
+    decision_date = None
+
+    if raw_date:
+        parts = re.split(r"[./-]", raw_date)
+        if len(parts) == 3:
+            day, month, year = parts[0].zfill(2), parts[1].zfill(2), parts[2]
+            decision_date = f"{year}-{month}-{day}"
+        else:
+            decision_date = raw_date
 
     # Detect court/chamber from first few lines
     lines = [line.strip() for line in text.split("\n") if line.strip()]

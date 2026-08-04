@@ -1,5 +1,6 @@
 from mesa_legal_data.parsers.citations import extract_citations
 
+
 def test_extract_citations():
     text = """
     Türk Borçlar Kanunu'nun 117. maddesi uyarınca borçlunun temerrüdü...

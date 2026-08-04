@@ -1,15 +1,14 @@
 import os
-import shutil
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
 
 
-def run_doctor_check() -> Dict[str, Any]:
+def run_doctor_check() -> dict[str, Any]:
     """
     Performs system health check:
     - Data root write permissions
@@ -19,11 +18,12 @@ def run_doctor_check() -> Dict[str, Any]:
     settings = load_settings()
     data_root = settings.data_root_path
 
-    results = {
+    missing_artifacts: list[tuple[str, str]] = []
+    results: dict[str, Any] = {
         "data_root": str(data_root),
         "data_root_writable": os.access(data_root, os.W_OK),
         "catalog_sqlite_exists": (data_root / "catalog.sqlite").exists(),
-        "missing_artifacts": [],
+        "missing_artifacts": missing_artifacts,
     }
 
     if results["catalog_sqlite_exists"]:
@@ -56,7 +56,7 @@ def backup_catalog(backup_dir: Path | None = None) -> Path:
 
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     target_backup = backup_dir / f"catalog_backup_{timestamp}.sqlite"
 
     # SQLite online backup or copy
@@ -88,7 +88,7 @@ def restore_catalog(backup_path: Path) -> bool:
     return True
 
 
-def run_integrity_audit() -> Dict[str, int]:
+def run_integrity_audit() -> dict[str, int]:
     """
     Scans all raw artifacts and re-verifies their SHA-256 hashes.
     """

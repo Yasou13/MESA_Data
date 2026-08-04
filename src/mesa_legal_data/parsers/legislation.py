@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, ConfigDict
 
 from mesa_legal_data.parsers.text_normalizer import normalize_text
@@ -10,21 +10,21 @@ class ParsedArticle(BaseModel):
 
     article_number: str
     article_kind: str  # "standard", "additional", "temporary"
-    heading: Optional[str] = None
+    heading: str | None = None
     text: str
 
 
 class ParsedLegislation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    title: Optional[str] = None
-    number: Optional[str] = None
-    articles: List[ParsedArticle] = []
+    title: str | None = None
+    number: str | None = None
+    articles: list[ParsedArticle] = []
 
 
 ARTICLE_PATTERN = re.compile(
     r"^(?P<kind>EK MADDE|GEÇİCİ MADDE|MADDE)\s+(?P<num>\d+|[A-ZÇĞİÖŞÜ]+)\s*[-–—:]?\s*(?P<heading>.*)$",
-    re.IGNORECASE | re.MULTILINE
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -37,12 +37,12 @@ def parse_legislation_text(text: str) -> ParsedLegislation:
         return ParsedLegislation()
 
     lines = text.split("\n")
-    articles: List[ParsedArticle] = []
-    
-    current_kind: Optional[str] = None
-    current_num: Optional[str] = None
-    current_heading: Optional[str] = None
-    current_body_lines: List[str] = []
+    articles: list[ParsedArticle] = []
+
+    current_kind: str | None = None
+    current_num: str | None = None
+    current_heading: str | None = None
+    current_body_lines: list[str] = []
 
     def flush_current():
         nonlocal current_kind, current_num, current_heading, current_body_lines
@@ -53,12 +53,16 @@ def parse_legislation_text(text: str) -> ParsedLegislation:
             elif current_kind == "GEÇİCİ MADDE":
                 kind_str = "temporary"
 
+            art_text = "\n".join(current_body_lines).strip()
+            if not art_text:
+                art_text = current_heading or f"Madde {current_num}"
+
             articles.append(
                 ParsedArticle(
                     article_number=current_num,
                     article_kind=kind_str,
                     heading=current_heading if current_heading else None,
-                    text="\n".join(current_body_lines).strip(),
+                    text=art_text,
                 )
             )
         current_kind = None

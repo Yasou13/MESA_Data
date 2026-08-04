@@ -1,17 +1,16 @@
 import pytest
 import respx
-from httpx import Response
 from typer.testing import CliRunner
 
 from mesa_legal_data.sources.url_fetcher import (
-    fetch_url_stream,
+    SizeLimitExceededError,
     SSRFError,
     URLFetchError,
-    SizeLimitExceededError,
+    fetch_url_stream,
 )
-from mesa_legal_data.cli import app
 
 runner = CliRunner()
+
 
 def test_private_ip_ssrf_blocking():
     with pytest.raises(SSRFError):
@@ -71,21 +70,14 @@ def test_url_fetch_redirect():
         content=b"<!DOCTYPE html><html><body>Redirected</body></html>",
     )
 
-    status, headers, stream_gen = fetch_url_stream("http://example.com/old_location")
+    status, _headers, stream_gen = fetch_url_stream("http://example.com/old_location")
     assert status == 200
     content = b"".join(list(stream_gen))
     assert b"Redirected" in content
 
+    # Test size limit exceeded
+    respx.get("http://example.com/big.file").respond(status_code=200, content=b"A" * 2000)
 
-@respx.mock
-def test_url_fetch_max_size_exceeded():
-    large_data = b"A" * 2000
-    respx.get("http://example.com/big.file").respond(
-        status_code=200,
-        headers={"content-type": "text/plain"},
-        content=large_data,
-    )
-
-    status, headers, stream_gen = fetch_url_stream("http://example.com/big.file", max_bytes=1000)
+    _status, _headers, stream_gen = fetch_url_stream("http://example.com/big.file", max_bytes=1000)
     with pytest.raises(SizeLimitExceededError):
         list(stream_gen)

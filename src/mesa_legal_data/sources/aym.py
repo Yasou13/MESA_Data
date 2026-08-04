@@ -1,19 +1,18 @@
 from pathlib import Path
-from typing import Optional
 
 from mesa_legal_data.models import FetchedArtifact
 from mesa_legal_data.sources.manual import import_manual_file, import_manual_url
 
 
 def import_aym_decision(
-    file_path: Optional[Path] = None,
-    url: Optional[str] = None,
+    file_path: Path | None = None,
+    url: str | None = None,
     kind: str = "bb",  # "bb" or "norm"
-    application_year: Optional[int] = None,
-    application_number: Optional[int] = None,
-    decision_year: Optional[int] = None,
-    decision_number: Optional[int] = None,
-    title: Optional[str] = None,
+    application_year: int | None = None,
+    application_number: int | None = None,
+    decision_year: int | None = None,
+    decision_number: int | None = None,
+    title: str | None = None,
 ) -> FetchedArtifact:
     """
     Imports an Anayasa Mahkemesi (AYM) decision file or URL into raw storage and catalog.
