@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "source_record_id",
+    "target_legislation_id",
+    "raw_text",
+    "schema_version"
+  ],
+  "properties": {
+    "source_record_id": { "type": "string" },
+    "target_legislation_id": { "type": "string" },
+    "target_article_id": { "type": ["string", "null"] },
+    "raw_text": { "type": "string" },
+    "schema_version": { "type": "string" }
+  },
+  "additionalProperties": false
+}

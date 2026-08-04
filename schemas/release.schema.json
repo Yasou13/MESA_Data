@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "release_id",
+    "schema_version",
+    "created_at",
+    "manifest_sha256",
+    "counts"
+  ],
+  "properties": {
+    "release_id": { "type": "string" },
+    "schema_version": { "type": "string" },
+    "created_at": { "type": "string" },
+    "published_at": { "type": ["string", "null"] },
+    "manifest_sha256": { "type": "string" },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "legislation_count": { "type": "integer" },
+        "article_count": { "type": "integer" },
+        "decision_count": { "type": "integer" },
+        "citation_count": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "id",
+    "record_type",
+    "jurisdiction",
+    "language",
+    "legislation_type",
+    "number",
+    "title",
+    "status",
+    "version",
+    "full_text",
+    "schema_version",
+    "created_at",
+    "source",
+    "provenance"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "record_type": { "type": "string", "const": "legislation" },
+    "jurisdiction": { "type": "string", "const": "TR" },
+    "language": { "type": "string", "const": "tr" },
+    "legislation_type": { "type": "string" },
+    "number": { "type": "string" },
+    "title": { "type": "string" },
+    "short_title": { "type": ["string", "null"] },
+    "publication": {
+      "type": ["object", "null"],
+      "properties": {
+        "date": { "type": "string" },
+        "gazette_number": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "status": { "type": "string" },
+    "version": {
+      "type": "object",
+      "required": ["version_id", "version_kind", "snapshot_date"],
+      "properties": {
+        "version_id": { "type": "string" },
+        "version_kind": { "type": "string" },
+        "snapshot_date": { "type": ["string", "null"] },
+        "effective_from": { "type": ["string", "null"] },
+        "effective_to": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "full_text": { "type": "string" },
+    "schema_version": { "type": "string" },
+    "created_at": { "type": "string" },
+    "source": { "type": "object" },
+    "provenance": { "type": "object" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "id",
+    "record_type",
+    "court",
+    "text",
+    "schema_version",
+    "created_at",
+    "source",
+    "provenance"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "record_type": { "type": "string", "const": "decision" },
+    "court": { "type": "string" },
+    "chamber": { "type": ["string", "null"] },
+    "esas_no": { "type": ["string", "null"] },
+    "karar_no": { "type": ["string", "null"] },
+    "decision_date": { "type": ["string", "null"] },
+    "summary": { "type": ["string", "null"] },
+    "text": { "type": "string" },
+    "verdict": { "type": ["string", "null"] },
+    "schema_version": { "type": "string" },
+    "created_at": { "type": "string" },
+    "source": { "type": "object" },
+    "provenance": { "type": "object" }
+  },
+  "additionalProperties": false
+}

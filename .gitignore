@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+wheels/
+*.egg-info/
+.venv/
+venv/
+
+# Testing & Linting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Data and SQLite Database
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+backups/
+tmp/
+
+# Environment and sensitive data
+.env
+.env.local

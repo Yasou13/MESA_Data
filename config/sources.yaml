@@ -1,0 +1,86 @@
+version: "1.0.0"
+
+sources:
+  resmi_gazete:
+    name: "T.C. Resmî Gazete"
+    authority: "T.C. Cumhurbaşkanlığı"
+    base_url: "https://www.resmigazete.gov.tr/"
+    access_mode: "manual"
+    enabled: true
+    families: ["legislation"]
+    source_role: "original_publication"
+    policy_version: "1.0.0"
+    http:
+      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      concurrency: 1
+      min_interval_seconds: 5
+      timeout_seconds: 30
+      retries: 3
+      max_requests_per_run: 100
+      max_download_bytes: 52428800
+    allowed_content_types:
+      - "application/pdf"
+      - "text/html"
+
+  mevzuat:
+    name: "Mevzuat Bilgi Sistemi"
+    authority: "T.C. Cumhurbaşkanlığı"
+    base_url: "https://www.mevzuat.gov.tr/"
+    access_mode: "manual"
+    enabled: true
+    families: ["legislation"]
+    source_role: "consolidated_text"
+    policy_version: "1.0.0"
+    http:
+      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      concurrency: 1
+      min_interval_seconds: 5
+      timeout_seconds: 30
+      retries: 3
+      max_requests_per_run: 25
+      max_download_bytes: 52428800
+    allowed_content_types:
+      - "application/pdf"
+      - "text/html"
+
+  aym:
+    name: "Anayasa Mahkemesi Kararlar Bilgi Bankası"
+    authority: "T.C. Anayasa Mahkemesi"
+    base_url: "https://kararlarbilgibankasi.anayasa.gov.tr/"
+    access_mode: "manual"
+    enabled: true
+    families: ["decision"]
+    source_role: "official_case_law"
+    policy_version: "1.0.0"
+    editorial_note_required: true
+    http:
+      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      concurrency: 1
+      min_interval_seconds: 10
+      timeout_seconds: 30
+      retries: 3
+      max_requests_per_run: 20
+      max_download_bytes: 52428800
+    allowed_content_types:
+      - "text/html"
+      - "application/pdf"
+
+  yargitay:
+    name: "Yargıtay Karar Arama"
+    authority: "T.C. Yargıtay Başkanlığı"
+    base_url: "https://karararama.yargitay.gov.tr/"
+    access_mode: "manual"
+    enabled: false
+    families: ["decision"]
+    source_role: "official_case_law"
+    policy_version: "1.0.0"
+    http:
+      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      concurrency: 1
+      min_interval_seconds: 15
+      timeout_seconds: 30
+      retries: 2
+      max_requests_per_run: 10
+      max_download_bytes: 52428800
+    allowed_content_types:
+      - "text/html"

@@ -1,0 +1,8 @@
+version: "1.0.0"
+
+settings:
+  data_root: "/storage/mesa-legal-data/data"
+  environment: "development"
+  log_level: "INFO"
+  operator_contact: "test@example.com"
+  http_proxy: null

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "id",
+    "record_type",
+    "legislation_id",
+    "article_number",
+    "article_kind",
+    "text",
+    "status",
+    "schema_version",
+    "created_at",
+    "source",
+    "provenance"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "record_type": { "type": "string", "const": "article" },
+    "legislation_id": { "type": "string" },
+    "legislation_version_id": { "type": ["string", "null"] },
+    "article_number": { "type": "string" },
+    "article_kind": { "type": "string" },
+    "heading": { "type": ["string", "null"] },
+    "text": { "type": "string" },
+    "structure": {
+      "type": ["object", "null"],
+      "properties": {
+        "part": { "type": ["string", "null"] },
+        "book": { "type": ["string", "null"] },
+        "section": { "type": ["string", "null"] },
+        "subsection": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "status": { "type": "string" },
+    "effective_from": { "type": ["string", "null"] },
+    "effective_to": { "type": ["string", "null"] },
+    "source_span": {
+      "type": ["object", "null"],
+      "properties": {
+        "page_start": { "type": "integer" },
+        "page_end": { "type": "integer" },
+        "char_start": { "type": "integer" },
+        "char_end": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "schema_version": { "type": "string" },
+    "created_at": { "type": "string" },
+    "source": { "type": "object" },
+    "provenance": { "type": "object" }
+  },
+  "additionalProperties": false
+}
