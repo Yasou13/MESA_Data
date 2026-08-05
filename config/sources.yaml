@@ -21,6 +21,9 @@ sources:
     allowed_content_types:
       - "application/pdf"
       - "text/html"
+    allowed_hosts:
+      - "resmigazete.gov.tr"
+      - "www.resmigazete.gov.tr"
 
   mevzuat:
     name: "Mevzuat Bilgi Sistemi"
@@ -42,6 +45,9 @@ sources:
     allowed_content_types:
       - "application/pdf"
       - "text/html"
+    allowed_hosts:
+      - "mevzuat.gov.tr"
+      - "www.mevzuat.gov.tr"
 
   aym:
     name: "Anayasa Mahkemesi Kararlar Bilgi Bankası"

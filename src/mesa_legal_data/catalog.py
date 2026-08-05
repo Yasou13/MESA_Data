@@ -428,8 +428,8 @@ def insert_record(
     canonical_path: str,
     canonical_line: int,
     record_sha256: str,
-    validation_status: str,
-    approval_status: str,
+    validation_status: str = "valid",
+    approval_status: str = "pending",
 ):
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
@@ -852,3 +852,727 @@ def record_mesa_import(
                 error_summary,
             ),
         )
+
+
+def approve_version_streaming(
+    conn: sqlite3.Connection,
+    *,
+    version_id: str,
+    reviewer: str,
+    note: str | None = None,
+    batch_size: int = 2000,
+) -> dict[str, Any]:
+    ver = get_version(conn, version_id)
+    if not ver:
+        raise CatalogError(f"Version {version_id} not found")
+
+    blockers = list_open_blocking_issues(conn, subject_id=version_id)
+    if blockers:
+        raise BlockingValidationIssueExists(
+            f"Cannot approve version {version_id}: open blocking issues exist: {blockers}"
+        )
+
+    data_root = load_settings().data_root_path
+
+    # Temp SQLite table to index records by canonical_path and canonical_line
+    spool_db_path = data_root / f".approve_spool-{uuid.uuid4().hex[:8]}.sqlite"
+    spool_conn = sqlite3.connect(spool_db_path)
+    spool_conn.executescript("""
+        CREATE TABLE version_records (
+            record_id TEXT NOT NULL,
+            canonical_path TEXT NOT NULL,
+            canonical_line INTEGER NOT NULL,
+            record_sha256 TEXT NOT NULL,
+            PRIMARY KEY (canonical_path, canonical_line)
+        );
+    """)
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT record_id, canonical_path, canonical_line, record_sha256 FROM records WHERE version_id = ? ORDER BY canonical_path ASC, canonical_line ASC",
+            (version_id,),
+        )
+
+        record_batch = []
+        total_records = 0
+        while True:
+            rows = cur.fetchmany(batch_size)
+            if not rows:
+                break
+            for r in rows:
+                record_batch.append((r[0], r[1], r[2], r[3]))
+                total_records += 1
+                if len(record_batch) >= batch_size:
+                    spool_conn.executemany(
+                        "INSERT INTO version_records (record_id, canonical_path, canonical_line, record_sha256) VALUES (?, ?, ?, ?)",
+                        record_batch,
+                    )
+                    record_batch.clear()
+
+        if record_batch:
+            spool_conn.executemany(
+                "INSERT INTO version_records (record_id, canonical_path, canonical_line, record_sha256) VALUES (?, ?, ?, ?)",
+                record_batch,
+            )
+            record_batch.clear()
+
+        spool_conn.commit()
+
+        if total_records == 0:
+            spool_conn.close()
+            if spool_db_path.exists():
+                spool_db_path.unlink()
+            return {"version_id": version_id, "approved_records": 0, "approval_status": "approved"}
+
+        # Get distinct canonical paths
+        p_cur = spool_conn.cursor()
+        p_cur.execute("SELECT DISTINCT canonical_path FROM version_records ORDER BY canonical_path ASC")
+        c_paths = []
+        while True:
+            rows = p_cur.fetchmany(1000)
+            if not rows:
+                break
+            c_paths.extend([r[0] for r in rows])
+
+        approved_record_ids = []
+        review_entries = []
+        now_iso = datetime.now(UTC).isoformat()
+
+        # O(n) Single Sequential Pass over Canonical Files
+        for rel_c_path in c_paths:
+            abs_c_path = data_root / rel_c_path
+            if not abs_c_path.exists():
+                raise CatalogError(f"Canonical file missing: {abs_c_path}")
+
+            line_cur = spool_conn.cursor()
+            line_cur.execute(
+                "SELECT canonical_line, record_id, record_sha256 FROM version_records WHERE canonical_path = ? ORDER BY canonical_line ASC",
+                (rel_c_path,),
+            )
+
+            with open(abs_c_path, "r", encoding="utf-8") as f:
+                target = line_cur.fetchone()
+                for idx, line in enumerate(f, start=1):
+                    while target and target[0] == idx:
+                        target_line_num, r_id, expected_hash = target
+
+                        calc_hash = hashlib.sha256(line.encode("utf-8")).hexdigest()
+                        if calc_hash.lower() != expected_hash.lower():
+                            raise CatalogError(
+                                f"Record SHA256 mismatch for {r_id}: expected {expected_hash}, got {calc_hash}"
+                            )
+
+                        approved_record_ids.append(r_id)
+                        review_entries.append((r_id, expected_hash, reviewer, "approved", note, now_iso))
+
+                        target = line_cur.fetchone()
+
+                    if not target:
+                        break
+
+                if target:
+                    raise CatalogError(f"Canonical line {target[0]} out of bounds in {abs_c_path}")
+
+        spool_conn.close()
+        if spool_db_path.exists():
+            spool_db_path.unlink()
+
+        # Perform atomic batch approval in single transaction
+        with transaction(conn):
+            # Insert record_reviews in batches
+            for i in range(0, len(review_entries), batch_size):
+                chunk = review_entries[i : i + batch_size]
+                conn.executemany(
+                    "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    chunk,
+                )
+
+            # Update records status in batches
+            id_tuples = [(r_id,) for r_id in approved_record_ids]
+            for i in range(0, len(id_tuples), batch_size):
+                chunk = id_tuples[i : i + batch_size]
+                conn.executemany(
+                    "UPDATE records SET approval_status = 'approved' WHERE record_id = ?",
+                    chunk,
+                )
+
+            conn.execute(
+                "UPDATE versions SET approval_status = 'approved' WHERE version_id = ?",
+                (version_id,),
+            )
+            conn.execute(
+                "UPDATE documents SET lifecycle_status = 'approved', updated_at = ? WHERE document_id = ?",
+                (now_iso, ver["document_id"]),
+            )
+
+        log_audit_event(
+            conn,
+            actor=reviewer,
+            action="version_approve",
+            subject_type="version",
+            subject_id=version_id,
+            reason=note,
+            details_json=json.dumps({"approved_records": len(approved_record_ids)}),
+        )
+
+        return {"version_id": version_id, "approved_records": len(approved_record_ids), "approval_status": "approved"}
+
+    except Exception:
+        spool_conn.close()
+        if spool_db_path.exists():
+            try:
+                spool_db_path.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def upsert_source(
+    conn: sqlite3.Connection,
+    source_id: str,
+    name: str,
+    authority: str,
+    base_url: str,
+    access_mode: str = "manual",
+    enabled: int = 1,
+    policy_version: str = "1.0.0",
+    config_json: str = "{}",
+) -> None:
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """
+            INSERT INTO sources (source_id, name, authority, base_url, access_mode, enabled, policy_version, config_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                name = excluded.name,
+                authority = excluded.authority,
+                base_url = excluded.base_url,
+                access_mode = excluded.access_mode,
+                enabled = excluded.enabled,
+                policy_version = excluded.policy_version,
+                config_json = excluded.config_json,
+                updated_at = excluded.updated_at
+            """,
+            (source_id, name, authority, base_url, access_mode, enabled, policy_version, config_json, now, now),
+        )
+
+
+# --- AUDIT EVENTS ---
+
+def log_audit_event(
+    conn: sqlite3.Connection,
+    *,
+    actor: str,
+    action: str,
+    subject_type: str,
+    subject_id: str,
+    reason: str | None = None,
+    old_sha256: str | None = None,
+    new_sha256: str | None = None,
+    details_json: str = "{}",
+    request_id: str | None = None,
+    event_id: str | None = None,
+) -> str:
+    if not event_id:
+        event_id = f"evt-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO audit_events (event_id, actor, action, subject_type, subject_id, old_sha256, new_sha256, reason, details_json, request_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                actor,
+                action,
+                subject_type,
+                subject_id,
+                old_sha256,
+                new_sha256,
+                reason,
+                details_json,
+                request_id,
+                now,
+            ),
+        )
+    return event_id
+
+
+def list_audit_events(
+    conn: sqlite3.Connection,
+    *,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+    action: str | None = None,
+    actor: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    query = "SELECT event_id, actor, action, subject_type, subject_id, old_sha256, new_sha256, reason, details_json, request_id, created_at FROM audit_events WHERE 1=1"
+    params: list[Any] = []
+    if subject_type:
+        query += " AND subject_type = ?"
+        params.append(subject_type)
+    if subject_id:
+        query += " AND subject_id = ?"
+        params.append(subject_id)
+    if action:
+        query += " AND action = ?"
+        params.append(action)
+    if actor:
+        query += " AND actor = ?"
+        params.append(actor)
+    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    cursor = conn.cursor()
+    cursor.execute(query, tuple(params))
+    rows = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        rows.extend(batch)
+    return [
+        {
+            "event_id": r[0],
+            "actor": r[1],
+            "action": r[2],
+            "subject_type": r[3],
+            "subject_id": r[4],
+            "old_sha256": r[5],
+            "new_sha256": r[6],
+            "reason": r[7],
+            "details_json": r[8],
+            "request_id": r[9],
+            "created_at": r[10],
+        }
+        for r in rows
+    ]
+
+
+# --- RECORD ANNOTATIONS ---
+
+def add_record_annotation(
+    conn: sqlite3.Connection,
+    *,
+    record_id: str,
+    annotation_type: str,
+    namespace: str,
+    key: str,
+    value_json: str,
+    created_by: str,
+    annotation_id: str | None = None,
+) -> str:
+    if not annotation_id:
+        annotation_id = f"ann-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO record_annotations (annotation_id, record_id, annotation_type, namespace, key, value_json, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                annotation_id,
+                record_id,
+                annotation_type,
+                namespace,
+                key,
+                value_json,
+                created_by,
+                now,
+                now,
+            ),
+        )
+    return annotation_id
+
+
+def list_record_annotations(conn: sqlite3.Connection, record_id: str) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT annotation_id, record_id, annotation_type, namespace, key, value_json, created_by, created_at, updated_at FROM record_annotations WHERE record_id = ? ORDER BY created_at ASC",
+        (record_id,),
+    )
+    rows = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        rows.extend(batch)
+    return [
+        {
+            "annotation_id": r[0],
+            "record_id": r[1],
+            "annotation_type": r[2],
+            "namespace": r[3],
+            "key": r[4],
+            "value_json": r[5],
+            "created_by": r[6],
+            "created_at": r[7],
+            "updated_at": r[8],
+        }
+        for r in rows
+    ]
+
+
+def delete_record_annotation(conn: sqlite3.Connection, annotation_id: str):
+    with transaction(conn):
+        conn.execute("DELETE FROM record_annotations WHERE annotation_id = ?", (annotation_id,))
+
+
+# --- RECORD REVISIONS ---
+
+def create_record_revision(
+    conn: sqlite3.Connection,
+    *,
+    original_record_id: str,
+    original_record_sha256: str,
+    revised_record_id: str,
+    revised_record_sha256: str,
+    version_id: str,
+    change_type: str,
+    patch_json: str,
+    reason: str,
+    created_by: str,
+    status: str = "draft",
+    revision_id: str | None = None,
+) -> str:
+    if not revision_id:
+        revision_id = f"rev-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO record_revisions (revision_id, original_record_id, original_record_sha256, revised_record_id, revised_record_sha256, version_id, change_type, patch_json, reason, created_by, created_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                revision_id,
+                original_record_id,
+                original_record_sha256,
+                revised_record_id,
+                revised_record_sha256,
+                version_id,
+                change_type,
+                patch_json,
+                reason,
+                created_by,
+                now,
+                status,
+            ),
+        )
+    return revision_id
+
+
+def get_record_revision(conn: sqlite3.Connection, revision_id: str) -> dict[str, Any] | None:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT revision_id, original_record_id, original_record_sha256, revised_record_id, revised_record_sha256, version_id, change_type, patch_json, reason, created_by, created_at, status FROM record_revisions WHERE revision_id = ?",
+        (revision_id,),
+    )
+    r = cursor.fetchone()
+    if not r:
+        return None
+    return {
+        "revision_id": r[0],
+        "original_record_id": r[1],
+        "original_record_sha256": r[2],
+        "revised_record_id": r[3],
+        "revised_record_sha256": r[4],
+        "version_id": r[5],
+        "change_type": r[6],
+        "patch_json": r[7],
+        "reason": r[8],
+        "created_by": r[9],
+        "created_at": r[10],
+        "status": r[11],
+    }
+
+
+def update_record_revision_status(conn: sqlite3.Connection, revision_id: str, status: str):
+    with transaction(conn):
+        conn.execute("UPDATE record_revisions SET status = ? WHERE revision_id = ?", (status, revision_id))
+
+
+# --- SOURCE CONFIG REVISIONS ---
+
+def create_source_config_revision(
+    conn: sqlite3.Connection,
+    *,
+    config_sha256: str,
+    content_yaml: str,
+    reason: str,
+    created_by: str,
+    status: str = "draft",
+    validation_json: str = "{}",
+    revision_id: str | None = None,
+) -> str:
+    if not revision_id:
+        revision_id = f"cfgrev-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO source_config_revisions (revision_id, config_sha256, content_yaml, reason, created_by, created_at, status, validation_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                revision_id,
+                config_sha256,
+                content_yaml,
+                reason,
+                created_by,
+                now,
+                status,
+                validation_json,
+            ),
+        )
+    return revision_id
+
+
+def get_source_config_revision(conn: sqlite3.Connection, revision_id: str) -> dict[str, Any] | None:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT revision_id, config_sha256, content_yaml, reason, created_by, created_at, status, validation_json FROM source_config_revisions WHERE revision_id = ?",
+        (revision_id,),
+    )
+    r = cursor.fetchone()
+    if not r:
+        return None
+    return {
+        "revision_id": r[0],
+        "config_sha256": r[1],
+        "content_yaml": r[2],
+        "reason": r[3],
+        "created_by": r[4],
+        "created_at": r[5],
+        "status": r[6],
+        "validation_json": r[7],
+    }
+
+
+def list_source_config_revisions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT revision_id, config_sha256, content_yaml, reason, created_by, created_at, status, validation_json FROM source_config_revisions ORDER BY created_at DESC"
+    )
+    rows = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        rows.extend(batch)
+    return [
+        {
+            "revision_id": r[0],
+            "config_sha256": r[1],
+            "content_yaml": r[2],
+            "reason": r[3],
+            "created_by": r[4],
+            "created_at": r[5],
+            "status": r[6],
+            "validation_json": r[7],
+        }
+        for r in rows
+    ]
+
+
+def update_source_config_revision_status(conn: sqlite3.Connection, revision_id: str, status: str):
+    with transaction(conn):
+        conn.execute("UPDATE source_config_revisions SET status = ? WHERE revision_id = ?", (status, revision_id))
+
+
+# --- OPERATION JOBS ---
+
+def create_operation_job(
+    conn: sqlite3.Connection,
+    *,
+    operation_type: str,
+    requested_by: str,
+    input_json: str,
+    progress_total: int | None = None,
+    operation_id: str | None = None,
+) -> str:
+    if not operation_id:
+        operation_id = f"op-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO operation_jobs (operation_id, operation_type, status, requested_by, input_json, progress_current, progress_total, created_at)
+               VALUES (?, ?, 'queued', ?, ?, 0, ?, ?)""",
+            (
+                operation_id,
+                operation_type,
+                requested_by,
+                input_json,
+                progress_total,
+                now,
+            ),
+        )
+    return operation_id
+
+
+def get_operation_job(conn: sqlite3.Connection, operation_id: str) -> dict[str, Any] | None:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT operation_id, operation_type, status, requested_by, input_json, progress_current, progress_total, result_json, error_summary, created_at, started_at, finished_at FROM operation_jobs WHERE operation_id = ?",
+        (operation_id,),
+    )
+    r = cursor.fetchone()
+    if not r:
+        return None
+    return {
+        "operation_id": r[0],
+        "operation_type": r[1],
+        "status": r[2],
+        "requested_by": r[3],
+        "input_json": r[4],
+        "progress_current": r[5],
+        "progress_total": r[6],
+        "result_json": r[7],
+        "error_summary": r[8],
+        "created_at": r[9],
+        "started_at": r[10],
+        "finished_at": r[11],
+    }
+
+
+def update_operation_job(
+    conn: sqlite3.Connection,
+    operation_id: str,
+    *,
+    status: str | None = None,
+    progress_current: int | None = None,
+    progress_total: int | None = None,
+    result_json: str | None = None,
+    error_summary: str | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+):
+    updates = []
+    params = []
+    if status is not None:
+        updates.append("status = ?")
+        params.append(status)
+    if progress_current is not None:
+        updates.append("progress_current = ?")
+        params.append(progress_current)
+    if progress_total is not None:
+        updates.append("progress_total = ?")
+        params.append(progress_total)
+    if result_json is not None:
+        updates.append("result_json = ?")
+        params.append(result_json)
+    if error_summary is not None:
+        updates.append("error_summary = ?")
+        params.append(error_summary)
+    if started_at is not None:
+        updates.append("started_at = ?")
+        params.append(started_at)
+    if finished_at is not None:
+        updates.append("finished_at = ?")
+        params.append(finished_at)
+
+    if not updates:
+        return
+
+    query = f"UPDATE operation_jobs SET {', '.join(updates)} WHERE operation_id = ?"
+    params.append(operation_id)
+    with transaction(conn):
+        conn.execute(query, tuple(params))
+
+
+def list_operation_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT operation_id, operation_type, status, requested_by, input_json, progress_current, progress_total, result_json, error_summary, created_at, started_at, finished_at FROM operation_jobs ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    )
+    rows = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        rows.extend(batch)
+    return [
+        {
+            "operation_id": r[0],
+            "operation_type": r[1],
+            "status": r[2],
+            "requested_by": r[3],
+            "input_json": r[4],
+            "progress_current": r[5],
+            "progress_total": r[6],
+            "result_json": r[7],
+            "error_summary": r[8],
+            "created_at": r[9],
+            "started_at": r[10],
+            "finished_at": r[11],
+        }
+        for r in rows
+    ]
+
+
+# --- EXPORT PACKAGES ---
+
+def create_export_package(
+    conn: sqlite3.Connection,
+    *,
+    export_type: str,
+    relative_path: str,
+    sha256: str,
+    byte_size: int,
+    record_count: int | None,
+    filters_json: str,
+    created_by: str,
+    expires_at: str | None = None,
+    status: str = "building",
+    export_id: str | None = None,
+) -> str:
+    if not export_id:
+        export_id = f"exp-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO export_packages (export_id, export_type, relative_path, sha256, byte_size, record_count, filters_json, created_by, created_at, expires_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                export_id,
+                export_type,
+                relative_path,
+                sha256,
+                byte_size,
+                record_count,
+                filters_json,
+                created_by,
+                now,
+                expires_at,
+                status,
+            ),
+        )
+    return export_id
+
+
+def get_export_package(conn: sqlite3.Connection, export_id: str) -> dict[str, Any] | None:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT export_id, export_type, relative_path, sha256, byte_size, record_count, filters_json, created_by, created_at, expires_at, status FROM export_packages WHERE export_id = ?",
+        (export_id,),
+    )
+    r = cursor.fetchone()
+    if not r:
+        return None
+    return {
+        "export_id": r[0],
+        "export_type": r[1],
+        "relative_path": r[2],
+        "sha256": r[3],
+        "byte_size": r[4],
+        "record_count": r[5],
+        "filters_json": r[6],
+        "created_by": r[7],
+        "created_at": r[8],
+        "expires_at": r[9],
+        "status": r[10],
+    }
+
+
+def update_export_package_status(conn: sqlite3.Connection, export_id: str, status: str):
+    with transaction(conn):
+        conn.execute("UPDATE export_packages SET status = ? WHERE export_id = ?", (status, export_id))

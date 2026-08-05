@@ -245,6 +245,40 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
                 with open(dest, "rb") as f:
                     file_manifest_entries[rel_schema_path] = hash_stream(f)
 
+        # Query dynamic source_snapshot from database sources table
+        s_cur = conn.cursor()
+        s_cur.execute("""
+            SELECT DISTINCT s.source_id, s.name, s.authority, s.policy_version, s.access_mode
+            FROM sources s
+            JOIN artifacts a ON a.source_id = s.source_id
+            JOIN versions v ON v.artifact_id = a.artifact_id
+            JOIN records r ON r.version_id = v.version_id
+            WHERE r.approval_status = 'approved' AND r.validation_status = 'valid'
+        """)
+        source_rows = s_cur.fetchall()
+        source_snapshot = [
+            {
+                "source_id": row[0],
+                "name": row[1],
+                "authority": row[2],
+                "policy_version": row[3],
+                "access_mode": row[4],
+            }
+            for row in source_rows
+        ]
+        if not source_snapshot:
+            s_cur.execute("SELECT source_id, name, authority, policy_version, access_mode FROM sources WHERE enabled = 1")
+            source_snapshot = [
+                {
+                    "source_id": row[0],
+                    "name": row[1],
+                    "authority": row[2],
+                    "policy_version": row[3],
+                    "access_mode": row[4],
+                }
+                for row in s_cur.fetchall()
+            ]
+
         now_rfc3339 = datetime.now(UTC).isoformat()
         release_meta = {
             "release_id": release_id,
@@ -254,13 +288,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             "created_at": now_rfc3339,
             "published_at": None,
             "counts": counts_dict,
-            "source_snapshot": [
-                {
-                    "source_id": "mevzuat",
-                    "policy_version": "1.0.0",
-                    "latest_retrieved_at": now_rfc3339,
-                }
-            ],
+            "source_snapshot": source_snapshot,
             "previous_release_id": None,
         }
 

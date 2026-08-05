@@ -14,30 +14,56 @@ def run_doctor_check() -> dict[str, Any]:
     - Data root write permissions
     - SQLite database status
     - Missing or corrupted raw files
+    - Disk catalog recovery scanning if DB is corrupted or missing
     """
     settings = load_settings()
     data_root = settings.data_root_path
 
     missing_artifacts: list[tuple[str, str]] = []
-    results: dict[str, Any] = {
+    disk_raw_files: list[str] = []
+    disk_canonical_files: list[str] = []
+
+    db_file = data_root / "catalog.sqlite"
+    db_exists = db_file.exists()
+    db_healthy = False
+
+    if db_exists:
+        try:
+            conn = sqlite3.connect(db_file)
+            cursor = conn.cursor()
+            cursor.execute("SELECT artifact_id, raw_path FROM artifacts")
+            rows = cursor.fetchall()
+            for art_id, raw_path in rows:
+                full_p = data_root / raw_path
+                if not full_p.exists():
+                    missing_artifacts.append((art_id, raw_path))
+            conn.close()
+            db_healthy = True
+        except sqlite3.Error:
+            db_healthy = False
+
+    if not db_healthy:
+        raw_dir = data_root / "raw"
+        if raw_dir.exists():
+            for p in raw_dir.glob("**/*"):
+                if p.is_file():
+                    disk_raw_files.append(str(p.relative_to(data_root)))
+        canonical_dir = data_root / "canonical"
+        if canonical_dir.exists():
+            for p in canonical_dir.glob("**/*"):
+                if p.is_file():
+                    disk_canonical_files.append(str(p.relative_to(data_root)))
+
+    return {
         "data_root": str(data_root),
         "data_root_writable": os.access(data_root, os.W_OK),
-        "catalog_sqlite_exists": (data_root / "catalog.sqlite").exists(),
+        "catalog_sqlite_exists": db_exists,
+        "catalog_sqlite_healthy": db_healthy,
         "missing_artifacts": missing_artifacts,
+        "disk_raw_files": disk_raw_files,
+        "disk_canonical_files": disk_canonical_files,
+        "recovery_recommended": not db_healthy and (len(disk_raw_files) > 0 or len(disk_canonical_files) > 0),
     }
-
-    if results["catalog_sqlite_exists"]:
-        conn = sqlite3.connect(data_root / "catalog.sqlite")
-        cursor = conn.cursor()
-        cursor.execute("SELECT artifact_id, raw_path FROM artifacts")
-        rows = cursor.fetchall()
-        for art_id, raw_path in rows:
-            full_p = data_root / raw_path
-            if not full_p.exists():
-                results["missing_artifacts"].append((art_id, raw_path))
-        conn.close()
-
-    return results
 
 
 def backup_catalog(backup_dir: Path | None = None) -> Path:

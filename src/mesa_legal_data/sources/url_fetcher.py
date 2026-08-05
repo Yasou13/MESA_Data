@@ -151,6 +151,12 @@ def validate_source_request(
     ):
         raise SourcePolicyError(f"SOURCE_ACCESS_MODE_NOT_ALLOWED: Access mode '{source_info.access_mode}' not allowed")
 
+    if hasattr(source_info, "http") and hasattr(source_info.http, "user_agent"):
+        ua = source_info.http.user_agent.lower()
+        if "operator_contact" in ua or "contact-email" in ua or "placeholder" in ua:
+            if hasattr(source_info, "access_mode") and source_info.access_mode != "manual":
+                raise SourcePolicyError(f"USER_AGENT_INVALID: User-Agent '{source_info.http.user_agent}' contains unconfigured contact placeholder")
+
     parsed_url = urlparse(url)
     if parsed_url.scheme != "https":
         raise SSRFError(f"URL scheme must be HTTPS, got: {parsed_url.scheme}")
@@ -172,28 +178,19 @@ def validate_source_request(
     except Exception as e:
         raise SourcePolicyError(f"Invalid base_url IDNA hostname '{parsed_base.hostname}': {e}") from e
 
-    # Build EXPLICIT host allowlist (NO implicit wildcard/subdomain matching)
+    # Build EXPLICIT host allowlist (NO implicit wildcard/subdomain matching, NO auto www prefixing)
     allowed_hosts_set: set[str] = {base_host_norm}
-
-    if base_host_norm.startswith("www."):
-        allowed_hosts_set.add(base_host_norm[4:])
-    else:
-        allowed_hosts_set.add(f"www.{base_host_norm}")
 
     if hasattr(source_info, "allowed_hosts") and source_info.allowed_hosts:
         for h in source_info.allowed_hosts:
             h_norm = h.lower().rstrip(".").encode("idna").decode("ascii")
             allowed_hosts_set.add(h_norm)
-            if h_norm.startswith("www."):
-                allowed_hosts_set.add(h_norm[4:])
 
     allowed_redirect_set: set[str] = set()
     if hasattr(source_info, "allowed_redirect_hosts") and source_info.allowed_redirect_hosts:
         for h in source_info.allowed_redirect_hosts:
             h_norm = h.lower().rstrip(".").encode("idna").decode("ascii")
             allowed_redirect_set.add(h_norm)
-            if h_norm.startswith("www."):
-                allowed_redirect_set.add(h_norm[4:])
 
     if is_redirect:
         valid_set = allowed_hosts_set | allowed_redirect_set
