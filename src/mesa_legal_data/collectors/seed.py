@@ -38,27 +38,33 @@ def run_seed_collection(
         family = "legislation"
         source_id = "mevzuat"
 
-        if local_fixtures_dir and (local_fixtures_dir / f"{number}.pdf").exists():
-            fixture_file = local_fixtures_dir / f"{number}.pdf"
-            artifact = import_manual_file(
-                file_path=fixture_file,
-                source_id=source_id,
-                document_id=doc_id,
-                family=family,
-                document_type=doc_type,
-                title=title,
-            )
-        else:
-            source_url = item["source_url"]
-            artifact = import_manual_url(
-                url=source_url,
-                source_id=source_id,
-                document_id=doc_id,
-                family=family,
-                document_type=doc_type,
-                title=title,
-            )
-
-        collected.append(artifact)
+        try:
+            if local_fixtures_dir and (local_fixtures_dir / f"{number}.pdf").exists():
+                fixture_file = local_fixtures_dir / f"{number}.pdf"
+                artifact = import_manual_file(
+                    file_path=fixture_file,
+                    source_id=source_id,
+                    document_id=doc_id,
+                    family=family,
+                    document_type=doc_type,
+                    title=title,
+                )
+            else:
+                source_url = item["source_url"]
+                artifact = import_manual_url(
+                    url=source_url,
+                    source_id=source_id,
+                    document_id=doc_id,
+                    family=family,
+                    document_type=doc_type,
+                    title=title,
+                )
+            collected.append(artifact)
+        except Exception as e:
+            # Skip if artifact already exists or sha256 UNIQUE constraint
+            err_msg = str(e).lower()
+            if "already exists" in err_msg or "unique constraint" in err_msg:
+                continue
+            raise
 
     return collected

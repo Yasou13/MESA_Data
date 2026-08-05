@@ -367,7 +367,20 @@ def insert_version(
     with transaction(conn):
         conn.execute(
             """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, snapshot_date, effective_from, effective_to, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(version_id) DO UPDATE SET
+                   document_id = excluded.document_id,
+                   artifact_id = excluded.artifact_id,
+                   version_kind = excluded.version_kind,
+                   canonical_path = excluded.canonical_path,
+                   canonical_line = excluded.canonical_line,
+                   canonical_sha256 = excluded.canonical_sha256,
+                   parser_name = excluded.parser_name,
+                   parser_version = excluded.parser_version,
+                   schema_version = excluded.schema_version,
+                   validation_status = excluded.validation_status,
+                   privacy_status = excluded.privacy_status,
+                   approval_status = excluded.approval_status""",
             (
                 version_id,
                 document_id,
@@ -435,7 +448,15 @@ def insert_record(
     with transaction(conn):
         conn.execute(
             """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(record_id) DO UPDATE SET
+                   version_id = excluded.version_id,
+                   record_type = excluded.record_type,
+                   canonical_path = excluded.canonical_path,
+                   canonical_line = excluded.canonical_line,
+                   record_sha256 = excluded.record_sha256,
+                   validation_status = excluded.validation_status,
+                   approval_status = excluded.approval_status""",
             (
                 record_id,
                 version_id,
