@@ -194,7 +194,9 @@ def get_source_input_policy(
             norm_mimes.add(n)
 
     if not norm_mimes:
-        raise SourcePolicyError(f"SOURCE_ALLOWED_CONTENT_TYPES_EMPTY: Source '{source_id}' has empty allowed_content_types")
+        raise SourcePolicyError(
+            f"SOURCE_ALLOWED_CONTENT_TYPES_EMPTY: Source '{source_id}' has empty allowed_content_types"
+        )
 
     parsed_base = urlparse(source_info.base_url)
     if not parsed_base.hostname:
@@ -341,7 +343,9 @@ def fetch_url_stream(
 
     # Policy override restriction: override parameters cannot increase policy limit
     eff_max_bytes = min(policy.max_download_bytes, max_bytes) if max_bytes is not None else policy.max_download_bytes
-    eff_timeout = min(policy.timeout_seconds, timeout_seconds) if timeout_seconds is not None else policy.timeout_seconds
+    eff_timeout = (
+        min(policy.timeout_seconds, timeout_seconds) if timeout_seconds is not None else policy.timeout_seconds
+    )
     eff_ua = policy.user_agent
     retries = policy.retries
 
@@ -441,7 +445,9 @@ def fetch_url_stream(
             if cl_header and cl_header.isdigit():
                 if int(cl_header) > eff_max_bytes:
                     resp.close()
-                    raise SizeLimitExceededError(f"Header Content-Length ({cl_header}) exceeds limit of {eff_max_bytes} bytes")
+                    raise SizeLimitExceededError(
+                        f"Header Content-Length ({cl_header}) exceeds limit of {eff_max_bytes} bytes"
+                    )
 
             # Pre-download Content-Type check
             raw_ct = resp.headers.get("content-type")
