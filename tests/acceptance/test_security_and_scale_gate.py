@@ -48,7 +48,6 @@ def test_master_security_and_scale_acceptance_gate(tmp_path, monkeypatch):
             source_id="mevzuat",
             document_id="tr:legislation:law:4721",
             family="legislation",
-            require_https=True,
         )
 
     # 2. Disabled Yargitay source -> FAILS
@@ -58,7 +57,6 @@ def test_master_security_and_scale_acceptance_gate(tmp_path, monkeypatch):
             source_id="yargitay",
             document_id="tr:case-law:yargitay:2026:1",
             family="decision",
-            require_https=True,
         )
 
     # 3. Non-HTTPS (HTTP) URL -> FAILS
@@ -68,7 +66,6 @@ def test_master_security_and_scale_acceptance_gate(tmp_path, monkeypatch):
             source_id="mevzuat",
             document_id="tr:legislation:constitution:2709",
             family="legislation",
-            require_https=True,
         )
 
     # 4. Private IP Redirect target -> FAILS BEFORE sending request to target
@@ -84,7 +81,6 @@ def test_master_security_and_scale_acceptance_gate(tmp_path, monkeypatch):
             source_id="mevzuat",
             document_id="tr:legislation:constitution:2709",
             family="legislation",
-            require_https=True,
         )
     assert not priv_route.called
 
@@ -106,7 +102,6 @@ def test_master_security_and_scale_acceptance_gate(tmp_path, monkeypatch):
         document_id="tr:legislation:constitution:2709",
         family="legislation",
         title="Anayasa",
-        require_https=True,
     )
     assert art.artifact_id.startswith("sha256:")
 

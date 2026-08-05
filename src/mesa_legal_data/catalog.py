@@ -2,7 +2,9 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -481,7 +483,12 @@ def list_records_by_approval_status(conn: sqlite3.Connection, status: str | None
         cursor.execute(
             "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at FROM records"
         )
-    rows = cursor.fetchall()
+    rows = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        rows.extend(batch)
     return [
         {
             "record_id": r[0],
@@ -498,34 +505,61 @@ def list_records_by_approval_status(conn: sqlite3.Connection, status: str | None
     ]
 
 
-def list_records_for_release(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+@dataclass(frozen=True)
+class ReleaseRecordRef:
+    record_id: str
+    record_type: str
+    record_sha256: str
+    canonical_path: str
+    canonical_line: int
+    version_id: str
+
+
+def iter_records_for_release(
+    conn: sqlite3.Connection,
+    *,
+    batch_size: int = 1000,
+) -> Iterator[ReleaseRecordRef]:
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT r.record_id, r.version_id, r.record_type, r.canonical_path, r.canonical_line, r.record_sha256
+        SELECT r.record_id, r.record_type, r.record_sha256, r.canonical_path, r.canonical_line, r.version_id
         FROM records r
         JOIN versions v ON r.version_id = v.version_id
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
           AND v.validation_status = 'valid'
           AND v.privacy_status IN ('clean', 'approved')
-        ORDER BY r.record_id ASC
+        ORDER BY r.canonical_path ASC, r.canonical_line ASC
         """
     )
-    rows = cursor.fetchall()
-    results = []
-    for r in rows:
-        results.append(
-            {
-                "record_id": r[0],
-                "version_id": r[1],
-                "record_type": r[2],
-                "canonical_path": r[3],
-                "canonical_line": r[4],
-                "record_sha256": r[5],
-            }
-        )
-    return results
+    while True:
+        rows = cursor.fetchmany(batch_size)
+        if not rows:
+            break
+        for r in rows:
+            yield ReleaseRecordRef(
+                record_id=r[0],
+                record_type=r[1],
+                record_sha256=r[2],
+                canonical_path=r[3],
+                canonical_line=r[4],
+                version_id=r[5],
+            )
+
+
+def list_records_for_release(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [
+        {
+            "record_id": ref.record_id,
+            "version_id": ref.version_id,
+            "record_type": ref.record_type,
+            "canonical_path": ref.canonical_path,
+            "canonical_line": ref.canonical_line,
+            "record_sha256": ref.record_sha256,
+        }
+        for ref in iter_records_for_release(conn)
+    ]
 
 
 def open_issue(
@@ -567,7 +601,12 @@ def list_open_blocking_issues(conn: sqlite3.Connection, subject_id: str | None =
         cursor.execute(
             "SELECT issue_id, subject_type, subject_id, severity, code, message FROM validation_issues WHERE status = 'open' AND severity IN ('blocker', 'error')"
         )
-    rows = cursor.fetchall()
+    rows = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        rows.extend(batch)
     return [
         {
             "issue_id": r[0],
@@ -666,7 +705,12 @@ def approve_version_with_checks(
 
     cursor = conn.cursor()
     cursor.execute("SELECT record_id FROM records WHERE version_id = ?", (version_id,))
-    record_ids = [r[0] for r in cursor.fetchall()]
+    record_ids = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        record_ids.extend([r[0] for r in batch])
 
     approved_count = 0
     for r_id in record_ids:

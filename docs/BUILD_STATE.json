@@ -46,6 +46,16 @@
     "HARDEN-004",
     "HARDEN-005"
   ],
+  "final_hardening_status": "completed",
+  "final_hardening_completed": [
+    "FINAL-HARDEN-001",
+    "FINAL-HARDEN-002",
+    "FINAL-HARDEN-003",
+    "FINAL-HARDEN-004",
+    "FINAL-HARDEN-005",
+    "FINAL-HARDEN-006",
+    "FINAL-HARDEN-007"
+  ],
   "failed": [],
-  "updated_at": "2026-08-04T23:42:00Z"
+  "updated_at": "2026-08-05T00:18:00Z"
 }

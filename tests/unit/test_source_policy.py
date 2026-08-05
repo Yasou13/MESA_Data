@@ -3,17 +3,39 @@ import pytest
 from mesa_legal_data.sources.url_fetcher import (
     SourcePolicyError,
     validate_source_policy,
+    validate_source_request,
     validate_url_host,
 )
 
 
+def test_source_policy_missing_source_id_raises():
+    with pytest.raises(SourcePolicyError, match="SOURCE_REQUIRED"):
+        validate_source_request(
+            source_id="",
+            document_family="legislation",
+            url="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf",
+        )
+
+
 def test_source_policy_valid_enabled_source():
     # mevzuat is enabled and base_url is https://www.mevzuat.gov.tr/
-    validate_source_policy(
+    policy = validate_source_request(
         source_id="mevzuat",
-        url="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf",
         document_family="legislation",
+        url="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf",
     )
+    assert policy.source_id == "mevzuat"
+    assert policy.base_host == "www.mevzuat.gov.tr"
+
+
+def test_source_policy_implicit_subdomain_rejected():
+    # api.mevzuat.gov.tr is an unlisted subdomain of mevzuat.gov.tr -> MUST BE REJECTED
+    with pytest.raises(SourcePolicyError, match="SOURCE_HOST_NOT_ALLOWED"):
+        validate_source_request(
+            source_id="mevzuat",
+            document_family="legislation",
+            url="https://api.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf",
+        )
 
 
 def test_source_policy_unknown_source():

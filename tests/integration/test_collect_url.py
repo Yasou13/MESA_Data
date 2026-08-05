@@ -21,7 +21,6 @@ def test_collect_url_disabled_source_fails(tmp_path, monkeypatch):
             source_id="yargitay",
             document_id="tr:case-law:yargitay:2026:1",
             family="decision",
-            require_https=True,
         )
 
 
@@ -36,7 +35,6 @@ def test_collect_url_wrong_domain_fails(tmp_path, monkeypatch):
             source_id="mevzuat",
             document_id="tr:legislation:law:4721",
             family="legislation",
-            require_https=True,
         )
 
 
@@ -59,7 +57,6 @@ def test_collect_url_success(tmp_path, monkeypatch):
         document_id="tr:legislation:constitution:2709",
         family="legislation",
         title="Anayasa",
-        require_https=True,
     )
 
     assert art.artifact_id.startswith("sha256:")

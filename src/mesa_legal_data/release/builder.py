@@ -2,20 +2,21 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from mesa_legal_data.catalog import (
-    add_release_item,
     create_release,
     get_connection,
+    iter_records_for_release,
     list_open_blocking_issues,
-    list_records_for_release,
 )
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
+from mesa_legal_data.release.verifier import verify_release_directory
 from mesa_legal_data.schema_validation import validate_record
 
 
@@ -23,10 +24,17 @@ class ReleaseBuildError(Exception):
     pass
 
 
+def json_str_deterministic(rec: dict[str, Any]) -> str:
+    return json.dumps(rec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def build_release(release_id: str | None = None) -> dict[str, Any]:
     """
-    Builds a release package from approved canonical records.
-    Uses temporary .building-* directory and verifies integrity before atomic finalize.
+    Builds a release package from approved canonical records using a real streaming architecture.
+    - O(n) single-pass sequential reading of canonical part files
+    - Temporary SQLite spool for sorting and payload staging (zero RAM accumulation of payloads)
+    - Direct streaming write to output JSONL files
+    - Atomic rename and verified catalog registration
     """
     settings = load_settings()
     data_root = settings.data_root_path
@@ -48,91 +56,189 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
 
     conn = get_connection()
 
+    # Temporary SQLite spool DB for metadata and payload staging
+    spool_db_path = building_dir / f".spool-{uuid.uuid4().hex[:8]}.sqlite"
+    spool_conn = sqlite3.connect(spool_db_path)
+    spool_conn.execute("PRAGMA journal_mode = WAL;")
+    spool_conn.execute("PRAGMA synchronous = NORMAL;")
+    spool_conn.execute("PRAGMA temp_store = FILE;")
+
+    spool_conn.executescript("""
+        CREATE TABLE selected_records (
+            record_id TEXT NOT NULL,
+            record_type TEXT NOT NULL,
+            record_sha256 TEXT NOT NULL,
+            canonical_path TEXT NOT NULL,
+            canonical_line INTEGER NOT NULL,
+            version_id TEXT NOT NULL,
+            PRIMARY KEY (canonical_path, canonical_line)
+        );
+
+        CREATE TABLE payload_spool (
+            record_type TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            record_sha256 TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY (record_type, record_id)
+        );
+    """)
+
     try:
-        # Check open blocker issues
+        # 1. Check open blocker issues
         blockers = list_open_blocking_issues(conn)
         if blockers:
             raise ReleaseBuildError(f"Cannot build release: open blocker issues exist: {blockers}")
 
-        eligible_records = list_records_for_release(conn)
+        # 2. Stream selected record metadata from catalog into temporary selected_records table
+        selected_batch = []
+        batch_size = 2000
+        for ref in iter_records_for_release(conn, batch_size=batch_size):
+            selected_batch.append(
+                (
+                    ref.record_id,
+                    ref.record_type,
+                    ref.record_sha256,
+                    ref.canonical_path,
+                    ref.canonical_line,
+                    ref.version_id,
+                )
+            )
+            if len(selected_batch) >= batch_size:
+                spool_conn.executemany(
+                    "INSERT INTO selected_records (record_id, record_type, record_sha256, canonical_path, canonical_line, version_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    selected_batch,
+                )
+                selected_batch.clear()
 
-        # Categorize records
-        records_by_type: dict[str, list[dict[str, Any]]] = {
-            "legislation": [],
-            "article": [],
-            "decision": [],
-            "citation": [],
-        }
-        release_items_meta: list[tuple[str, str]] = []
+        if selected_batch:
+            spool_conn.executemany(
+                "INSERT INTO selected_records (record_id, record_type, record_sha256, canonical_path, canonical_line, version_id) VALUES (?, ?, ?, ?, ?, ?)",
+                selected_batch,
+            )
+            selected_batch.clear()
 
-        for r_meta in eligible_records:
-            r_id = r_meta["record_id"]
-            r_type = r_meta["record_type"]
-            c_rel_path = r_meta["canonical_path"]
-            c_line_num = r_meta["canonical_line"]
-            expected_hash = r_meta["record_sha256"]
+        spool_conn.commit()
 
-            c_abs_path = data_root / c_rel_path
+        # 3. O(n) Single Sequential Pass over Canonical Part Files
+        # Group selected records by canonical_path ordered by canonical_line
+        path_cur = spool_conn.cursor()
+        path_cur.execute("SELECT DISTINCT canonical_path FROM selected_records ORDER BY canonical_path ASC")
+        canonical_paths = []
+        while True:
+            rows = path_cur.fetchmany(2000)
+            if not rows:
+                break
+            for r in rows:
+                canonical_paths.append(r[0])
+
+        payload_batch = []
+
+        for rel_c_path in canonical_paths:
+            c_abs_path = data_root / rel_c_path
             if not c_abs_path.exists():
-                raise ReleaseBuildError(f"Canonical file missing for record {r_id}: {c_abs_path}")
+                raise ReleaseBuildError(f"Canonical file missing for release: {c_abs_path}")
 
-            line_str = None
+            line_cur = spool_conn.cursor()
+            line_cur.execute(
+                "SELECT canonical_line, record_id, record_type, record_sha256 FROM selected_records WHERE canonical_path = ? ORDER BY canonical_line ASC",
+                (rel_c_path,),
+            )
+
+            # Read file sequentially in a single pass
             with open(c_abs_path, "r", encoding="utf-8") as f:
-                for current_idx, line in enumerate(f, start=1):
-                    if current_idx == c_line_num:
-                        line_str = line
+                current_target = line_cur.fetchone()
+                for line_idx, line in enumerate(f, start=1):
+                    while current_target and current_target[0] == line_idx:
+                        target_line_num, expected_r_id, expected_r_type, expected_hash = current_target
+
+                        actual_hash = hashlib.sha256(line.encode("utf-8")).hexdigest()
+                        if actual_hash.lower() != expected_hash.lower():
+                            raise ReleaseBuildError(
+                                f"Record hash mismatch for {expected_r_id}: expected {expected_hash}, got {actual_hash}"
+                            )
+
+                        line_str = line.strip()
+                        rec_obj = json.loads(line_str)
+                        validate_record(rec_obj)
+
+                        if rec_obj["id"] != expected_r_id:
+                            raise ReleaseBuildError(
+                                f"Record ID mismatch at line {line_idx} in {c_abs_path}: expected {expected_r_id}, got {rec_obj['id']}"
+                            )
+
+                        if rec_obj["record_type"] != expected_r_type:
+                            raise ReleaseBuildError(
+                                f"Record type mismatch at line {line_idx} in {c_abs_path}: expected {expected_r_type}, got {rec_obj['record_type']}"
+                            )
+
+                        det_payload = json_str_deterministic(rec_obj)
+                        payload_batch.append((expected_r_type, expected_r_id, expected_hash, det_payload))
+
+                        if len(payload_batch) >= batch_size:
+                            spool_conn.executemany(
+                                "INSERT INTO payload_spool (record_type, record_id, record_sha256, payload_json) VALUES (?, ?, ?, ?)",
+                                payload_batch,
+                            )
+                            payload_batch.clear()
+
+                        current_target = line_cur.fetchone()
+
+                    if not current_target:
                         break
 
-            if line_str is None:
-                raise ReleaseBuildError(f"Line number {c_line_num} out of bounds in {c_abs_path}")
+                if current_target:
+                    raise ReleaseBuildError(f"Line number {current_target[0]} out of bounds in {c_abs_path}")
 
-            actual_hash = hashlib.sha256(line_str.encode("utf-8")).hexdigest()
-            if actual_hash.lower() != expected_hash.lower():
-                raise ReleaseBuildError(f"Record hash mismatch for {r_id}: expected {expected_hash}, got {actual_hash}")
+        if payload_batch:
+            spool_conn.executemany(
+                "INSERT INTO payload_spool (record_type, record_id, record_sha256, payload_json) VALUES (?, ?, ?, ?)",
+                payload_batch,
+            )
+            payload_batch.clear()
 
-            rec_obj = json.loads(line_str)
-            validate_record(rec_obj)
+        spool_conn.commit()
 
-            if r_type in records_by_type:
-                records_by_type[r_type].append(rec_obj)
-                release_items_meta.append((r_id, expected_hash))
-
-        counts_dict = {
-            "legislation_count": len(records_by_type["legislation"]),
-            "article_count": len(records_by_type["article"]),
-            "decision_count": len(records_by_type["decision"]),
-            "citation_count": len(records_by_type["citation"]),
-        }
-
-        # Write data JSONL files
-        file_manifest_entries: dict[str, str] = {}
-
+        # 4. Stream output JSONL files deterministically ordered by record_id
         type_to_filename = {
             "legislation": "data/legislation.jsonl",
             "article": "data/articles.jsonl",
             "decision": "data/decisions.jsonl",
             "citation": "data/citations.jsonl",
         }
+        counts_dict = {"legislation_count": 0, "article_count": 0, "decision_count": 0, "citation_count": 0}
+        file_manifest_entries: dict[str, str] = {}
 
-        for r_type, r_list in records_by_type.items():
-            fn = type_to_filename[r_type]
+        for r_type, fn in type_to_filename.items():
             out_file = building_dir / fn
-            r_list_sorted = sorted(r_list, key=lambda x: x["id"])
+            count_key = f"{r_type}_count"
+            actual_type_count = 0
+
+            out_cur = spool_conn.cursor()
+            out_cur.execute(
+                "SELECT payload_json FROM payload_spool WHERE record_type = ? ORDER BY record_id ASC",
+                (r_type,),
+            )
 
             with open(out_file, "w", encoding="utf-8") as f:
-                for r in r_list_sorted:
-                    line = json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-                    f.write(line)
+                while True:
+                    rows = out_cur.fetchmany(batch_size)
+                    if not rows:
+                        break
+                    for r in rows:
+                        f.write(r[0] + "\n")
+                        actual_type_count += 1
                 f.flush()
                 os.fsync(f.fileno())
+
+            counts_dict[count_key] = actual_type_count
 
             with open(out_file, "rb") as f:
                 file_manifest_entries[fn] = hash_stream(f)
 
-        # Copy schema files
+        # 5. Copy schema files
         project_schemas_dir = Path(__file__).parent.parent.parent.parent / "schemas"
         if project_schemas_dir.exists():
-            for schema_path in project_schemas_dir.glob("*.schema.json"):
+            for schema_path in sorted(list(project_schemas_dir.glob("*.schema.json"))):
                 dest = building_schemas_dir / schema_path.name
                 shutil.copy2(schema_path, dest)
                 rel_schema_path = f"schemas/{schema_path.name}"
@@ -180,10 +286,13 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
         with open(manifest_file, "rb") as f:
             manifest_sha256 = hash_stream(f)
 
-        # Atomic Rename
+        # 6. Verify building release package before atomic rename
+        verify_release_directory(building_dir, expected_release_id=release_id)
+
+        # 7. Atomic Rename
         os.replace(building_dir, final_dir)
 
-        # Record release in catalog
+        # 8. Record release and release_items in catalog DB (batch insert)
         create_release(
             conn=conn,
             release_id=release_id,
@@ -195,12 +304,45 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             manifest_sha256=manifest_sha256,
         )
 
-        for r_id, r_hash in release_items_meta:
-            add_release_item(conn, release_id, r_id, r_hash)
+        item_cur = spool_conn.cursor()
+        item_cur.execute("SELECT record_id, record_sha256 FROM payload_spool")
+        item_batch = []
+        while True:
+            rows = item_cur.fetchmany(batch_size)
+            if not rows:
+                break
+            for r in rows:
+                item_batch.append((release_id, r[0], r[1]))
+                if len(item_batch) >= batch_size:
+                    conn.executemany(
+                        "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
+                        item_batch,
+                    )
+                    item_batch.clear()
+
+        if item_batch:
+            conn.executemany(
+                "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
+                item_batch,
+            )
+            item_batch.clear()
+
+        spool_conn.close()
+        if spool_db_path.exists():
+            try:
+                spool_db_path.unlink()
+            except OSError:
+                pass
 
         return release_meta
 
     except Exception as e:
+        spool_conn.close()
+        if spool_db_path.exists():
+            try:
+                spool_db_path.unlink()
+            except OSError:
+                pass
         if building_dir.exists():
             shutil.rmtree(building_dir, ignore_errors=True)
         raise ReleaseBuildError(f"Failed to build release {release_id}: {e}") from e

@@ -182,7 +182,6 @@ def import_manual_url(
     jurisdiction: str = "TR",
     title: str | None = None,
     stable_key: str | None = None,
-    require_https: bool = True,
 ) -> FetchedArtifact:
     import io
 
@@ -196,7 +195,6 @@ def import_manual_url(
         url=url,
         source_id=source_id,
         document_family=family,
-        require_https=require_https,
     )
     declared_content_type = headers.get("content-type")
 

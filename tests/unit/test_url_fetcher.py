@@ -11,26 +11,31 @@ from mesa_legal_data.sources.url_fetcher import (
 
 def test_private_ip_ssrf_blocking():
     with pytest.raises(SSRFError):
-        fetch_url_stream("https://127.0.0.1/secret", require_https=True)
+        fetch_url_stream(url="https://127.0.0.1/secret", source_id="mevzuat", document_family="legislation")
 
     with pytest.raises(SSRFError):
-        fetch_url_stream("https://192.168.1.1/admin", require_https=True)
+        fetch_url_stream(url="https://192.168.1.1/admin", source_id="mevzuat", document_family="legislation")
 
     with pytest.raises(SSRFError):
-        fetch_url_stream("https://10.0.0.1/internal", require_https=True)
+        fetch_url_stream(url="https://10.0.0.1/internal", source_id="mevzuat", document_family="legislation")
 
     with pytest.raises(SSRFError):
-        fetch_url_stream("https://localhost/test", require_https=True)
+        fetch_url_stream(url="https://localhost/test", source_id="mevzuat", document_family="legislation")
+
+
+def test_missing_source_id_raises():
+    with pytest.raises(SourcePolicyError, match="SOURCE_REQUIRED"):
+        fetch_url_stream(url="https://www.mevzuat.gov.tr/law.pdf", source_id="", document_family="legislation")
 
 
 def test_validate_url_host_http_rejected():
     with pytest.raises(SSRFError, match="URL scheme must be HTTPS"):
-        validate_url_host("http://www.mevzuat.gov.tr/doc.pdf", require_https=True)
+        validate_url_host("http://www.mevzuat.gov.tr/doc.pdf")
 
 
 def test_validate_url_host_metadata_ip_rejected():
     with pytest.raises(SSRFError, match="forbidden"):
-        validate_url_host("https://169.254.169.254/latest/meta-data", require_https=True)
+        validate_url_host("https://169.254.169.254/latest/meta-data")
 
 
 @respx.mock
@@ -50,7 +55,6 @@ def test_private_ip_redirect_never_requested():
             url=initial_url,
             source_id="mevzuat",
             document_family="legislation",
-            require_https=True,
         )
 
     assert not private_route.called
@@ -69,7 +73,6 @@ def test_redirect_to_disallowed_domain_rejected():
             url=initial_url,
             source_id="mevzuat",
             document_family="legislation",
-            require_https=True,
         )
 
     assert not ext_route.called
@@ -88,7 +91,6 @@ def test_redirect_loop_rejected():
             url=url_a,
             source_id="mevzuat",
             document_family="legislation",
-            require_https=True,
         )
 
 
@@ -101,10 +103,9 @@ def test_url_fetch_success():
     )
 
     status, headers, stream_gen = fetch_url_stream(
-        "https://www.mevzuat.gov.tr/law.pdf",
+        url="https://www.mevzuat.gov.tr/law.pdf",
         source_id="mevzuat",
         document_family="legislation",
-        require_https=True,
     )
     assert status == 200
     assert headers["content-type"] == "application/pdf"
