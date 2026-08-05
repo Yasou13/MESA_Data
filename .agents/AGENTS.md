@@ -1,37 +1,15 @@
-# MESA Legal Data — Agent Rules
+# Agent Rules
 
-## Placeholder Yasağı
-
-- **Kesinlikle** sahte `write_text("{}")` veya boş JSON export yazılmayacak.
-- Her export gerçek JSONL/CSV dosya üretmeli ve `export_packages` tablosuna kaydedilmeli.
-- Her API yanıtı gerçek DB sorgusu veya disk işlemi sonucu dönmeli.
-
-## Real Effect Assertion
-
-- Her test, yalnızca HTTP 200 değil, gerçek yan etkiyi de doğrulamalı:
-  1. API response kodu
-  2. DB satır durumu (ör. `export_packages.status = 'ready'`)
-  3. Dosya/disk etkisi (ör. JSONL dosyasının gerçek record içermesi)
-- Operation testleri: job oluşturuldu → status succeeded → gerçek sonuç/dosya/DB etkisi oluştu.
-
-## Audit
-
-- Tüm yazma ve silme işlemlerinde `X-MESA-Actor` başlığı zorunludur.
-- Her yazma işlemi `audit_events` tablosuna log yazmalıdır.
-- İndirmeler dahil tüm veri erişimleri audit loglanmalıdır.
-- Audit kaydı olmadan veri değişikliği kabul edilemez.
-
-## Immutability (Değişmezlik)
-
-- Raw artifact dosyaları (`raw/`) değiştirilemez.
-- Canonical JSONL kayıtları değiştirilemez; değişiklik yalnızca revision sistemi ile yapılır.
-- Release paketleri (`releases/`) finalize edildikten sonra değiştirilemez.
-- Manifest SHA-256 hash'leri release verify aşamasında kontrol edilir.
-
-## Scale (Ölçeklenebilirlik)
-
-- `readlines()` kullanılmaz; tüm büyük veri yolları streaming (line-by-line veya `fetchmany`) ile işlenir.
-- Canonical dosya işlemleri tek sıralı geçiş (single sequential pass) ile yapılır.
-- SQL sorguları batch (`fetchmany(1000)`) ile okunur.
-- Release build, export ve approve işlemlerinde spool SQLite kullanılır.
-- 500+ kayıt ölçek testi (`test_operations_scale_gate.py`) her değişiklikten sonra geçmelidir.
+1. Work only on the current MVP task in docs/BUILD_STATE.json.
+2. Do not create a parallel project or replace the architecture.
+3. Do not mark a task complete without its acceptance tests.
+4. Do not skip, delete, weaken, or xfail a failing test.
+5. Do not fabricate counts, metadata, approval, or release status.
+6. Never store raw personal data in logs or issue details.
+7. Do not bypass CAPTCHA, access controls, source disable flags, or rate limits.
+8. Do not add LLM, vector DB, graph DB, queues, or distributed infrastructure.
+9. Published raw/canonical/release artifacts are immutable.
+10. Update only docs/BUILD_STATE.json for progress.
+11. Keep changes small and run targeted tests after each task.
+12. Final completion requires every command in the MVP acceptance gate to pass.
+13. Web panel pipeline bypass edemez (Web arayüzü raw veriyi doğrudan canonical yapamaz, onay/güvenlik kapılarını atlayamaz).

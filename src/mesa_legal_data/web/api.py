@@ -835,6 +835,7 @@ async def create_revision_endpoint(record_id: str, request: Request):
             rec = get_record(conn, record_id)
             if not rec:
                 error_response("RECORD_NOT_FOUND", f"Record {record_id} not found", status_code=404)
+            assert rec is not None
             rev_id = create_record_revision(
                 conn,
                 original_record_id=record_id,

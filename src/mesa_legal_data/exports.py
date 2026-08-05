@@ -136,14 +136,15 @@ def _export_records_jsonl(conn: sqlite3.Connection, data_root: Path, out_path: P
                         current_file_handle = open(abs_c_path, "r", encoding="utf-8")
 
                     # Seek to beginning and scan to target line
-                    current_file_handle.seek(0)
-                    for idx, line_str in enumerate(current_file_handle, start=1):
-                        if idx == line_num:
-                            stripped = line_str.strip()
-                            if stripped:
-                                out_f.write(stripped + "\n")
-                                count += 1
-                            break
+                    if current_file_handle is not None:
+                        current_file_handle.seek(0)
+                        for idx, line_str in enumerate(current_file_handle, start=1):
+                            if idx == line_num:
+                                stripped = line_str.strip()
+                                if stripped:
+                                    out_f.write(stripped + "\n")
+                                    count += 1
+                                break
 
         if current_file_handle is not None:
             current_file_handle.close()

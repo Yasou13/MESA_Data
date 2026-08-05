@@ -1578,7 +1578,7 @@ def update_operation_job(
     finished_at: str | None = None,
 ):
     updates = []
-    params = []
+    params: list[Any] = []
     if status is not None:
         updates.append("status = ?")
         params.append(status)
