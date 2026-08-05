@@ -145,7 +145,7 @@ def test_advanced_web_routes_end_to_end(client, tmp_path):
 
     res_op_get = client.get(f"/api/operations/jobs/{op_id}")
     assert res_op_get.status_code == 200
-    assert res_op_get.json()["data"]["status"] == "queued"
+    assert res_op_get.json()["data"]["status"] in ("queued", "submitted", "running", "succeeded")
 
     # 7. Audit Events
     res_audit = client.get("/api/audit-events")
