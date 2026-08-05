@@ -1,5 +1,5 @@
 import json
-import pytest
+
 from fastapi.testclient import TestClient
 
 from mesa_legal_data.catalog import (

@@ -3,16 +3,14 @@ FINAL-020: Full HTTP E2E Lifecycle
 Tests the complete workspace lifecycle via HTTP API:
   seed -> explore -> approve -> revise -> annotate -> export -> config -> backup -> audit
 """
-import hashlib
+
 import json
 
-import pytest
 from fastapi.testclient import TestClient
 
 from mesa_legal_data.catalog import get_connection, get_db_path, migrate
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.web.app import create_app
-
 
 HEADERS = {"X-MESA-Requested-With": "web-admin", "X-MESA-Actor": "e2e-bot"}
 
@@ -51,22 +49,53 @@ def _seed_data(tmp_path):
     canonical_dir.mkdir(parents=True, exist_ok=True)
 
     import hashlib as _hl
-    line1 = json.dumps({
-        "id": "rec-e2e-art-1", "record_type": "article",
-        "legislation_id": "doc-e2e-1", "article_number": "1", "article_kind": "madde",
-        "text": "Madde metni", "status": "yürürlükte", "schema_version": "1.0.0",
-        "created_at": "2026-08-05T00:00:00Z",
-        "source": {"source_id": "mevzuat", "source_url": "https://example.com", "retrieved_at": "2026-08-05T00:00:00Z", "artifact_sha256": sha},
-        "provenance": {"parser_name": "e2e", "parser_version": "1.0", "pipeline_run_id": "run-e2e"},
-    }) + "\n"
-    line2 = json.dumps({
-        "id": "rec-e2e-art-2", "record_type": "article",
-        "legislation_id": "doc-e2e-1", "article_number": "2", "article_kind": "madde",
-        "text": "İkinci madde metni", "status": "yürürlükte", "schema_version": "1.0.0",
-        "created_at": "2026-08-05T00:00:00Z",
-        "source": {"source_id": "mevzuat", "source_url": "https://example.com", "retrieved_at": "2026-08-05T00:00:00Z", "artifact_sha256": sha},
-        "provenance": {"parser_name": "e2e", "parser_version": "1.0", "pipeline_run_id": "run-e2e"},
-    }) + "\n"
+
+    line1 = (
+        json.dumps(
+            {
+                "id": "rec-e2e-art-1",
+                "record_type": "article",
+                "legislation_id": "doc-e2e-1",
+                "article_number": "1",
+                "article_kind": "madde",
+                "text": "Madde metni",
+                "status": "yürürlükte",
+                "schema_version": "1.0.0",
+                "created_at": "2026-08-05T00:00:00Z",
+                "source": {
+                    "source_id": "mevzuat",
+                    "source_url": "https://example.com",
+                    "retrieved_at": "2026-08-05T00:00:00Z",
+                    "artifact_sha256": sha,
+                },
+                "provenance": {"parser_name": "e2e", "parser_version": "1.0", "pipeline_run_id": "run-e2e"},
+            }
+        )
+        + "\n"
+    )
+    line2 = (
+        json.dumps(
+            {
+                "id": "rec-e2e-art-2",
+                "record_type": "article",
+                "legislation_id": "doc-e2e-1",
+                "article_number": "2",
+                "article_kind": "madde",
+                "text": "İkinci madde metni",
+                "status": "yürürlükte",
+                "schema_version": "1.0.0",
+                "created_at": "2026-08-05T00:00:00Z",
+                "source": {
+                    "source_id": "mevzuat",
+                    "source_url": "https://example.com",
+                    "retrieved_at": "2026-08-05T00:00:00Z",
+                    "artifact_sha256": sha,
+                },
+                "provenance": {"parser_name": "e2e", "parser_version": "1.0", "pipeline_run_id": "run-e2e"},
+            }
+        )
+        + "\n"
+    )
 
     sha1 = _hl.sha256(line1.encode("utf-8")).hexdigest()
     sha2 = _hl.sha256(line2.encode("utf-8")).hexdigest()
@@ -148,7 +177,7 @@ def test_workspace_e2e(tmp_path, monkeypatch):
     print(f"  ✓ Checkpoint 6: Revision created: {rev_id}")
 
     # ---- 7. List revisions ----
-    res = client.get(f"/api/revisions?record_id=rec-e2e-art-1")
+    res = client.get("/api/revisions?record_id=rec-e2e-art-1")
     assert res.status_code == 200
     assert len(res.json()["data"]) >= 1
     print("  ✓ Checkpoint 7: Revisions listed")

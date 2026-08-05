@@ -1,5 +1,4 @@
 import hashlib
-import pytest
 
 from mesa_legal_data.catalog import (
     activate_source_config_revision,

@@ -1,8 +1,4 @@
-import time
-import pytest
-
 from mesa_legal_data.catalog import (
-    create_operation_job,
     get_connection,
     get_db_path,
     get_operation_job,

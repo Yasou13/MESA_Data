@@ -1,5 +1,4 @@
 import json
-import pytest
 
 from mesa_legal_data.catalog import (
     approve_record_revision,

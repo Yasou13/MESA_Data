@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mesa_legal_data.audit import audit_event, log_audit_event
+from mesa_legal_data.audit import log_audit_event
 from mesa_legal_data.config import load_settings
 
 
@@ -946,7 +946,12 @@ def approve_version_streaming(
             spool_conn.close()
             if spool_db_path.exists():
                 spool_db_path.unlink()
-            return {"status": "approved", "version_id": version_id, "approved_records": 0, "approval_status": "approved"}
+            return {
+                "status": "approved",
+                "version_id": version_id,
+                "approved_records": 0,
+                "approval_status": "approved",
+            }
 
         # Get distinct canonical paths
         p_cur = spool_conn.cursor()
@@ -1014,7 +1019,9 @@ def approve_version_streaming(
         # Perform atomic batch approval & audit in a SINGLE transaction
         with transaction(conn):
             app_cur = spool_conn.cursor()
-            app_cur.execute("SELECT record_id, record_sha256, reviewer, decision, note, reviewed_at FROM approved_spool")
+            app_cur.execute(
+                "SELECT record_id, record_sha256, reviewer, decision, note, reviewed_at FROM approved_spool"
+            )
             while True:
                 rows = app_cur.fetchmany(batch_size)
                 if not rows:
@@ -1055,7 +1062,12 @@ def approve_version_streaming(
             except OSError:
                 pass
 
-        return {"status": "approved", "version_id": version_id, "approved_records": approved_count, "approval_status": "approved"}
+        return {
+            "status": "approved",
+            "version_id": version_id,
+            "approved_records": approved_count,
+            "approval_status": "approved",
+        }
 
     except Exception:
         spool_conn.close()

@@ -338,7 +338,9 @@ def download_artifact_endpoint(artifact_id: str, request: Request):
     art = get_artifact(conn, artifact_id)
     if not art:
         conn.close()
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Artifact {artifact_id} not found"})
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": f"Artifact {artifact_id} not found"}
+        )
 
     data_root = load_settings().data_root_path
     safe_path = validate_file_download(data_root, art["raw_path"], expected_sha256=art.get("sha256"))
@@ -372,7 +374,9 @@ def download_artifact_metadata_endpoint(artifact_id: str, request: Request):
     art = get_artifact(conn, artifact_id)
     if not art:
         conn.close()
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Artifact {artifact_id} not found"})
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": f"Artifact {artifact_id} not found"}
+        )
 
     log_audit_event(
         conn,
@@ -420,7 +424,9 @@ def download_record_endpoint(record_id: str, request: Request, format: str = Que
     calc_hash = hashlib.sha256(target_line.encode("utf-8")).hexdigest()
     if rec.get("record_sha256") and calc_hash.lower() != rec["record_sha256"].lower():
         conn.close()
-        raise HTTPException(status_code=400, detail={"code": "HASH_MISMATCH", "message": "Record SHA-256 hash mismatch"})
+        raise HTTPException(
+            status_code=400, detail={"code": "HASH_MISMATCH", "message": "Record SHA-256 hash mismatch"}
+        )
 
     log_audit_event(
         conn,
@@ -459,7 +465,9 @@ def download_provenance_endpoint(record_id: str, request: Request):
     prov = get_record_provenance(record_id)
     if not prov:
         conn.close()
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Provenance for record {record_id} not found"})
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": f"Provenance for record {record_id} not found"}
+        )
 
     log_audit_event(
         conn,
@@ -527,7 +535,10 @@ def download_raw(document_id: str, request: Request):
     row = c.fetchone()
     if not row:
         conn.close()
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Raw artifact for document '{document_id}' not found"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": f"Raw artifact for document '{document_id}' not found"},
+        )
     art_id, raw_rel, media_type, sha = row
 
     data_root = load_settings().data_root_path
@@ -566,7 +577,10 @@ def download_canonical(document_id: str, request: Request):
     row = c.fetchone()
     if not row:
         conn.close()
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Canonical version for document {document_id} not found"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": f"Canonical version for document {document_id} not found"},
+        )
     ver_id, rel_p = row
 
     data_root = load_settings().data_root_path
@@ -1236,7 +1250,6 @@ async def create_export_endpoint(request: Request):
 
 @router.get("/exports/{export_id}")
 def get_export_endpoint(export_id: str):
-    from mesa_legal_data.catalog import get_export_package
 
     conn = get_connection()
     exp = get_export_package(conn, export_id)
@@ -1249,7 +1262,6 @@ def get_export_endpoint(export_id: str):
 @router.get("/exports/{export_id}/download")
 def download_export_endpoint(export_id: str, request: Request):
     from fastapi.responses import FileResponse
-    from mesa_legal_data.catalog import get_export_package
 
     actor = extract_actor(request)
     conn = get_connection()
@@ -1383,7 +1395,10 @@ def release_diff_endpoint(
     r1_id = from_release or rel1
     r2_id = to_release or rel2
     if not r1_id or not r2_id:
-        raise HTTPException(status_code=400, detail={"code": "MISSING_PARAM", "message": "Both from/rel1 and to/rel2 parameters are required"})
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "MISSING_PARAM", "message": "Both from/rel1 and to/rel2 parameters are required"},
+        )
 
     from mesa_legal_data.catalog import get_release
 
@@ -1393,7 +1408,9 @@ def release_diff_endpoint(
     conn.close()
 
     if not rel1_obj or not rel2_obj:
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Release {r1_id} or {r2_id} not found"})
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": f"Release {r1_id} or {r2_id} not found"}
+        )
 
     data_root = load_settings().data_root_path
     m1_path = data_root / rel1_obj["release_path"] / "manifest.json"
@@ -1405,12 +1422,18 @@ def release_diff_endpoint(
     if m1_path.exists():
         with open(m1_path, "r", encoding="utf-8") as f:
             m1_data = json.load(f)
-            m1_records = {r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256") for r in m1_data.get("records", [])}
+            m1_records = {
+                r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256")
+                for r in m1_data.get("records", [])
+            }
 
     if m2_path.exists():
         with open(m2_path, "r", encoding="utf-8") as f:
             m2_data = json.load(f)
-            m2_records = {r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256") for r in m2_data.get("records", [])}
+            m2_records = {
+                r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256")
+                for r in m2_data.get("records", [])
+            }
 
     added = [rid for rid in m2_records if rid not in m1_records]
     removed = [rid for rid in m1_records if rid not in m2_records]
@@ -1445,7 +1468,9 @@ def compare_releases_endpoint(
 @router.get("/releases/{release_id:path}/package")
 def release_package_endpoint(release_id: str, request: Request):
     import tarfile
+
     from fastapi.responses import FileResponse
+
     from mesa_legal_data.catalog import get_release
 
     actor = extract_actor(request)
@@ -1459,7 +1484,9 @@ def release_package_endpoint(release_id: str, request: Request):
     rel_dir = data_root / rel["release_path"]
     if not rel_dir.exists():
         conn.close()
-        raise HTTPException(status_code=404, detail={"code": "RELEASE_DIR_NOT_FOUND", "message": "Release directory missing"})
+        raise HTTPException(
+            status_code=404, detail={"code": "RELEASE_DIR_NOT_FOUND", "message": "Release directory missing"}
+        )
 
     pkg_tar = data_root / "exports" / f"release_package_{Path(release_id).name}.tar.gz"
     pkg_tar.parent.mkdir(parents=True, exist_ok=True)
@@ -1589,7 +1616,9 @@ def explorer_facets_endpoint():
     c.execute("SELECT record_type, COUNT(*) FROM records GROUP BY record_type")
     record_types = {r[0]: r[1] for r in c.fetchall()}
 
-    c.execute("SELECT a.source_id, COUNT(*) FROM records r JOIN versions v ON r.version_id = v.version_id JOIN artifacts a ON v.artifact_id = a.artifact_id GROUP BY a.source_id")
+    c.execute(
+        "SELECT a.source_id, COUNT(*) FROM records r JOIN versions v ON r.version_id = v.version_id JOIN artifacts a ON v.artifact_id = a.artifact_id GROUP BY a.source_id"
+    )
     sources = {r[0]: r[1] for r in c.fetchall()}
 
     c.execute("SELECT approval_status, COUNT(*) FROM records GROUP BY approval_status")

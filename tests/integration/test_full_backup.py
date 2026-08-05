@@ -1,4 +1,3 @@
-import pytest
 from fastapi.testclient import TestClient
 
 from mesa_legal_data.audit import backup_catalog, restore_catalog, run_doctor_check

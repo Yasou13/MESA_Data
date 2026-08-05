@@ -1,12 +1,11 @@
 import csv
-import hashlib
 import json
 import sqlite3
 import tarfile
 from pathlib import Path
 from typing import Any
 
-from mesa_legal_data.catalog import create_export_package, get_record
+from mesa_legal_data.catalog import create_export_package
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.release.importer import get_record_provenance
@@ -174,7 +173,19 @@ def _export_records_csv(conn: sqlite3.Connection, out_path: Path, filters: dict[
     count = 0
     with open(out_path, "w", encoding="utf-8", newline="") as out_f:
         writer = csv.writer(out_f)
-        writer.writerow(["record_id", "record_type", "version_id", "approval_status", "validation_status", "title", "decision_date", "record_sha256", "created_at"])
+        writer.writerow(
+            [
+                "record_id",
+                "record_type",
+                "version_id",
+                "approval_status",
+                "validation_status",
+                "title",
+                "decision_date",
+                "record_sha256",
+                "created_at",
+            ]
+        )
         while True:
             rows = cursor.fetchmany(1000)
             if not rows:
@@ -201,7 +212,20 @@ def _export_issues_csv(conn: sqlite3.Connection, out_path: Path, filters: dict[s
     count = 0
     with open(out_path, "w", encoding="utf-8", newline="") as out_f:
         writer = csv.writer(out_f)
-        writer.writerow(["issue_id", "subject_type", "subject_id", "severity", "code", "message", "status", "resolved_at", "resolved_by", "created_at"])
+        writer.writerow(
+            [
+                "issue_id",
+                "subject_type",
+                "subject_id",
+                "severity",
+                "code",
+                "message",
+                "status",
+                "resolved_at",
+                "resolved_by",
+                "created_at",
+            ]
+        )
         while True:
             rows = cursor.fetchmany(1000)
             if not rows:
@@ -248,7 +272,19 @@ def _export_audit_csv(conn: sqlite3.Connection, out_path: Path, filters: dict[st
     count = 0
     with open(out_path, "w", encoding="utf-8", newline="") as out_f:
         writer = csv.writer(out_f)
-        writer.writerow(["event_id", "actor", "action", "subject_type", "subject_id", "old_sha256", "new_sha256", "reason", "created_at"])
+        writer.writerow(
+            [
+                "event_id",
+                "actor",
+                "action",
+                "subject_type",
+                "subject_id",
+                "old_sha256",
+                "new_sha256",
+                "reason",
+                "created_at",
+            ]
+        )
         while True:
             rows = cursor.fetchmany(1000)
             if not rows:

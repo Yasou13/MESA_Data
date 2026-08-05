@@ -1,4 +1,3 @@
-import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -86,6 +85,7 @@ def test_release_tamper_detection(tmp_path, monkeypatch):
     conn.close()
 
     from mesa_legal_data.pipeline import process_artifact_pipeline
+
     process_artifact_pipeline(artifact_id="art-t555")
 
     conn = get_connection()
@@ -93,6 +93,7 @@ def test_release_tamper_detection(tmp_path, monkeypatch):
     c.execute("SELECT version_id FROM records LIMIT 1")
     v_id = c.fetchone()[0]
     from mesa_legal_data.catalog import approve_version_streaming
+
     approve_version_streaming(conn, version_id=v_id, reviewer="builder", note="OK")
     conn.close()
 

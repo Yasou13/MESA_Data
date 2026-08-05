@@ -7,7 +7,6 @@ from typing import Any
 
 from mesa_legal_data.audit import log_audit_event, run_integrity_audit
 from mesa_legal_data.catalog import (
-    create_operation_job,
     get_connection,
     get_operation_job,
     transaction,

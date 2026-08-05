@@ -1,7 +1,3 @@
-import json
-from pathlib import Path
-import pytest
-
 from mesa_legal_data.catalog import (
     approve_version_streaming,
     get_connection,
@@ -22,12 +18,18 @@ def test_release_source_snapshot_exact(tmp_path, monkeypatch):
 
     raw_mevzuat = tmp_path / "raw" / "mevzuat.html"
     raw_mevzuat.parent.mkdir(parents=True, exist_ok=True)
-    raw_mevzuat.write_text("<!DOCTYPE html><html><body><h1>Kanun 1</h1><p><b>Madde 1-</b> Kanun uygulanır.</p></body></html>", encoding="utf-8")
+    raw_mevzuat.write_text(
+        "<!DOCTYPE html><html><body><h1>Kanun 1</h1><p><b>Madde 1-</b> Kanun uygulanır.</p></body></html>",
+        encoding="utf-8",
+    )
     with open(raw_mevzuat, "rb") as f:
         sha_mev = hash_stream(f)
 
     raw_aym = tmp_path / "raw" / "aym.html"
-    raw_aym.write_text("<!DOCTYPE html><html><body><h1>AYM Kararı</h1><p><b>Madde 1-</b> Anayasa mahkemesi kararı.</p></body></html>", encoding="utf-8")
+    raw_aym.write_text(
+        "<!DOCTYPE html><html><body><h1>AYM Kararı</h1><p><b>Madde 1-</b> Anayasa mahkemesi kararı.</p></body></html>",
+        encoding="utf-8",
+    )
     with open(raw_aym, "rb") as f:
         sha_aym = hash_stream(f)
 

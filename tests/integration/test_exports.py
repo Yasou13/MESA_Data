@@ -1,6 +1,5 @@
 import csv
 import json
-import pytest
 
 from mesa_legal_data.catalog import (
     approve_version_streaming,
@@ -22,7 +21,10 @@ def test_export_types_and_filters(tmp_path, monkeypatch):
 
     raw_file = tmp_path / "raw" / "exp_test.html"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
-    raw_file.write_text("<!DOCTYPE html><html><body><h1>Export Test</h1><p><b>Madde 1-</b> Export content.</p></body></html>", encoding="utf-8")
+    raw_file.write_text(
+        "<!DOCTYPE html><html><body><h1>Export Test</h1><p><b>Madde 1-</b> Export content.</p></body></html>",
+        encoding="utf-8",
+    )
     with open(raw_file, "rb") as f:
         sha = hash_stream(f)
 

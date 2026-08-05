@@ -1,5 +1,4 @@
 import json
-import pytest
 
 from mesa_legal_data.catalog import (
     get_connection,

@@ -1,5 +1,3 @@
-import pytest
-
 from mesa_legal_data.audit import run_doctor_check
 from mesa_legal_data.catalog import (
     approve_version_streaming,
@@ -21,7 +19,9 @@ def test_release_state_machine_and_doctor(tmp_path, monkeypatch):
 
     raw_file = tmp_path / "raw" / "test.html"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
-    raw_file.write_text("<!DOCTYPE html><html><body><h1>Kanun 1</h1><p><b>Madde 1-</b> Kanun metni.</p></body></html>", encoding="utf-8")
+    raw_file.write_text(
+        "<!DOCTYPE html><html><body><h1>Kanun 1</h1><p><b>Madde 1-</b> Kanun metni.</p></body></html>", encoding="utf-8"
+    )
     with open(raw_file, "rb") as f:
         sha = hash_stream(f)
 

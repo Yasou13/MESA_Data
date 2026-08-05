@@ -1,4 +1,3 @@
-import pytest
 from fastapi.testclient import TestClient
 
 from mesa_legal_data.catalog import (
@@ -22,7 +21,9 @@ def test_audit_event_recording_and_coverage(tmp_path, monkeypatch):
 
     raw_file = tmp_path / "raw" / "audit_test.html"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
-    raw_file.write_text("<!DOCTYPE html><html><body><h1>Kanun</h1><p><b>Madde 1-</b> m.</p></body></html>", encoding="utf-8")
+    raw_file.write_text(
+        "<!DOCTYPE html><html><body><h1>Kanun</h1><p><b>Madde 1-</b> m.</p></body></html>", encoding="utf-8"
+    )
     with open(raw_file, "rb") as f:
         sha = hash_stream(f)
 
