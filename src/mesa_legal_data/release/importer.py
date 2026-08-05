@@ -39,8 +39,15 @@ class ImportRollbackError(Exception):
 
 def get_staging_db_path() -> Path:
     settings = load_settings()
-    p = Path(settings.mesa_staging_db)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    if settings.mesa_staging_db and not settings.mesa_staging_db.startswith("/storage/"):
+        p = Path(settings.mesa_staging_db).expanduser().resolve()
+    else:
+        p = settings.data_root_path / "mesa_staging.sqlite"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        p = settings.data_root_path / "mesa_staging.sqlite"
+        p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 

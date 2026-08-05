@@ -35,6 +35,12 @@ class SettingsModel(BaseSettings):
     @property
     def data_root_path(self) -> Path:
         path = Path(self.data_root).expanduser().resolve()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            fallback = (Path.home() / ".mesa-data" / "data").resolve()
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback
         return path
 
     def dump_safe(self) -> dict:
