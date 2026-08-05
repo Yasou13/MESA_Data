@@ -248,6 +248,7 @@ def list_documents(
 @router.get("/documents/{document_id:path}/download/raw")
 def download_raw(document_id: str):
     from fastapi.responses import FileResponse
+
     conn = get_connection()
     c = conn.cursor()
     c.execute(
@@ -258,7 +259,11 @@ def download_raw(document_id: str):
     if not row:
         all_docs = [r[0] for r in c.execute("SELECT document_id FROM artifacts").fetchall()]
         conn.close()
-        error_response("NOT_FOUND", f"Raw artifact for document '{document_id}' not found. Found docs in artifacts: {all_docs}", status_code=404)
+        error_response(
+            "NOT_FOUND",
+            f"Raw artifact for document '{document_id}' not found. Found docs in artifacts: {all_docs}",
+            status_code=404,
+        )
     raw_rel, media_type = row
     conn.close()
     abs_p = load_settings().data_root_path / raw_rel
@@ -270,6 +275,7 @@ def download_raw(document_id: str):
 @router.get("/documents/{document_id:path}/download/canonical")
 def download_canonical(document_id: str):
     from fastapi.responses import FileResponse
+
     conn = get_connection()
     c = conn.cursor()
     c.execute(
@@ -458,9 +464,11 @@ def list_records(
 
 # --- ANNOTATIONS ---
 
+
 @router.get("/records/{record_id:path}/annotations")
 def get_annotations_endpoint(record_id: str):
     from mesa_legal_data.catalog import list_record_annotations
+
     conn = get_connection()
     anns = list_record_annotations(conn, record_id)
     conn.close()
@@ -470,6 +478,7 @@ def get_annotations_endpoint(record_id: str):
 @router.post("/records/{record_id:path}/annotations")
 async def add_annotation_endpoint(record_id: str, request: Request):
     from mesa_legal_data.catalog import add_record_annotation
+
     body = await request.json()
     async with write_lock.acquire_write():
         conn = get_connection()
@@ -491,6 +500,7 @@ async def add_annotation_endpoint(record_id: str, request: Request):
 @router.delete("/annotations/{annotation_id}")
 async def delete_annotation_endpoint(annotation_id: str):
     from mesa_legal_data.catalog import delete_record_annotation
+
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
@@ -502,9 +512,11 @@ async def delete_annotation_endpoint(annotation_id: str):
 
 # --- RECORD REVISIONS ---
 
+
 @router.post("/records/{record_id:path}/revisions")
 async def create_revision_endpoint(record_id: str, request: Request):
     from mesa_legal_data.catalog import create_record_revision, get_record
+
     body = await request.json()
     async with write_lock.acquire_write():
         conn = get_connection()
@@ -792,125 +804,10 @@ async def run_backup():
             error_response("BACKUP_FAILED", str(e), status_code=400)
 
 
-# --- DOWNLOADS ---
-
-@router.get("/documents/{document_id:path}/download/raw")
-def download_raw(document_id: str):
-    from fastapi.responses import FileResponse
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute(
-        "SELECT raw_path, detected_content_type FROM artifacts WHERE document_id = ? ORDER BY retrieved_at DESC LIMIT 1",
-        (document_id,),
-    )
-    row = c.fetchone()
-    if not row:
-        all_docs = [r[0] for r in c.execute("SELECT document_id FROM artifacts").fetchall()]
-        error_response("NOT_FOUND", f"Raw artifact for document '{document_id}' not found. Found docs in artifacts: {all_docs}", status_code=404)
-    raw_rel, media_type = row
-    conn.close()
-    abs_p = load_settings().data_root_path / raw_rel
-    if not abs_p.exists():
-        error_response("FILE_NOT_FOUND", f"Raw artifact file missing on disk: {raw_rel}", status_code=404)
-    return FileResponse(path=str(abs_p), media_type=media_type, filename=abs_p.name)
-
-
-@router.get("/documents/{document_id:path}/download/canonical")
-def download_canonical(document_id: str):
-    from fastapi.responses import FileResponse
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute(
-        "SELECT canonical_path FROM versions WHERE document_id = ? ORDER BY created_at DESC LIMIT 1",
-        (document_id,),
-    )
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        error_response("NOT_FOUND", f"Canonical version for document {document_id} not found", status_code=404)
-    rel_p = row[0]
-    abs_p = load_settings().data_root_path / rel_p
-    if not abs_p.exists():
-        error_response("FILE_NOT_FOUND", f"Canonical file missing on disk: {rel_p}", status_code=404)
-    return FileResponse(path=str(abs_p), media_type="application/jsonlines", filename=abs_p.name)
-
-
-# --- ANNOTATIONS ---
-
-@router.get("/records/{record_id:path}/annotations")
-def get_annotations_endpoint(record_id: str):
-    from mesa_legal_data.catalog import list_record_annotations
-    conn = get_connection()
-    anns = list_record_annotations(conn, record_id)
-    conn.close()
-    return ok_response(anns)
-
-
-@router.post("/records/{record_id:path}/annotations")
-async def add_annotation_endpoint(record_id: str, request: Request):
-    from mesa_legal_data.catalog import add_record_annotation
-    body = await request.json()
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            ann_id = add_record_annotation(
-                conn,
-                record_id=record_id,
-                annotation_type=body.get("annotation_type", "note"),
-                namespace=body.get("namespace", "mesa.user"),
-                key=body.get("key", "comment"),
-                value_json=json.dumps(body.get("value", {})),
-                created_by=body.get("created_by", "operator"),
-            )
-            return ok_response({"annotation_id": ann_id})
-        finally:
-            conn.close()
-
-
-@router.delete("/annotations/{annotation_id}")
-async def delete_annotation_endpoint(annotation_id: str):
-    from mesa_legal_data.catalog import delete_record_annotation
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            delete_record_annotation(conn, annotation_id)
-            return ok_response({"annotation_id": annotation_id, "deleted": True})
-        finally:
-            conn.close()
-
-
-# --- RECORD REVISIONS ---
-
-@router.post("/records/{record_id:path}/revisions")
-async def create_revision_endpoint(record_id: str, request: Request):
-    from mesa_legal_data.catalog import create_record_revision, get_record
-    body = await request.json()
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            rec = get_record(conn, record_id)
-            if not rec:
-                error_response("RECORD_NOT_FOUND", f"Record {record_id} not found", status_code=404)
-            rev_id = create_record_revision(
-                conn,
-                original_record_id=record_id,
-                original_record_sha256=rec["record_sha256"],
-                revised_record_id=body.get("revised_record_id", record_id),
-                revised_record_sha256=body.get("revised_record_sha256", rec["record_sha256"]),
-                version_id=rec["version_id"],
-                change_type=body.get("change_type", "override"),
-                patch_json=json.dumps(body.get("patch", {})),
-                reason=body.get("reason", "Operator correction"),
-                created_by=body.get("created_by", "operator"),
-            )
-            return ok_response({"revision_id": rev_id})
-        finally:
-            conn.close()
-
-
 @router.get("/revisions/{revision_id}")
 def get_revision_endpoint(revision_id: str):
     from mesa_legal_data.catalog import get_record_revision
+
     conn = get_connection()
     rev = get_record_revision(conn, revision_id)
     conn.close()
@@ -922,6 +819,7 @@ def get_revision_endpoint(revision_id: str):
 @router.post("/revisions/{revision_id}/approve")
 async def approve_revision_endpoint(revision_id: str):
     from mesa_legal_data.catalog import update_record_revision_status
+
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
@@ -933,9 +831,11 @@ async def approve_revision_endpoint(revision_id: str):
 
 # --- SOURCE CONFIG REVISIONS ---
 
+
 @router.get("/source-configs/revisions")
 def list_source_config_revisions_endpoint():
     from mesa_legal_data.catalog import list_source_config_revisions
+
     conn = get_connection()
     revs = list_source_config_revisions(conn)
     conn.close()
@@ -945,7 +845,9 @@ def list_source_config_revisions_endpoint():
 @router.post("/source-configs/revisions")
 async def create_source_config_revision_endpoint(request: Request):
     import hashlib
+
     from mesa_legal_data.catalog import create_source_config_revision
+
     body = await request.json()
     yaml_content = body.get("content_yaml", "")
     content_hash = hashlib.sha256(yaml_content.encode("utf-8")).hexdigest()
@@ -967,6 +869,7 @@ async def create_source_config_revision_endpoint(request: Request):
 @router.post("/source-configs/revisions/{revision_id}/activate")
 async def activate_source_config_revision_endpoint(revision_id: str):
     from mesa_legal_data.catalog import update_source_config_revision_status
+
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
@@ -978,10 +881,13 @@ async def activate_source_config_revision_endpoint(revision_id: str):
 
 # --- EXPORTS & PACKAGES ---
 
+
 @router.post("/exports")
 async def create_export_endpoint(request: Request):
     import hashlib
+
     from mesa_legal_data.catalog import create_export_package
+
     body = await request.json()
     export_type = body.get("export_type", "records_jsonl")
     export_id = f"exp-{uuid.uuid4().hex[:12]}"
@@ -1006,7 +912,9 @@ async def create_export_endpoint(request: Request):
                 created_by=body.get("created_by", "operator"),
                 status="ready",
             )
-            return ok_response({"export_id": export_id, "status": "ready", "download_url": f"/api/exports/{export_id}/download"})
+            return ok_response(
+                {"export_id": export_id, "status": "ready", "download_url": f"/api/exports/{export_id}/download"}
+            )
         finally:
             conn.close()
 
@@ -1014,6 +922,7 @@ async def create_export_endpoint(request: Request):
 @router.get("/exports/{export_id}")
 def get_export_endpoint(export_id: str):
     from mesa_legal_data.catalog import get_export_package
+
     conn = get_connection()
     exp = get_export_package(conn, export_id)
     conn.close()
@@ -1025,7 +934,9 @@ def get_export_endpoint(export_id: str):
 @router.get("/exports/{export_id}/download")
 def download_export_endpoint(export_id: str):
     from fastapi.responses import FileResponse
+
     from mesa_legal_data.catalog import get_export_package
+
     conn = get_connection()
     exp = get_export_package(conn, export_id)
     conn.close()
@@ -1039,9 +950,11 @@ def download_export_endpoint(export_id: str):
 
 # --- OPERATIONS JOBS ---
 
+
 @router.post("/operations/jobs")
 async def create_operation_job_endpoint(request: Request):
     from mesa_legal_data.catalog import create_operation_job
+
     body = await request.json()
     async with write_lock.acquire_write():
         conn = get_connection()
@@ -1061,6 +974,7 @@ async def create_operation_job_endpoint(request: Request):
 @router.get("/operations/jobs")
 def list_operations_jobs_endpoint():
     from mesa_legal_data.catalog import list_operation_jobs
+
     conn = get_connection()
     jobs = list_operation_jobs(conn)
     conn.close()
@@ -1070,6 +984,7 @@ def list_operations_jobs_endpoint():
 @router.get("/operations/jobs/{operation_id}")
 def get_operation_job_endpoint(operation_id: str):
     from mesa_legal_data.catalog import get_operation_job
+
     conn = get_connection()
     job = get_operation_job(conn, operation_id)
     conn.close()
@@ -1079,6 +994,7 @@ def get_operation_job_endpoint(operation_id: str):
 
 
 # --- AUDIT EVENTS ---
+
 
 @router.get("/audit-events")
 def list_audit_events_endpoint(
@@ -1090,6 +1006,7 @@ def list_audit_events_endpoint(
     offset: int = Query(0, ge=0),
 ):
     from mesa_legal_data.catalog import list_audit_events
+
     conn = get_connection()
     evts = list_audit_events(
         conn,
@@ -1106,6 +1023,7 @@ def list_audit_events_endpoint(
 
 # --- RELEASE COMPARISON ---
 
+
 @router.get("/releases/compare")
 def compare_releases_endpoint(
     rel1: str = Query(..., description="First release ID"),
@@ -1113,8 +1031,13 @@ def compare_releases_endpoint(
 ):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT release_id, status, counts_json, manifest_sha256 FROM releases WHERE release_id IN (?, ?)", (rel1, rel2))
-    rows = {r[0]: {"status": r[1], "counts": json.loads(r[2]) if r[2] else {}, "manifest_sha256": r[3]} for r in c.fetchall()}
+    c.execute(
+        "SELECT release_id, status, counts_json, manifest_sha256 FROM releases WHERE release_id IN (?, ?)", (rel1, rel2)
+    )
+    rows = {
+        r[0]: {"status": r[1], "counts": json.loads(r[2]) if r[2] else {}, "manifest_sha256": r[3]}
+        for r in c.fetchall()
+    }
     conn.close()
 
     r1_info = rows.get(rel1)

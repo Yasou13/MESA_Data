@@ -267,7 +267,9 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             for row in source_rows
         ]
         if not source_snapshot:
-            s_cur.execute("SELECT source_id, name, authority, policy_version, access_mode FROM sources WHERE enabled = 1")
+            s_cur.execute(
+                "SELECT source_id, name, authority, policy_version, access_mode FROM sources WHERE enabled = 1"
+            )
             source_snapshot = [
                 {
                     "source_id": row[0],

@@ -1,9 +1,7 @@
 import pytest
 
-from mesa_legal_data.config import SourceConfig, HttpConfig
 from mesa_legal_data.sources.url_fetcher import (
     SourcePolicyError,
-    SSRFError,
     validate_source_request,
 )
 

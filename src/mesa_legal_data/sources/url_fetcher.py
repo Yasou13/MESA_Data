@@ -155,7 +155,9 @@ def validate_source_request(
         ua = source_info.http.user_agent.lower()
         if "operator_contact" in ua or "contact-email" in ua or "placeholder" in ua:
             if hasattr(source_info, "access_mode") and source_info.access_mode != "manual":
-                raise SourcePolicyError(f"USER_AGENT_INVALID: User-Agent '{source_info.http.user_agent}' contains unconfigured contact placeholder")
+                raise SourcePolicyError(
+                    f"USER_AGENT_INVALID: User-Agent '{source_info.http.user_agent}' contains unconfigured contact placeholder"
+                )
 
     parsed_url = urlparse(url)
     if parsed_url.scheme != "https":

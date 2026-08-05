@@ -16,6 +16,10 @@ class CatalogError(Exception):
     pass
 
 
+class BlockingValidationIssueExists(CatalogError):
+    pass
+
+
 def get_db_path() -> Path:
     settings = load_settings()
     return settings.data_root_path / "catalog.sqlite"
@@ -1082,6 +1086,7 @@ def upsert_source(
 
 # --- AUDIT EVENTS ---
 
+
 def log_audit_event(
     conn: sqlite3.Connection,
     *,
@@ -1175,6 +1180,7 @@ def list_audit_events(
 
 # --- RECORD ANNOTATIONS ---
 
+
 def add_record_annotation(
     conn: sqlite3.Connection,
     *,
@@ -1242,6 +1248,7 @@ def delete_record_annotation(conn: sqlite3.Connection, annotation_id: str):
 
 
 # --- RECORD REVISIONS ---
+
 
 def create_record_revision(
     conn: sqlite3.Connection,
@@ -1314,6 +1321,7 @@ def update_record_revision_status(conn: sqlite3.Connection, revision_id: str, st
 
 
 # --- SOURCE CONFIG REVISIONS ---
+
 
 def create_source_config_revision(
     conn: sqlite3.Connection,
@@ -1400,6 +1408,7 @@ def update_source_config_revision_status(conn: sqlite3.Connection, revision_id: 
 
 
 # --- OPERATION JOBS ---
+
 
 def create_operation_job(
     conn: sqlite3.Connection,
@@ -1531,6 +1540,7 @@ def list_operation_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[dict[
 
 
 # --- EXPORT PACKAGES ---
+
 
 def create_export_package(
     conn: sqlite3.Connection,
