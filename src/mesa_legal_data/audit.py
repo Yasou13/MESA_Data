@@ -84,6 +84,7 @@ def run_doctor_check() -> dict[str, Any]:
     - SQLite database status
     - Missing or corrupted raw files
     - Disk catalog recovery scanning if DB is corrupted or missing
+    - Release consistency and recovery checks (.building, .orphaned, disk/catalog mismatch, manifest, item counts)
     """
     settings = load_settings()
     data_root = settings.data_root_path
@@ -92,9 +93,17 @@ def run_doctor_check() -> dict[str, Any]:
     disk_raw_files: list[str] = []
     disk_canonical_files: list[str] = []
 
+    stale_building_releases: list[str] = []
+    orphaned_releases: list[str] = []
+    catalog_release_missing_on_disk: list[str] = []
+    disk_release_missing_in_catalog: list[str] = []
+    manifest_verification_errors: list[str] = []
+    release_item_count_mismatches: list[str] = []
+
     db_file = data_root / "catalog.sqlite"
     db_exists = db_file.exists()
     db_healthy = False
+    catalog_releases: dict[str, str] = {}
 
     if db_exists:
         try:
@@ -106,10 +115,51 @@ def run_doctor_check() -> dict[str, Any]:
                 full_p = data_root / raw_path
                 if not full_p.exists():
                     missing_artifacts.append((art_id, raw_path))
+
+            cursor.execute("SELECT release_id, release_path FROM releases")
+            for rel_id, rel_p in cursor.fetchall():
+                catalog_releases[rel_id] = rel_p
+
             conn.close()
             db_healthy = True
         except sqlite3.Error:
             db_healthy = False
+
+    releases_dir = data_root / "releases"
+    if releases_dir.exists():
+        for p in releases_dir.iterdir():
+            if p.is_dir():
+                folder_name = p.name
+                if folder_name.endswith(".building"):
+                    stale_building_releases.append(folder_name)
+                elif folder_name.endswith(".orphaned"):
+                    orphaned_releases.append(folder_name)
+                else:
+                    rel_id = folder_name
+                    if db_healthy and rel_id not in catalog_releases:
+                        disk_release_missing_in_catalog.append(rel_id)
+
+                    manifest_p = p / "manifest.json"
+                    if not manifest_p.exists():
+                        manifest_verification_errors.append(f"{rel_id}: missing manifest.json")
+                    else:
+                        try:
+                            with open(manifest_p, "r", encoding="utf-8") as f:
+                                mdata = json.load(f)
+                            records_in_manifest = len(mdata.get("records", []))
+                            manifest_claimed_count = mdata.get("counts", {}).get("total_records")
+                            if manifest_claimed_count is not None and records_in_manifest != manifest_claimed_count:
+                                release_item_count_mismatches.append(
+                                    f"{rel_id}: manifest claims {manifest_claimed_count} but contains {records_in_manifest}"
+                                )
+                        except Exception as e:
+                            manifest_verification_errors.append(f"{rel_id}: invalid JSON ({e})")
+
+    if db_healthy:
+        for rel_id, rel_p in catalog_releases.items():
+            full_rel_path = data_root / rel_p
+            if not full_rel_path.exists():
+                catalog_release_missing_on_disk.append(rel_id)
 
     if not db_healthy:
         raw_dir = data_root / "raw"
@@ -131,6 +181,12 @@ def run_doctor_check() -> dict[str, Any]:
         "missing_artifacts": missing_artifacts,
         "disk_raw_files": disk_raw_files,
         "disk_canonical_files": disk_canonical_files,
+        "stale_building_releases": stale_building_releases,
+        "orphaned_releases": orphaned_releases,
+        "catalog_release_missing_on_disk": catalog_release_missing_on_disk,
+        "disk_release_missing_in_catalog": disk_release_missing_in_catalog,
+        "manifest_verification_errors": manifest_verification_errors,
+        "release_item_count_mismatches": release_item_count_mismatches,
         "recovery_recommended": not db_healthy and (len(disk_raw_files) > 0 or len(disk_canonical_files) > 0),
     }
 

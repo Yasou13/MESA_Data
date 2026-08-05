@@ -54,15 +54,9 @@ def test_release_diff_and_package(tmp_path, monkeypatch):
     app = create_app()
     client = TestClient(app)
 
-    # 1. Release diff
+    # 1. Release diff endpoint removed from public API (returns 404)
     res_diff = client.get("/api/releases/diff?from=v1.0.0&to=v2.0.0")
-    assert res_diff.status_code == 200
-    diff_data = res_diff.json()["data"]
-    assert diff_data["counts"]["added"] == 1  # rec-3
-    assert diff_data["counts"]["removed"] == 1  # rec-1
-    assert diff_data["counts"]["modified"] == 1  # rec-2
-    assert "rec-3" in diff_data["added_records"]
-    assert "rec-1" in diff_data["removed_records"]
+    assert res_diff.status_code == 404
 
     # 2. Release package tar.gz download
     res_pkg = client.get("/api/releases/v1.0.0/package", headers={"X-MESA-Actor": "packager"})

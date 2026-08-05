@@ -5,10 +5,21 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+from mesa_legal_data.audit import log_audit_event
 from mesa_legal_data.catalog import create_export_package
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.release.importer import get_record_provenance
+
+SUPPORTED_EXPORT_TYPES = {
+    "records_jsonl",
+    "records_csv",
+    "issues_csv",
+    "audit_jsonl",
+    "audit_csv",
+    "provenance_jsonl",
+    "document_package",
+}
 
 
 def generate_export_package(
@@ -19,6 +30,9 @@ def generate_export_package(
     filters: dict[str, Any] | None = None,
     actor: str,
 ) -> dict[str, Any]:
+    if export_type not in SUPPORTED_EXPORT_TYPES:
+        raise ValueError(f"EXPORT_TYPE_NOT_SUPPORTED: Export type '{export_type}' is not supported")
+
     if filters is None:
         filters = {}
     data_root = load_settings().data_root_path
@@ -49,7 +63,7 @@ def generate_export_package(
     elif export_type == "document_package":
         record_count = _export_document_package(conn, data_root, abs_path, filters)
     else:
-        record_count = _export_records_jsonl(conn, data_root, abs_path, filters)
+        raise ValueError(f"EXPORT_TYPE_NOT_SUPPORTED: Export type '{export_type}' is not supported")
 
     byte_size = abs_path.stat().st_size
     with open(abs_path, "rb") as f:
@@ -66,6 +80,23 @@ def generate_export_package(
         filters_json=json.dumps(filters),
         created_by=actor,
         status="ready",
+    )
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="export_create",
+        subject_type="export",
+        subject_id=export_id,
+        new_sha256=sha256_val,
+        details_json=json.dumps(
+            {
+                "export_type": export_type,
+                "record_count": record_count,
+                "byte_size": byte_size,
+                "relative_path": rel_path,
+            }
+        ),
     )
 
     return {
@@ -121,6 +152,7 @@ def _export_records_jsonl(conn: sqlite3.Connection, data_root: Path, out_path: P
     with open(out_path, "w", encoding="utf-8") as out_f:
         current_file_path = None
         current_file_handle = None
+        current_line_num = 0
 
         while True:
             rows = cursor.fetchmany(1000)
@@ -134,12 +166,15 @@ def _export_records_jsonl(conn: sqlite3.Connection, data_root: Path, out_path: P
                             current_file_handle.close()
                         current_file_path = abs_c_path
                         current_file_handle = open(abs_c_path, "r", encoding="utf-8")
+                        current_line_num = 0
 
-                    # Seek to beginning and scan to target line
                     if current_file_handle is not None:
-                        current_file_handle.seek(0)
-                        for idx, line_str in enumerate(current_file_handle, start=1):
-                            if idx == line_num:
+                        while current_line_num < line_num:
+                            line_str = current_file_handle.readline()
+                            if not line_str:
+                                break
+                            current_line_num += 1
+                            if current_line_num == line_num:
                                 stripped = line_str.strip()
                                 if stripped:
                                     out_f.write(stripped + "\n")
@@ -154,7 +189,7 @@ def _export_records_jsonl(conn: sqlite3.Connection, data_root: Path, out_path: P
 
 def _export_records_csv(conn: sqlite3.Connection, out_path: Path, filters: dict[str, Any]) -> int:
     sql = """
-        SELECT r.record_id, r.record_type, r.version_id, r.approval_status, r.validation_status, 'Canonical Record' as title, '2026-01-01' as decision_date, r.record_sha256, r.created_at
+        SELECT r.record_id, r.record_type, v.document_id, r.version_id, a.source_id, r.approval_status, r.validation_status, v.privacy_status, r.record_sha256, r.canonical_path, r.canonical_line, r.created_at
         FROM records r
         JOIN versions v ON r.version_id = v.version_id
         JOIN artifacts a ON v.artifact_id = a.artifact_id
@@ -178,12 +213,15 @@ def _export_records_csv(conn: sqlite3.Connection, out_path: Path, filters: dict[
             [
                 "record_id",
                 "record_type",
+                "document_id",
                 "version_id",
+                "source_id",
                 "approval_status",
                 "validation_status",
-                "title",
-                "decision_date",
+                "privacy_status",
                 "record_sha256",
+                "canonical_path",
+                "canonical_line",
                 "created_at",
             ]
         )

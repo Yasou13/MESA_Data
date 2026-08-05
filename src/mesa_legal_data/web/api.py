@@ -22,7 +22,6 @@ from mesa_legal_data.catalog import (
     reject_record_with_checks,
 )
 from mesa_legal_data.config import load_settings, load_sources
-from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.release import build_release, verify_release
 from mesa_legal_data.release.importer import (
@@ -262,71 +261,13 @@ def validate_file_download(
     rel_or_abs_path: str | Path,
     expected_sha256: str | None = None,
 ) -> Path:
-    target_path = Path(rel_or_abs_path)
-    if not target_path.is_absolute():
-        target_path = data_root / target_path
+    from mesa_legal_data.downloads import resolve_verified_download
 
-    # Check symlink on target before resolve
-    if target_path.is_symlink():
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "SYMLINK_REJECTED", "message": "Symlink file access is forbidden"},
-        )
-
-    # Check symlink or path resolution
-    try:
-        resolved_path = target_path.resolve()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail={"code": "PATH_INVALID", "message": str(e)})
-
-    # Data root boundary check
-    resolved_root = data_root.resolve()
-    try:
-        resolved_path.relative_to(resolved_root)
-    except ValueError:
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "PATH_TRAVERSAL_DENIED", "message": "Access outside data root is forbidden"},
-        )
-
-    # Symlink check on requested target and resolved path
-    if target_path.is_symlink() or resolved_path.is_symlink():
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "SYMLINK_REJECTED", "message": "Symlink file access is forbidden"},
-        )
-
-    # Check parent components for symlinks
-    curr = target_path
-    while curr != data_root and curr != curr.parent:
-        if curr.is_symlink():
-            raise HTTPException(
-                status_code=403,
-                detail={"code": "SYMLINK_REJECTED", "message": "Symlink path component is forbidden"},
-            )
-        curr = curr.parent
-
-    # File existence check
-    if not resolved_path.exists() or not resolved_path.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "FILE_NOT_FOUND", "message": f"Requested file missing on disk: {target_path.name}"},
-        )
-
-    # SHA-256 verification before response streaming
-    if expected_sha256:
-        with open(resolved_path, "rb") as f:
-            actual_sha = hash_stream(f)
-        if actual_sha.lower() != expected_sha256.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "HASH_MISMATCH",
-                    "message": f"SHA-256 mismatch for file: expected {expected_sha256}, got {actual_sha}",
-                },
-            )
-
-    return resolved_path
+    return resolve_verified_download(
+        relative_path=rel_or_abs_path,
+        expected_sha256=expected_sha256,
+        data_root=data_root,
+    )
 
 
 @router.get("/artifacts/{artifact_id}/download")
@@ -522,7 +463,7 @@ def download_release_endpoint(release_id: str, request: Request):
 
 
 @router.get("/documents/{document_id:path}/download/raw")
-def download_raw(document_id: str, request: Request):
+def download_raw(document_id: str, request: Request, inline: bool = Query(True)):
     from fastapi.responses import FileResponse
 
     actor = extract_actor(request)
@@ -555,16 +496,17 @@ def download_raw(document_id: str, request: Request):
     conn.close()
 
     safe_filename = Path(raw_rel).name
+    disp = "inline" if inline else "attachment"
     return FileResponse(
         path=str(safe_path),
-        media_type=media_type or "application/octet-stream",
+        media_type=media_type or "text/html",
         filename=safe_filename,
-        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+        headers={"Content-Disposition": f'{disp}; filename="{safe_filename}"'},
     )
 
 
 @router.get("/documents/{document_id:path}/download/canonical")
-def download_canonical(document_id: str, request: Request):
+def download_canonical(document_id: str, request: Request, inline: bool = Query(True)):
     from fastapi.responses import FileResponse
 
     actor = extract_actor(request)
@@ -596,11 +538,74 @@ def download_canonical(document_id: str, request: Request):
     conn.close()
 
     safe_filename = Path(rel_p).name
+    disp = "inline" if inline else "attachment"
     return FileResponse(
         path=str(safe_path),
-        media_type="application/jsonlines",
+        media_type="text/plain; charset=utf-8",
         filename=safe_filename,
-        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+        headers={"Content-Disposition": f'{disp}; filename="{safe_filename}"'},
+    )
+
+
+@router.get("/documents/{document_id:path}/text")
+def get_document_text_content(document_id: str):
+    conn = get_connection()
+    doc = get_document(conn, document_id)
+    if not doc:
+        conn.close()
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": f"Document '{document_id}' not found"},
+        )
+
+    c = conn.cursor()
+    c.execute(
+        "SELECT raw_path FROM artifacts WHERE document_id = ? ORDER BY retrieved_at DESC LIMIT 1",
+        (document_id,),
+    )
+    row = c.fetchone()
+    raw_path_rel = row[0] if row else None
+
+    data_root = load_settings().data_root_path
+    content_text = ""
+    source_type = "raw"
+
+    if raw_path_rel:
+        try:
+            safe_p = validate_file_download(data_root, raw_path_rel)
+            content_text = safe_p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pass
+
+    if not content_text:
+        c.execute(
+            "SELECT canonical_path FROM versions WHERE document_id = ? ORDER BY created_at DESC LIMIT 1",
+            (document_id,),
+        )
+        v_row = c.fetchone()
+        if v_row and v_row[0]:
+            try:
+                safe_can = validate_file_download(data_root, v_row[0])
+                content_text = safe_can.read_text(encoding="utf-8", errors="ignore")
+                source_type = "canonical"
+            except Exception:
+                pass
+
+    conn.close()
+
+    truncated = False
+    if len(content_text) > 200000:
+        content_text = content_text[:200000] + "\n... [Metin 200 KB sınırı nedeniyle kesildi] ..."
+        truncated = True
+
+    return ok_response(
+        {
+            "document_id": document_id,
+            "title": dict(doc).get("title"),
+            "source_type": source_type,
+            "truncated": truncated,
+            "content": content_text or "Metin içeriği bulunamadı.",
+        }
     )
 
 
@@ -615,7 +620,7 @@ def get_document_detail(document_id: str):
     doc_data = dict(doc or {})
     c = conn.cursor()
     c.execute(
-        "SELECT artifact_id, source_id, source_url, retrieved_at, transport_status, sha256 FROM artifacts WHERE document_id = ?",
+        "SELECT artifact_id, source_id, source_url, retrieved_at, transport_status, sha256, raw_path FROM artifacts WHERE document_id = ?",
         (document_id,),
     )
     artifacts = [
@@ -626,6 +631,7 @@ def get_document_detail(document_id: str):
             "retrieved_at": r[3],
             "transport_status": r[4],
             "sha256": r[5],
+            "raw_path": r[6],
         }
         for r in c.fetchall()
     ]
@@ -771,86 +777,6 @@ def list_records(
 
     conn.close()
     return ok_response({"items": items, "total": total, "page": page, "page_size": page_size})
-
-
-# --- ANNOTATIONS ---
-
-
-@router.get("/records/{record_id:path}/annotations")
-def get_annotations_endpoint(record_id: str):
-    from mesa_legal_data.catalog import list_record_annotations
-
-    conn = get_connection()
-    anns = list_record_annotations(conn, record_id)
-    conn.close()
-    return ok_response(anns)
-
-
-@router.post("/records/{record_id:path}/annotations")
-async def add_annotation_endpoint(record_id: str, request: Request):
-    from mesa_legal_data.catalog import add_record_annotation
-
-    body = await request.json()
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            ann_id = add_record_annotation(
-                conn,
-                record_id=record_id,
-                annotation_type=body.get("annotation_type", "note"),
-                namespace=body.get("namespace", "mesa.user"),
-                key=body.get("key", "comment"),
-                value_json=json.dumps(body.get("value", {})),
-                created_by=body.get("created_by", "operator"),
-            )
-            return ok_response({"annotation_id": ann_id})
-        finally:
-            conn.close()
-
-
-@router.delete("/annotations/{annotation_id}")
-async def delete_annotation_endpoint(annotation_id: str):
-    from mesa_legal_data.catalog import delete_record_annotation
-
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            delete_record_annotation(conn, annotation_id)
-            return ok_response({"annotation_id": annotation_id, "deleted": True})
-        finally:
-            conn.close()
-
-
-# --- RECORD REVISIONS ---
-
-
-@router.post("/records/{record_id:path}/revisions")
-async def create_revision_endpoint(record_id: str, request: Request):
-    from mesa_legal_data.catalog import create_record_revision, get_record
-
-    body = await request.json()
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            rec = get_record(conn, record_id)
-            if not rec:
-                error_response("RECORD_NOT_FOUND", f"Record {record_id} not found", status_code=404)
-            assert rec is not None
-            rev_id = create_record_revision(
-                conn,
-                original_record_id=record_id,
-                original_record_sha256=rec["record_sha256"],
-                revised_record_id=body.get("revised_record_id", record_id),
-                revised_record_sha256=body.get("revised_record_sha256", rec["record_sha256"]),
-                version_id=rec["version_id"],
-                change_type=body.get("change_type", "override"),
-                patch_json=json.dumps(body.get("patch", {})),
-                reason=body.get("reason", "Operator correction"),
-                created_by=body.get("created_by", "operator"),
-            )
-            return ok_response({"revision_id": rev_id})
-        finally:
-            conn.close()
 
 
 @router.get("/records/{record_id:path}")
@@ -1117,110 +1043,6 @@ async def run_backup():
             error_response("BACKUP_FAILED", str(e), status_code=400)
 
 
-@router.get("/revisions")
-def list_revisions_endpoint(record_id: Optional[str] = Query(None)):
-    from mesa_legal_data.catalog import list_record_revisions
-
-    conn = get_connection()
-    revs = list_record_revisions(conn, record_id=record_id)
-    conn.close()
-    return ok_response(revs)
-
-
-@router.get("/revisions/{revision_id}")
-def get_revision_endpoint(revision_id: str):
-    from mesa_legal_data.catalog import get_record_revision
-
-    conn = get_connection()
-    rev = get_record_revision(conn, revision_id)
-    conn.close()
-    if not rev:
-        error_response("NOT_FOUND", f"Revision {revision_id} not found", status_code=404)
-    return ok_response(rev)
-
-
-@router.post("/revisions/{revision_id}/approve")
-async def approve_revision_endpoint(revision_id: str, request: Request):
-    from mesa_legal_data.catalog import approve_record_revision
-
-    actor = extract_actor(request)
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            res = approve_record_revision(conn, revision_id, reviewer=actor)
-            return ok_response(res)
-        finally:
-            conn.close()
-
-
-@router.post("/revisions/{revision_id}/reject")
-async def reject_revision_endpoint(revision_id: str, request: Request):
-    from mesa_legal_data.catalog import reject_record_revision
-
-    actor = extract_actor(request)
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
-    reason = body.get("reason", "Rejected by reviewer")
-
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            res = reject_record_revision(conn, revision_id, reviewer=actor, reason=reason)
-            return ok_response(res)
-        finally:
-            conn.close()
-
-
-# --- SOURCE CONFIG REVISIONS ---
-
-
-@router.get("/source-configs/revisions")
-def list_source_config_revisions_endpoint():
-    from mesa_legal_data.catalog import list_source_config_revisions
-
-    conn = get_connection()
-    revs = list_source_config_revisions(conn)
-    conn.close()
-    return ok_response(revs)
-
-
-@router.post("/source-configs/revisions")
-async def create_source_config_revision_endpoint(request: Request):
-    import hashlib
-
-    from mesa_legal_data.catalog import create_source_config_revision
-
-    body = await request.json()
-    yaml_content = body.get("content_yaml", "")
-    content_hash = hashlib.sha256(yaml_content.encode("utf-8")).hexdigest()
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            cfg_rev_id = create_source_config_revision(
-                conn,
-                config_sha256=content_hash,
-                content_yaml=yaml_content,
-                reason=body.get("reason", "Config update"),
-                created_by=body.get("created_by", "operator"),
-            )
-            return ok_response({"revision_id": cfg_rev_id})
-        finally:
-            conn.close()
-
-
-@router.post("/source-configs/revisions/{revision_id}/activate")
-async def activate_source_config_revision_endpoint(revision_id: str, request: Request):
-    from mesa_legal_data.catalog import activate_source_config_revision
-
-    actor = extract_actor(request)
-    async with write_lock.acquire_write():
-        conn = get_connection()
-        try:
-            res = activate_source_config_revision(conn, revision_id, actor=actor)
-            return ok_response(res)
-        finally:
-            conn.close()
-
-
 # --- EXPORTS & PACKAGES ---
 
 
@@ -1245,6 +1067,8 @@ async def create_export_endpoint(request: Request):
                 actor=actor,
             )
             return ok_response(res)
+        except ValueError as e:
+            error_response("EXPORT_TYPE_NOT_SUPPORTED", str(e), status_code=400)
         finally:
             conn.close()
 
@@ -1315,6 +1139,8 @@ async def create_operation_job_endpoint(request: Request):
                 input_dict=input_dict,
             )
             return ok_response({"operation_id": op_id, "status": "submitted"})
+        except ValueError as e:
+            error_response("OPERATION_TYPE_NOT_SUPPORTED", str(e), status_code=400)
         finally:
             conn.close()
 
@@ -1381,89 +1207,6 @@ def list_audit_events_endpoint(
     )
     conn.close()
     return ok_response(evts)
-
-
-# --- RELEASE COMPARISON ---
-
-
-@router.get("/releases/diff")
-def release_diff_endpoint(
-    from_release: Optional[str] = Query(None, alias="from"),
-    to_release: Optional[str] = Query(None, alias="to"),
-    rel1: Optional[str] = Query(None),
-    rel2: Optional[str] = Query(None),
-):
-    r1_id = from_release or rel1
-    r2_id = to_release or rel2
-    if not r1_id or not r2_id:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "MISSING_PARAM", "message": "Both from/rel1 and to/rel2 parameters are required"},
-        )
-
-    from mesa_legal_data.catalog import get_release
-
-    conn = get_connection()
-    rel1_obj = get_release(conn, r1_id)
-    rel2_obj = get_release(conn, r2_id)
-    conn.close()
-
-    if not rel1_obj or not rel2_obj:
-        raise HTTPException(
-            status_code=404, detail={"code": "NOT_FOUND", "message": f"Release {r1_id} or {r2_id} not found"}
-        )
-
-    data_root = load_settings().data_root_path
-    m1_path = data_root / rel1_obj["release_path"] / "manifest.json"
-    m2_path = data_root / rel2_obj["release_path"] / "manifest.json"
-
-    m1_records = {}
-    m2_records = {}
-
-    if m1_path.exists():
-        with open(m1_path, "r", encoding="utf-8") as f:
-            m1_data = json.load(f)
-            m1_records = {
-                r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256")
-                for r in m1_data.get("records", [])
-            }
-
-    if m2_path.exists():
-        with open(m2_path, "r", encoding="utf-8") as f:
-            m2_data = json.load(f)
-            m2_records = {
-                r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256")
-                for r in m2_data.get("records", [])
-            }
-
-    added = [rid for rid in m2_records if rid not in m1_records]
-    removed = [rid for rid in m1_records if rid not in m2_records]
-    modified = [rid for rid in m2_records if rid in m1_records and m2_records[rid] != m1_records[rid]]
-    unchanged = [rid for rid in m2_records if rid in m1_records and m2_records[rid] == m1_records[rid]]
-
-    return ok_response(
-        {
-            "from_release_id": r1_id,
-            "to_release_id": r2_id,
-            "counts": {
-                "added": len(added),
-                "removed": len(removed),
-                "modified": len(modified),
-                "unchanged": len(unchanged),
-            },
-            "added_records": added,
-            "removed_records": removed,
-            "modified_records": modified,
-        }
-    )
-
-
-@router.get("/releases/compare")
-def compare_releases_endpoint(
-    rel1: str = Query(..., description="First release ID"),
-    rel2: str = Query(..., description="Second release ID"),
-):
-    return release_diff_endpoint(rel1=rel1, rel2=rel2)
 
 
 @router.get("/releases/{release_id:path}/package")

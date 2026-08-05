@@ -60,13 +60,19 @@ Tarayıcınızda `http://127.0.0.1:8765` adresini açınız.
 - Dış ağa açılacak durumlarda `MESA_DATA_WEB_ADMIN_TOKEN` çevre değişkeninin ayarlanması zorunludur.
 - Tüm yazma isteklerinde (`POST`/`PUT`/`DELETE`) `X-MESA-Requested-With: web-admin` başlığı zorunlu tutulmaktadır.
 
-### Ekranlar ve Fonksiyonlar
+### Panel Ekranları
 1. **📊 Genel Bakış (Dashboard):** Gerçek veritabanı sayaçları, son 10 belge, son işlemler ve aktif MESA release durumu.
-2. **➕ Veri Ekle:** Yerel dosya (PDF/HTML) veya resmî HTTPS URL üzerinden ham veri aktarımı (`raw`).
+2. **➕ Veri Ekle:** Yerel dosya (PDF/HTML) veya izinli HTTPS URL üzerinden ham veri aktarımı (`raw`).
 3. **📄 Belgeler:** Tüm belgelerin listelenmesi, filtrelenmesi, artifact detayları ve tek tıkla pipeline orkestrasyonu.
-4. **🔍 İnceleme (Review):** İnceleme bekleyen canonical kayıtlar, metin önizlemeleri, blocker sorun uyarıları, insan onayı (`approve`) ve reddetme (`reject`).
-5. **📦 Release'ler:** Gerçek JSONL release paketleme (`build`), SHA-256 manifest doğrulaması (`verify`), yayınlama (`publish`), MESA staging DB aktarımı (`import`), geri alma (`rollback`) ve iptal (`revoke`).
-6. **⚙️ Sistem:** Sistem teşhisi (`doctor`), bütünlük denetimi (`audit`) ve yedekleme (`backup`).
+4. **🔍 Veri Gezgini:** Documents, artifacts, versions, records, issues, releases listeleme ve filtreleme.
+5. **İnceleme (Review):** İnceleme bekleyen canonical kayıtlar, metin önizlemeleri, blocker sorun uyarıları, insan onayı (`approve`) ve reddetme (`reject`).
+6. **Sorunlar (Issues):** Açık ve çözülmüş doğrulama sorunlarını salt okunur listeleme.
+7. **Kaynaklar (Sources):** İzinli kaynakları ve politikaları salt okunur listeleme.
+8. **📦 Release'ler:** Gerçek JSONL release paketleme (`build`), SHA-256 manifest doğrulaması (`verify`), yayınlama (`publish`), MESA staging DB aktarımı (`import`), geri alma (`rollback`) ve iptal (`revoke`).
+9. **Dışa Aktarma (Export):** Records JSONL/CSV, issues CSV, audit JSONL/CSV, provenance JSONL ve document package export üretme ve indirme.
+10. **Operasyonlar:** Filtered export, release build ve integrity audit arka plan işleri.
+11. **Audit:** Tüm veri yazma ve indirme audit kayıtlarını listeleme.
+12. **⚙️ Sistem:** Sistem teşhisi (`doctor`), bütünlük denetimi (`audit`) ve yedekleme (`backup`).
 
 ---
 
@@ -98,7 +104,7 @@ uv run mesa-data collect url --source mevzuat --url https://www.mevzuat.gov.tr/M
 
 #### Pipeline Orkestrasyonu (Parsing & Canonical Kayıt Üretimi)
 ```bash
-uv run mesa-data pipeline run --artifact-id sha256:...
+uv run mesa-data pipeline run --artifact-id art-...
 ```
 
 #### İnceleme ve Onay (Review & Approval)
@@ -123,42 +129,6 @@ uv run mesa-data provenance RECORD_ID
 
 ---
 
-## Actor & Token Yönetimi
-
-Tüm yazma (POST/PUT/DELETE) istekleri aşağıdaki başlıkları gerektirir:
-
-| Başlık | Açıklama |
-|---|---|
-| `X-MESA-Actor` | İşlemi yapan kişi/servis adı (audit kaydı için zorunlu) |
-| `X-MESA-Requested-With` | `web-admin` değeri (CSRF koruması) |
-| `Authorization` | `Bearer <MESA_DATA_WEB_ADMIN_TOKEN>` (dış ağ erişiminde zorunlu) |
-
-Web panelinde actor değeri `sessionStorage["mesa_actor"]` üzerinden saklanır. CLI'da `--actor` parametresi veya `MESA_ACTOR` ortam değişkeni kullanılır.
-
----
-
-## Revision Sistemi
-
-Canonical kayıtlar değişmezdir (immutable). Değişiklik gerektiğinde **revision** oluşturulur:
-
-```bash
-# API üzerinden
-POST /api/records/{record_id}/revisions
-{
-  "change_type": "typo_fix",
-  "patch": {"op": "replace", "path": "/text", "value": "Düzeltilmiş metin"},
-  "reason": "Yazım hatası düzeltmesi",
-  "created_by": "yasin"
-}
-
-# Onay
-POST /api/revisions/{revision_id}/approve
-```
-
-Revisionlar `record_revisions` tablosunda saklanır ve audit kaydı oluşturulur. Kaynak yapılandırmaları için de benzer sistem mevcuttur (`/api/source-configs/revisions`).
-
----
-
 ## Exports (Dışa Aktarma)
 
 ```bash
@@ -171,21 +141,18 @@ POST /api/exports
 ```
 
 Desteklenen formatlar:
-- `records_jsonl` — Tüm kayıtlar (JSONL)
+- `records_jsonl` — Canonical kayıtlar (JSONL)
 - `records_csv` — Tablo formatı (CSV)
-- `legislation_jsonl`, `article_jsonl` — Tür bazlı
-
-Her export `export_packages` tablosunda kaydedilir. SHA-256 doğrulaması, dosya boyutu ve oluşturan aktör bilgisi audit ile birlikte saklanır.
+- `issues_csv` — Doğrulama sorunları (CSV)
+- `audit_jsonl` / `audit_csv` — Denetim logları
+- `provenance_jsonl` — Veri kökeni zihniyeti
+- `document_package` — Ham belge paketleri
 
 ---
 
-## Downloads (İndirmeler)
+## Downloads (Güvenli İndirmeler)
 
-```text
-GET /api/downloads/{export_id}
-```
-
-İndirmeler güvenlik katmanından geçer:
+Tüm indirmeler `resolve_verified_download` güvenlik katmanından geçer:
 - **Exact ID lookup** — Path traversal engeli
 - **Symlink kontrolü** — Gerçek dosya doğrulaması
 - **SHA-256 doğrulaması** — İndirme anında bütünlük kontrolü
@@ -193,46 +160,33 @@ GET /api/downloads/{export_id}
 
 ---
 
-## Source Config (Kaynak Yapılandırması)
+## Backup & Teşhis
 
 ```bash
-# Yeni config revision oluştur
-POST /api/source-configs/revisions
-{
-  "content_yaml": "sources:\n  mevzuat:\n    enabled: true",
-  "reason": "Mevzuat kaynağı aktifleştirme",
-  "created_by": "yasin"
-}
+# Teşhis
+uv run mesa-data doctor
 
-# Aktifleştir (runtime'a uygula)
-POST /api/source-configs/revisions/{revision_id}/activate
-```
-
-Aktifleştirme, YAML dosyasını `source_configs/active.yaml` yoluna yazar ve audit kaydı oluşturur.
-
----
-
-## Snapshot & Backup
-
-```bash
-# API üzerinden
-POST /api/system/backup
-
-# CLI
+# Yedekleme
 uv run mesa-data backup
 ```
 
-Backup, catalog SQLite veritabanının tutarlı bir kopyasını alır. Restore işlemi `restore_catalog()` fonksiyonu ile yapılır.
-
-Full snapshot, raw dosyalar, canonical kayıtlar, release paketleri ve audit loglarını kapsar.
-
 ---
 
-## Limitations (Kısıtlamalar)
+## Bilinen Sınırlar (Limitations)
 
 - **Tek sunucu mimarisi** — SQLite write lock ile korunur, dağıtık dağıtım desteklenmez.
 - **Senkron pipeline** — Büyük dosyalarda (>100MB PDF) uzun sürebilir.
-- **Tam metin arama yok** — Explorer yalnızca metadata filtresi yapar.
 - **Token tabanlı kimlik doğrulama** — OAuth/OIDC entegrasyonu henüz mevcut değil.
-- **Rollback sınırı** — Yalnızca en son import edilen release geri alınabilir.
 
+---
+
+## V2'ye Ertelenen Özellikler (Scope-Out)
+
+Aşağıdaki deneysel özellikler MVP kapsamından çıkarılmış ve V2 sürümüne ertelenmiştir:
+- Record revision (kayıt revizyon) UI ve public API
+- Source config web editörü (kaynak ayarları `config/sources.yaml` üzerinden elle yönetilir)
+- Issue management (sorun waive/reopen/resolve sistemi)
+- Annotations (özel not ve etiket yönetimi API)
+- Release diff (release karşılaştırma merkezi)
+- Full snapshot merkezi
+- Çok kullanıcılı yetkilendirme (OAuth/OIDC)

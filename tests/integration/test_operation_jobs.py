@@ -41,7 +41,7 @@ def test_operation_jobs_lifecycle_and_recovery(tmp_path, monkeypatch):
     # 2. Cancel operation job
     op_cancel_id = submit_operation(
         conn,
-        operation_type="bulk_review",
+        operation_type="filtered_export",
         requested_by="test_op_user",
         input_dict={},
     )
@@ -53,7 +53,7 @@ def test_operation_jobs_lifecycle_and_recovery(tmp_path, monkeypatch):
     c = conn.cursor()
     c.execute(
         """INSERT INTO operation_jobs (operation_id, operation_type, requested_by, status, input_json, progress_current, progress_total, result_json, error_summary, created_at)
-           VALUES ('op-stuck-1', 'bulk_review', 'tester', 'running', '{}', 50, 100, '{}', NULL, '2026-08-05T00:00:00Z')"""
+           VALUES ('op-stuck-1', 'integrity_audit', 'tester', 'running', '{}', 50, 100, '{}', NULL, '2026-08-05T00:00:00Z')"""
     )
     conn.commit()
 
@@ -61,5 +61,16 @@ def test_operation_jobs_lifecycle_and_recovery(tmp_path, monkeypatch):
 
     job_interrupted = get_operation_job(conn, "op-stuck-1")
     assert job_interrupted["status"] == "interrupted"
+
+    # 4. Unsupported operation type rejection
+    import pytest
+
+    with pytest.raises(ValueError, match="OPERATION_TYPE_NOT_SUPPORTED"):
+        submit_operation(
+            conn,
+            operation_type="revalidate",
+            requested_by="test_op_user",
+            input_dict={},
+        )
 
     conn.close()

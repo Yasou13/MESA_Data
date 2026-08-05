@@ -161,7 +161,7 @@ def test_workspace_e2e(tmp_path, monkeypatch):
     assert res.status_code == 200
     print("  ✓ Checkpoint 5: Version approved")
 
-    # ---- 6. Create record revision ----
+    # ---- 6. Create record revision (Removed -> 404/405) ----
     res = client.post(
         "/api/records/rec-e2e-art-1/revisions",
         json={
@@ -172,31 +172,9 @@ def test_workspace_e2e(tmp_path, monkeypatch):
         },
         headers=HEADERS,
     )
-    assert res.status_code == 200
-    rev_id = res.json()["data"]["revision_id"]
-    print(f"  ✓ Checkpoint 6: Revision created: {rev_id}")
+    assert res.status_code in (404, 405)
 
-    # ---- 7. List revisions ----
-    res = client.get("/api/revisions?record_id=rec-e2e-art-1")
-    assert res.status_code == 200
-    assert len(res.json()["data"]) >= 1
-    print("  ✓ Checkpoint 7: Revisions listed")
-
-    # ---- 8. Approve revision ----
-    res = client.post(f"/api/revisions/{rev_id}/approve", headers=HEADERS)
-    assert res.status_code == 200
-    print("  ✓ Checkpoint 8: Revision approved")
-
-    # ---- 9. Add annotation ----
-    res = client.post(
-        "/api/records/rec-e2e-art-1/annotations",
-        json={"annotation_type": "tag", "namespace": "e2e", "key": "quality", "value": "high"},
-        headers=HEADERS,
-    )
-    assert res.status_code == 200
-    print("  ✓ Checkpoint 9: Annotation added")
-
-    # ---- 10. Export records ----
+    # ---- 7. Export records ----
     res = client.post(
         "/api/exports",
         json={"export_type": "records_jsonl"},
@@ -204,26 +182,16 @@ def test_workspace_e2e(tmp_path, monkeypatch):
     )
     assert res.status_code == 200
     assert res.json()["data"]["status"] == "ready"
-    print("  ✓ Checkpoint 10: Export generated")
+    print("  ✓ Checkpoint 7: Export generated")
 
-    # ---- 11. Source config revision ----
+    # ---- 8. Source config revision (Removed -> 404/405) ----
     yaml_content = "sources:\n  mevzuat:\n    enabled: true\n"
     res = client.post(
         "/api/source-configs/revisions",
         json={"content_yaml": yaml_content, "reason": "E2E config", "created_by": "e2e-bot"},
         headers=HEADERS,
     )
-    assert res.status_code == 200
-    cfg_rev_id = res.json()["data"]["revision_id"]
-    print(f"  ✓ Checkpoint 11: Source config revision: {cfg_rev_id}")
-
-    # ---- 12. Activate source config ----
-    res = client.post(
-        f"/api/source-configs/revisions/{cfg_rev_id}/activate",
-        headers=HEADERS,
-    )
-    assert res.status_code == 200
-    print("  ✓ Checkpoint 12: Source config activated")
+    assert res.status_code in (404, 405)
 
     # ---- 13. Backup ----
     res = client.post("/api/system/backup", headers=HEADERS)
@@ -241,7 +209,7 @@ def test_workspace_e2e(tmp_path, monkeypatch):
     # ---- 15. Operations job ----
     res = client.post(
         "/api/operations/jobs",
-        json={"operation_type": "revalidate", "input": {"scope": "all"}},
+        json={"operation_type": "integrity_audit", "input": {"scope": "all"}},
         headers=HEADERS,
     )
     assert res.status_code == 200

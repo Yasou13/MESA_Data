@@ -400,39 +400,11 @@
           </div>
         </section>
 
-        <!-- View: Sources -->
+        <!-- View: Sources (Read-Only) -->
         <section id="view-sources" class="view-panel hidden">
           <div class="panel-box">
-            <h3>Kaynak Yapılandırmaları</h3>
+            <h3>Kaynak Yapılandırmaları (Salt Okunur)</h3>
             <div id="sources-list"></div>
-            <hr>
-            <h3>Config Revision Geçmişi</h3>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Revision ID</th>
-                    <th>Durum</th>
-                    <th>Oluşturan</th>
-                    <th>Gerekçe</th>
-                    <th>Oluşturulma</th>
-                    <th>Aksiyonlar</th>
-                  </tr>
-                </thead>
-                <tbody id="tbl-source-revs"></tbody>
-              </table>
-            </div>
-            <hr>
-            <h3>Yeni Config Revision</h3>
-            <div class="form-group">
-              <label for="txt-source-yaml">YAML İçeriği</label>
-              <textarea id="txt-source-yaml" rows="6" class="code-input" placeholder="sources:\n  mevzuat:\n    enabled: true"></textarea>
-            </div>
-            <div class="form-group">
-              <label for="txt-source-reason">Gerekçe</label>
-              <input type="text" id="txt-source-reason" placeholder="Yapılandırma güncelleme nedeni">
-            </div>
-            <button id="btn-source-submit" class="btn btn-primary">Revision Oluştur</button>
           </div>
         </section>
 
@@ -442,9 +414,13 @@
             <h3>Dışa Aktarma Oluştur</h3>
             <div class="filter-bar">
               <select id="sel-export-type">
-                <option value="records_jsonl">records_jsonl (JSONL)</option>
-                <option value="legislation_jsonl">legislation_jsonl</option>
-                <option value="article_jsonl">article_jsonl</option>
+                <option value="records_jsonl">records_jsonl</option>
+                <option value="records_csv">records_csv</option>
+                <option value="issues_csv">issues_csv</option>
+                <option value="audit_jsonl">audit_jsonl</option>
+                <option value="audit_csv">audit_csv</option>
+                <option value="provenance_jsonl">provenance_jsonl</option>
+                <option value="document_package">document_package</option>
               </select>
               <button id="btn-export-create" class="btn btn-primary">Dışa Aktar</button>
             </div>
@@ -472,9 +448,9 @@
             <h3>İşlem Oluştur</h3>
             <div class="filter-bar">
               <select id="sel-op-type">
-                <option value="revalidate">revalidate</option>
-                <option value="reparse">reparse</option>
-                <option value="rehash">rehash</option>
+                <option value="filtered_export">filtered_export</option>
+                <option value="release_build">release_build</option>
+                <option value="integrity_audit">integrity_audit</option>
               </select>
               <input type="text" id="txt-op-scope" placeholder="Scope (ör: all)" value="all">
               <button id="btn-op-create" class="btn btn-primary">Başlat</button>

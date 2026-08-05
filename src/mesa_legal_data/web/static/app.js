@@ -341,14 +341,23 @@ async function openDocumentModal(documentId) {
       <p><strong>Başlık:</strong> ${escapeHtml(doc.title || "-")}</p>
       <p><strong>Durum:</strong> ${statusBadge(doc.lifecycle_status)}</p>
       <p><strong>Current Version:</strong> <code>${escapeHtml(doc.current_version_id || "yok")}</code></p>
-      <p><strong>Artifact Sayısı:</strong> ${doc.artifacts ? doc.artifacts.length : 0}</p>
+      <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+        <button id="btn-read-doc-inline" class="btn btn-sm btn-primary">📖 Metni Ekranda Oku</button>
+        <a href="/api/documents/${encodeURIComponent(doc.document_id)}/download/raw?inline=true" target="_blank" class="btn btn-sm btn-secondary">Ham Dosyayı Sekmede Aç</a>
+        <a href="/api/documents/${encodeURIComponent(doc.document_id)}/download/canonical?inline=true" target="_blank" class="btn btn-sm btn-secondary">Canonical JSONL Aç</a>
+      </div>
+      <div id="doc-inline-container" class="hidden" style="margin-bottom: 15px;">
+        <div style="font-weight: bold; margin-bottom: 4px; font-size: 0.9em;">Belge Metni Önizleme:</div>
+        <pre id="doc-inline-text-view" style="max-height: 280px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-color); padding: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.85em; border-radius: 6px; color: var(--text-color);"></pre>
+      </div>
       <h4>Artifact Listesi:</h4>
       <ul>
         ${(doc.artifacts || [])
           .map(
             (a) => `
-          <li>
-            <code>${escapeHtml(a.artifact_id)}</code> (${escapeHtml(a.source_id)}) - ${statusBadge(a.transport_status)}
+          <li style="margin-bottom: 8px;">
+            <div><code>${escapeHtml(a.artifact_id)}</code> (${escapeHtml(a.source_id)}) - ${statusBadge(a.transport_status)}</div>
+            <div style="font-size: 0.85em; color: var(--text-muted); margin: 2px 0;">Diskteki Yol: <code>${escapeHtml(a.raw_path || "-")}</code></div>
             <button class="btn btn-sm btn-primary btn-process-art" data-id="${escapeHtml(a.artifact_id)}">Pipeline Çalıştır</button>
           </li>
         `
@@ -358,6 +367,21 @@ async function openDocumentModal(documentId) {
     `;
 
     showModal("modal-doc-detail");
+
+    document.getElementById("btn-read-doc-inline").addEventListener("click", async () => {
+      try {
+        setBusy(true);
+        const res = await apiRequest(`/api/documents/${encodeURIComponent(documentId)}/text`);
+        const container = document.getElementById("doc-inline-container");
+        const textView = document.getElementById("doc-inline-text-view");
+        textView.textContent = res.content || "İçerik bulunamadı.";
+        container.classList.remove("hidden");
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setBusy(false);
+      }
+    });
 
     body.querySelectorAll(".btn-process-art").forEach((b) => {
       b.addEventListener("click", async () => {
@@ -777,43 +801,7 @@ async function loadSources() {
     document.getElementById("sources-list").textContent = "Kaynak bilgisi yüklenmedi.";
   }
 
-  // Config revisions
-  try {
-    const revs = await apiRequest("/api/source-configs/revisions");
-    const tbl = document.getElementById("tbl-source-revs");
-    tbl.innerHTML = "";
-    (revs || []).forEach((rev) => {
-      const tr = document.createElement("tr");
-      const cells = [rev.revision_id, rev.status, rev.created_by, rev.reason, rev.created_at ? rev.created_at.substring(0, 19) : ""];
-      cells.forEach((val, i) => {
-        const td = document.createElement("td");
-        if (i === 1) {
-          td.innerHTML = statusBadge(val);
-        } else {
-          td.textContent = val || "-";
-        }
-        tr.appendChild(td);
-      });
-      const tdAct = document.createElement("td");
-      if (rev.status === "pending" || rev.status === "draft") {
-        const btn = document.createElement("button");
-        btn.className = "btn btn-sm btn-primary";
-        btn.textContent = "Aktifleştir";
-        btn.addEventListener("click", async () => {
-          try {
-            setBusy(true);
-            await apiRequest(`/api/source-configs/revisions/${encodeURIComponent(rev.revision_id)}/activate`, { method: "POST" });
-            showToast("Config revision aktifleştirildi!");
-            loadSources();
-          } catch (e) { console.error(e); }
-          finally { setBusy(false); }
-        });
-        tdAct.appendChild(btn);
-      }
-      tr.appendChild(tdAct);
-      tbl.appendChild(tr);
-    });
-  } catch (_) {}
+
 }
 
 // 10. Exports
@@ -1033,25 +1021,7 @@ function setupNewViewHandlers() {
   // Issues
   document.getElementById("btn-issue-filter").addEventListener("click", () => loadIssues());
 
-  // Sources
-  document.getElementById("btn-source-submit").addEventListener("click", async () => {
-    const yaml = document.getElementById("txt-source-yaml").value;
-    const reason = document.getElementById("txt-source-reason").value;
-    if (!yaml) { showToast("YAML içeriği gerekli.", "warning"); return; }
-    try {
-      setBusy(true);
-      await apiRequest("/api/source-configs/revisions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content_yaml: yaml, reason: reason, created_by: sessionStorage.getItem("mesa_actor") || "operator" }),
-      });
-      showToast("Config revision oluşturuldu!");
-      document.getElementById("txt-source-yaml").value = "";
-      document.getElementById("txt-source-reason").value = "";
-      loadSources();
-    } catch (e) { console.error(e); }
-    finally { setBusy(false); }
-  });
+
 
   // Exports
   document.getElementById("btn-export-create").addEventListener("click", async () => {

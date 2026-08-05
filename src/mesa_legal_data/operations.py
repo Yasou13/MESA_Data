@@ -15,6 +15,12 @@ from mesa_legal_data.catalog import (
 from mesa_legal_data.exports import generate_export_package
 from mesa_legal_data.release.builder import build_release
 
+SUPPORTED_OPERATION_TYPES = {
+    "filtered_export",
+    "release_build",
+    "integrity_audit",
+}
+
 _cancelled_jobs: set[str] = set()
 _executor = ThreadPoolExecutor(max_workers=1)
 
@@ -56,6 +62,9 @@ def submit_operation(
     requested_by: str,
     input_dict: dict[str, Any],
 ) -> str:
+    if operation_type not in SUPPORTED_OPERATION_TYPES:
+        raise ValueError(f"OPERATION_TYPE_NOT_SUPPORTED: Operation type '{operation_type}' is not supported")
+
     op_id = f"op-{uuid.uuid4().hex[:12]}"
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
@@ -135,13 +144,7 @@ def _run_operation_task(operation_id: str):
                 result_json=json.dumps(res),
             )
         else:
-            update_operation_job(
-                conn,
-                operation_id,
-                status="succeeded",
-                progress_current=100,
-                result_json=json.dumps({"operation_id": operation_id, "processed": True}),
-            )
+            raise ValueError(f"OPERATION_TYPE_NOT_SUPPORTED: Operation type '{op_type}' is not supported")
     except Exception as exc:
         update_operation_job(
             conn,

@@ -29,3 +29,20 @@ def test_doctor_check_corrupted_or_missing_db_disk_scan(tmp_path, monkeypatch):
     assert res_corrupt["catalog_sqlite_exists"] is True
     assert res_corrupt["catalog_sqlite_healthy"] is False
     assert res_corrupt["recovery_recommended"] is True
+
+
+def test_doctor_check_release_consistency(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+
+    rel_dir = tmp_path / "releases"
+    rel_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stale .building directory
+    (rel_dir / "v1.0.0.building").mkdir()
+
+    # .orphaned directory
+    (rel_dir / "v0.9.0.orphaned").mkdir()
+
+    res = run_doctor_check()
+    assert "v1.0.0.building" in res["stale_building_releases"]
+    assert "v0.9.0.orphaned" in res["orphaned_releases"]

@@ -88,7 +88,7 @@ def test_annotations_issues_and_quarantine(tmp_path, monkeypatch):
 
     conn.close()
 
-    # 3. HTTP Annotations API End-to-End
+    # 3. HTTP Annotations API End-to-End (Removed -> 404)
     app = create_app()
     client = TestClient(app)
 
@@ -98,12 +98,4 @@ def test_annotations_issues_and_quarantine(tmp_path, monkeypatch):
         json={"annotation_type": "note", "namespace": "test", "key": "note1", "value": "check law"},
         headers=headers,
     )
-    assert res_post.status_code == 200
-    new_ann_id = res_post.json()["data"]["annotation_id"]
-
-    res_get = client.get("/api/records/rec-q1/annotations")
-    assert res_get.status_code == 200
-    assert len(res_get.json()["data"]) == 1
-
-    res_del = client.delete(f"/api/annotations/{new_ann_id}", headers=headers)
-    assert res_del.status_code == 200
+    assert res_post.status_code in (404, 405)

@@ -104,31 +104,22 @@ def test_advanced_web_routes_end_to_end(client, tmp_path):
     assert res_can.status_code == 200
     assert "rec-1" in res_can.text
 
-    # 3. Annotations
+    # 3. Annotations (Removed from public API -> 404/405)
     res_ann = client.post(
         "/api/records/rec-1/annotations",
         json={"annotation_type": "tag", "namespace": "mesa.test", "key": "priority", "value": "high"},
     )
-    assert res_ann.status_code == 200
-    ann_id = res_ann.json()["data"]["annotation_id"]
+    assert res_ann.status_code in (404, 405)
 
     res_ann_list = client.get("/api/records/rec-1/annotations")
-    assert res_ann_list.status_code == 200
-    assert len(res_ann_list.json()["data"]) == 1
+    assert res_ann_list.status_code in (404, 405)
 
-    res_ann_del = client.delete(f"/api/annotations/{ann_id}")
-    assert res_ann_del.status_code == 200
-
-    # 4. Source Config Revisions
+    # 4. Source Config Revisions (Removed from public API -> 404/405)
     res_cfg = client.post(
         "/api/source-configs/revisions",
         json={"content_yaml": "sources:\n  mevzuat:\n    enabled: true\n", "reason": "Test update"},
     )
-    assert res_cfg.status_code == 200
-    cfg_rev_id = res_cfg.json()["data"]["revision_id"]
-
-    res_cfg_act = client.post(f"/api/source-configs/revisions/{cfg_rev_id}/activate")
-    assert res_cfg_act.status_code == 200
+    assert res_cfg.status_code in (404, 405)
 
     # 5. Export Packages
     res_exp = client.post("/api/exports", json={"export_type": "records_jsonl", "filters": {}})
@@ -139,7 +130,7 @@ def test_advanced_web_routes_end_to_end(client, tmp_path):
     assert res_exp_down.status_code == 200
 
     # 6. Operations Jobs
-    res_op = client.post("/api/operations/jobs", json={"operation_type": "bulk_review", "input": {}})
+    res_op = client.post("/api/operations/jobs", json={"operation_type": "filtered_export", "input": {}})
     assert res_op.status_code == 200
     op_id = res_op.json()["data"]["operation_id"]
 
@@ -150,3 +141,8 @@ def test_advanced_web_routes_end_to_end(client, tmp_path):
     # 7. Audit Events
     res_audit = client.get("/api/audit-events")
     assert res_audit.status_code == 200
+
+    # 8. Document Text Preview
+    res_text = client.get("/api/documents/tr:legislation:law:4721/text")
+    assert res_text.status_code == 200
+    assert "Raw Payload" in res_text.json()["data"]["content"]
