@@ -15,6 +15,7 @@ from mesa_legal_data.config import load_settings
 from mesa_legal_data.content_types import validate_file_content
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.models import FetchedArtifact
+from mesa_legal_data.sources.url_fetcher import fetch_url_stream, get_source_input_policy
 from mesa_legal_data.storage import atomic_write
 from mesa_legal_data.storage_paths import build_raw_path, secure_slug
 
@@ -28,6 +29,7 @@ def import_manual_file(
     jurisdiction: str = "TR",
     title: str | None = None,
     stable_key: str | None = None,
+    sources_yaml_path: Path | None = None,
 ) -> FetchedArtifact:
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -35,12 +37,18 @@ def import_manual_file(
     settings = load_settings()
     data_root = settings.data_root_path
 
-    # 1. Content & MIME validation
-    allowed_mimes = ["application/pdf", "text/html", "text/plain", "application/xml"]
+    # 1. Source policy content & MIME validation
+    policy = get_source_input_policy(
+        source_id=source_id,
+        document_family=family,
+        sources_yaml_path=sources_yaml_path,
+        allow_disabled=True,
+    )
+
     detected_mime = validate_file_content(
         str(file_path),
-        allowed_mimes=allowed_mimes,
-        max_bytes=100 * 1024 * 1024,  # 100 MB limit
+        allowed_mimes=list(policy.allowed_content_types),
+        max_bytes=policy.max_download_bytes,
     )
 
     # 2. Hash calculation
@@ -86,22 +94,19 @@ def import_manual_file(
         "etag": None,
         "last_modified": None,
         "collector_version": "1.0.0",
-        "access_policy_version": "1.0.0",
+        "access_policy_version": policy.policy_version,
     }
 
     metadata_path = full_target_payload.parent / "metadata.json"
-    with open(file_path, "rb") as f:
-        # Atomic write for metadata as well
-        import io
+    import io
 
-        meta_bytes = json.dumps(meta_dict, indent=2).encode("utf-8")
-        atomic_write(io.BytesIO(meta_bytes), metadata_path)
+    meta_bytes = json.dumps(meta_dict, indent=2).encode("utf-8")
+    atomic_write(io.BytesIO(meta_bytes), metadata_path)
 
     # 6. Database record
     conn = get_connection()
     run_id = f"run-{uuid.uuid4().hex[:8]}"
 
-    # Ensure run is tracked
     create_run(
         conn=conn,
         run_id=run_id,
@@ -112,7 +117,6 @@ def import_manual_file(
         input_json=json.dumps({"file": str(file_path), "document_id": document_id}),
     )
 
-    # Upsert document
     actual_stable_key = doc_key
     upsert_document(
         conn=conn,
@@ -125,7 +129,6 @@ def import_manual_file(
         lifecycle_status="fetched",
     )
 
-    # Insert artifact
     insert_artifact(
         conn=conn,
         artifact_id=artifact_id,
@@ -182,19 +185,25 @@ def import_manual_url(
     jurisdiction: str = "TR",
     title: str | None = None,
     stable_key: str | None = None,
+    sources_yaml_path: Path | None = None,
 ) -> FetchedArtifact:
     import io
 
-    from mesa_legal_data.sources.url_fetcher import fetch_url_stream
-
     settings = load_settings()
     data_root = settings.data_root_path
+
+    policy = get_source_input_policy(
+        source_id=source_id,
+        document_family=family,
+        sources_yaml_path=sources_yaml_path,
+    )
 
     # 1. Fetch URL stream safely
     status_code, headers, stream_gen = fetch_url_stream(
         url=url,
         source_id=source_id,
         document_family=family,
+        sources_yaml_path=sources_yaml_path,
     )
     declared_content_type = headers.get("content-type")
 
@@ -207,17 +216,11 @@ def import_manual_url(
         with open(temp_file, "wb") as f:
             f.writelines(stream_gen)
 
-        # 2. Content & MIME validation
-        allowed_mimes = [
-            "application/pdf",
-            "text/html",
-            "text/plain",
-            "application/xml",
-        ]
+        # 2. Content & MIME validation using source policy limits
         detected_mime = validate_file_content(
             str(temp_file),
-            allowed_mimes=allowed_mimes,
-            max_bytes=100 * 1024 * 1024,
+            allowed_mimes=list(policy.allowed_content_types),
+            max_bytes=policy.max_download_bytes,
         )
 
         # 3. Hash calculation
@@ -225,7 +228,6 @@ def import_manual_url(
             artifact_sha256 = hash_stream(f)
 
         # 4. Path construction
-        # Determine extension from URL or detected MIME
         ext = ".html" if "html" in detected_mime else (".pdf" if "pdf" in detected_mime else ".bin")
         doc_key = stable_key if stable_key else secure_slug(document_id)
         year = datetime.now(UTC).year
@@ -264,7 +266,7 @@ def import_manual_url(
             "etag": headers.get("etag"),
             "last_modified": headers.get("last-modified"),
             "collector_version": "1.0.0",
-            "access_policy_version": "1.0.0",
+            "access_policy_version": policy.policy_version,
         }
 
         metadata_path = full_target_payload.parent / "metadata.json"

@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+import time
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,11 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from mesa_legal_data.config import load_sources
+from mesa_legal_data.sources.request_control import (
+    RequestBudget,
+    enforce_min_interval,
+    get_source_request_state,
+)
 
 
 class URLFetchError(Exception):
@@ -30,14 +36,24 @@ class SourcePolicyError(URLFetchError):
 class ValidatedSourcePolicy:
     source_id: str
     document_family: str
+    policy_version: str
     base_host: str
     allowed_hosts: frozenset[str]
     allowed_redirect_hosts: frozenset[str]
+    allowed_content_types: frozenset[str]
+    concurrency: int
     timeout_seconds: float
     retries: int
+    max_requests_per_run: int
     max_download_bytes: int
     user_agent: str
     min_interval_seconds: float
+
+
+def normalize_media_type(value: str | None) -> str | None:
+    if not value:
+        return None
+    return value.split(";", 1)[0].strip().lower() or None
 
 
 def is_ip_private(ip_str: str) -> bool:
@@ -70,7 +86,7 @@ def check_literal_ip_safety(hostname: str):
 def validate_url_host(url: str):
     """
     Validates pre-request DNS resolution and IP safety for non-literal domain names.
-    Production path strictly rejects non-HTTPS schemes.
+    Production path strictly rejects non-HTTPS schemes and private/local IPs.
     """
     parsed = urlparse(url)
 
@@ -106,18 +122,16 @@ def validate_url_host(url: str):
         raise URLFetchError(f"Could not resolve hostname {hostname}: {e}") from e
 
 
-def validate_source_request(
+def get_source_input_policy(
     *,
     source_id: str,
     document_family: str,
-    url: str,
-    is_redirect: bool = False,
     sources_yaml_path: Path | None = None,
+    allow_disabled: bool = False,
 ) -> ValidatedSourcePolicy:
     """
-    Central source policy validator.
-    Strictly checks source existence, enabled status, family permission, access_mode,
-    HTTPS scheme, and explicit host allowlist (NO IMPLICIT SUBDOMAINS).
+    Central getter that loads and validates source input policy from sources.yaml.
+    Enforces HTTP limit ranges and content type rules.
     """
     if not source_id or not isinstance(source_id, str) or not source_id.strip():
         raise SourcePolicyError("SOURCE_REQUIRED: source_id is required and cannot be empty")
@@ -136,7 +150,7 @@ def validate_source_request(
         raise SourcePolicyError(f"SOURCE_NOT_FOUND: Source ID '{source_id}' not found in sources.yaml")
 
     source_info = sources_cfg.sources[source_id]
-    if not source_info.enabled:
+    if not allow_disabled and not source_info.enabled:
         raise SourcePolicyError(f"SOURCE_DISABLED: Source '{source_id}' is disabled in configuration")
 
     if document_family not in source_info.families:
@@ -159,6 +173,89 @@ def validate_source_request(
                     f"USER_AGENT_INVALID: User-Agent '{source_info.http.user_agent}' contains unconfigured contact placeholder"
                 )
 
+    if int(source_info.http.concurrency) < 1:
+        raise SourcePolicyError("HTTP limit invalid: concurrency must be >= 1")
+    if int(source_info.http.max_requests_per_run) < 1:
+        raise SourcePolicyError("HTTP limit invalid: max_requests_per_run must be >= 1")
+    if float(source_info.http.timeout_seconds) <= 0:
+        raise SourcePolicyError("HTTP limit invalid: timeout_seconds must be > 0")
+    if int(source_info.http.retries) < 0:
+        raise SourcePolicyError("HTTP limit invalid: retries must be >= 0")
+    if int(source_info.http.max_download_bytes) <= 0:
+        raise SourcePolicyError("HTTP limit invalid: max_download_bytes must be > 0")
+    if float(source_info.http.min_interval_seconds) < 0:
+        raise SourcePolicyError("HTTP limit invalid: min_interval_seconds must be >= 0")
+
+    raw_mimes = getattr(source_info, "allowed_content_types", []) or []
+    norm_mimes = set()
+    for m in raw_mimes:
+        n = normalize_media_type(m)
+        if n:
+            norm_mimes.add(n)
+
+    if not norm_mimes:
+        raise SourcePolicyError(f"SOURCE_ALLOWED_CONTENT_TYPES_EMPTY: Source '{source_id}' has empty allowed_content_types")
+
+    parsed_base = urlparse(source_info.base_url)
+    if not parsed_base.hostname:
+        raise SourcePolicyError(f"Bozuk source base_url: {source_info.base_url}")
+
+    try:
+        base_host_norm = parsed_base.hostname.lower().rstrip(".").encode("idna").decode("ascii")
+    except Exception as e:
+        raise SourcePolicyError(f"Invalid base_url IDNA hostname '{parsed_base.hostname}': {e}") from e
+
+    allowed_hosts_set: set[str] = {base_host_norm}
+    if hasattr(source_info, "allowed_hosts") and source_info.allowed_hosts:
+        for h in source_info.allowed_hosts:
+            h_norm = h.lower().rstrip(".").encode("idna").decode("ascii")
+            allowed_hosts_set.add(h_norm)
+
+    allowed_redirect_set: set[str] = set()
+    if hasattr(source_info, "allowed_redirect_hosts") and source_info.allowed_redirect_hosts:
+        for h in source_info.allowed_redirect_hosts:
+            h_norm = h.lower().rstrip(".").encode("idna").decode("ascii")
+            allowed_redirect_set.add(h_norm)
+
+    policy_ver = str(getattr(source_info, "policy_version", getattr(sources_cfg, "version", "1.0.0")))
+
+    return ValidatedSourcePolicy(
+        source_id=source_id,
+        document_family=document_family,
+        policy_version=policy_ver,
+        base_host=base_host_norm,
+        allowed_hosts=frozenset(allowed_hosts_set),
+        allowed_redirect_hosts=frozenset(allowed_redirect_set),
+        allowed_content_types=frozenset(norm_mimes),
+        concurrency=int(source_info.http.concurrency),
+        timeout_seconds=float(source_info.http.timeout_seconds),
+        retries=int(source_info.http.retries),
+        max_requests_per_run=int(source_info.http.max_requests_per_run),
+        max_download_bytes=int(source_info.http.max_download_bytes),
+        user_agent=str(source_info.http.user_agent),
+        min_interval_seconds=float(source_info.http.min_interval_seconds),
+    )
+
+
+def validate_source_request(
+    *,
+    source_id: str,
+    document_family: str,
+    url: str,
+    is_redirect: bool = False,
+    sources_yaml_path: Path | None = None,
+) -> ValidatedSourcePolicy:
+    """
+    Central source policy validator for URL requests.
+    Enforces host allowlist and SSRF safety.
+    """
+    policy = get_source_input_policy(
+        source_id=source_id,
+        document_family=document_family,
+        sources_yaml_path=sources_yaml_path,
+        allow_disabled=False,
+    )
+
     parsed_url = urlparse(url)
     if parsed_url.scheme != "https":
         raise SSRFError(f"URL scheme must be HTTPS, got: {parsed_url.scheme}")
@@ -173,51 +270,17 @@ def validate_source_request(
 
     check_literal_ip_safety(host_norm)
 
-    parsed_base = urlparse(source_info.base_url)
-    if not parsed_base.hostname:
-        raise SourcePolicyError(f"Bozuk source base_url: {source_info.base_url}")
-
-    try:
-        base_host_norm = parsed_base.hostname.lower().rstrip(".").encode("idna").decode("ascii")
-    except Exception as e:
-        raise SourcePolicyError(f"Invalid base_url IDNA hostname '{parsed_base.hostname}': {e}") from e
-
-    # Build EXPLICIT host allowlist (NO implicit wildcard/subdomain matching, NO auto www prefixing)
-    allowed_hosts_set: set[str] = {base_host_norm}
-
-    if hasattr(source_info, "allowed_hosts") and source_info.allowed_hosts:
-        for h in source_info.allowed_hosts:
-            h_norm = h.lower().rstrip(".").encode("idna").decode("ascii")
-            allowed_hosts_set.add(h_norm)
-
-    allowed_redirect_set: set[str] = set()
-    if hasattr(source_info, "allowed_redirect_hosts") and source_info.allowed_redirect_hosts:
-        for h in source_info.allowed_redirect_hosts:
-            h_norm = h.lower().rstrip(".").encode("idna").decode("ascii")
-            allowed_redirect_set.add(h_norm)
-
     if is_redirect:
-        valid_set = allowed_hosts_set | allowed_redirect_set
+        valid_set = policy.allowed_hosts | policy.allowed_redirect_hosts
     else:
-        valid_set = allowed_hosts_set
+        valid_set = policy.allowed_hosts
 
     if host_norm not in valid_set:
         raise SourcePolicyError(
-            f"SOURCE_HOST_NOT_ALLOWED: URL domain '{parsed_url.hostname}' does not match allowed source domain '{base_host_norm}'"
+            f"SOURCE_HOST_NOT_ALLOWED: URL domain '{parsed_url.hostname}' does not match allowed source domain '{policy.base_host}'"
         )
 
-    return ValidatedSourcePolicy(
-        source_id=source_id,
-        document_family=document_family,
-        base_host=base_host_norm,
-        allowed_hosts=frozenset(allowed_hosts_set),
-        allowed_redirect_hosts=frozenset(allowed_redirect_set),
-        timeout_seconds=float(source_info.http.timeout_seconds),
-        retries=int(source_info.http.retries),
-        max_download_bytes=int(source_info.http.max_download_bytes),
-        user_agent=str(source_info.http.user_agent),
-        min_interval_seconds=float(source_info.http.min_interval_seconds),
-    )
+    return policy
 
 
 def validate_source_policy(
@@ -227,7 +290,7 @@ def validate_source_policy(
     sources_yaml_path: Path | None = None,
 ):
     """
-    Backwards-compatible wrapper that delegates to validate_source_request.
+    Backwards-compatible wrapper.
     """
     family = document_family or "legislation"
     validate_source_request(
@@ -265,8 +328,8 @@ def fetch_url_stream(
     sources_yaml_path: Path | None = None,
 ) -> tuple[int, dict[str, str], Generator[bytes, None, None]]:
     """
-    Safely fetches a URL with mandatory source policy checks, SSRF checks, policy timeout, and streaming size limits.
-    Enforces follow_redirects=False and validates every redirect step against explicit source policy and IP safety.
+    Safely fetches a URL with mandatory source policy, concurrency semaphore, rate limiting, request budget,
+    SSRF checks, policy timeout, Content-Type validation, and streaming size limits.
     """
     policy = validate_source_request(
         source_id=source_id,
@@ -276,10 +339,14 @@ def fetch_url_stream(
         sources_yaml_path=sources_yaml_path,
     )
 
-    eff_max_bytes = max_bytes if max_bytes is not None else policy.max_download_bytes
-    eff_timeout = timeout_seconds if timeout_seconds is not None else policy.timeout_seconds
+    # Policy override restriction: override parameters cannot increase policy limit
+    eff_max_bytes = min(policy.max_download_bytes, max_bytes) if max_bytes is not None else policy.max_download_bytes
+    eff_timeout = min(policy.timeout_seconds, timeout_seconds) if timeout_seconds is not None else policy.timeout_seconds
     eff_ua = policy.user_agent
     retries = policy.retries
+
+    req_state = get_source_request_state(policy.source_id, policy.concurrency)
+    budget = RequestBudget(policy.max_requests_per_run)
 
     current_url = url
     visited: set[str] = set()
@@ -294,22 +361,22 @@ def fetch_url_stream(
         },
     )
 
+    req_state.semaphore.acquire()
+    acquired = True
+
     try:
         for redirect_count in range(MAX_REDIRECTS + 1):
             if current_url in visited:
                 raise SSRFError(f"Redirect loop detected for URL: {current_url}")
             visited.add(current_url)
 
-            # 1. Scheme check
             parsed_curr = urlparse(current_url)
             if parsed_curr.scheme != "https":
                 raise SSRFError(f"URL scheme must be HTTPS, got: {parsed_curr.scheme}")
 
-            # 2. Literal / Loopback IP check
             if parsed_curr.hostname:
                 check_literal_ip_safety(parsed_curr.hostname.lower().rstrip("."))
 
-            # 3. Source policy domain & permission check
             is_red = redirect_count > 0
             validate_source_request(
                 source_id=source_id,
@@ -319,14 +386,30 @@ def fetch_url_stream(
                 sources_yaml_path=sources_yaml_path,
             )
 
-            # 4. Pre-request DNS resolution & IP safety check
             validate_url_host(current_url)
 
             resp = None
             for attempt in range(retries + 1):
+                enforce_min_interval(req_state, policy.min_interval_seconds)
+                budget.consume()
+
                 try:
                     req = client.build_request("GET", current_url)
                     resp = client.send(req, stream=True)
+
+                    if resp.status_code == 429 and attempt < retries:
+                        retry_after = resp.headers.get("retry-after")
+                        delay = 1.0
+                        if retry_after and retry_after.isdigit():
+                            delay = min(float(retry_after), 60.0)
+                        resp.close()
+                        time.sleep(delay)
+                        continue
+
+                    if resp.status_code in (502, 503, 504) and attempt < retries:
+                        resp.close()
+                        continue
+
                     break
                 except (httpx.TimeoutException, httpx.ConnectError) as exc:
                     if attempt < retries:
@@ -339,13 +422,11 @@ def fetch_url_stream(
             if resp.status_code in (301, 302, 303, 307, 308):
                 if redirect_count >= MAX_REDIRECTS:
                     resp.close()
-                    client.close()
                     raise URLFetchError(f"Too many redirects (max {MAX_REDIRECTS})")
 
                 location = resp.headers.get("Location") or resp.headers.get("location")
                 resp.close()
                 if not location:
-                    client.close()
                     raise URLFetchError("Redirect status received without Location header")
 
                 current_url = urljoin(current_url, location)
@@ -353,10 +434,27 @@ def fetch_url_stream(
 
             if resp.status_code != 200:
                 resp.close()
-                client.close()
                 raise URLFetchError(f"HTTP status {resp.status_code}")
 
+            # Pre-download Content-Length check
+            cl_header = resp.headers.get("content-length")
+            if cl_header and cl_header.isdigit():
+                if int(cl_header) > eff_max_bytes:
+                    resp.close()
+                    raise SizeLimitExceededError(f"Header Content-Length ({cl_header}) exceeds limit of {eff_max_bytes} bytes")
+
+            # Pre-download Content-Type check
+            raw_ct = resp.headers.get("content-type")
+            decl_mime = normalize_media_type(raw_ct)
+            if decl_mime and decl_mime not in ("application/octet-stream", "binary/octet-stream"):
+                if decl_mime not in policy.allowed_content_types:
+                    resp.close()
+                    raise SourcePolicyError(
+                        f"SOURCE_CONTENT_TYPE_NOT_ALLOWED: Content-Type '{decl_mime}' not allowed for source '{source_id}'"
+                    )
+
             def stream_generator():
+                nonlocal acquired
                 downloaded = 0
                 try:
                     for chunk in resp.iter_bytes(chunk_size=8192):
@@ -367,12 +465,17 @@ def fetch_url_stream(
                 finally:
                     resp.close()
                     client.close()
+                    if acquired:
+                        req_state.semaphore.release()
+                        acquired = False
 
             headers_dict = {k.lower(): v for k, v in resp.headers.items()}
             return resp.status_code, headers_dict, stream_generator()
 
-        client.close()
         raise URLFetchError("Too many redirects")
     except Exception:
         client.close()
+        if acquired:
+            req_state.semaphore.release()
+            acquired = False
         raise

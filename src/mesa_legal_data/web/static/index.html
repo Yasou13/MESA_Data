@@ -1,70 +1,119 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="tr" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f4f6f9">
   <title>MESA Legal Data — Yönetim Paneli</title>
+  <script>
+    (() => {
+      const preference = localStorage.getItem("mesa_theme") || "system";
+      const dark = preference === "dark" || (preference === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    })();
+  </script>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Ana içeriğe geç</a>
+
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
   <div class="app-layout">
     <!-- Sidebar Navigation -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="app-sidebar" aria-label="Ana navigasyon">
       <div class="brand">
-        <span class="brand-icon">⚖️</span>
+        <svg class="brand-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v18M3 6l9-3 9 3M3 18l9 3 9-3M3 12l9 3 9-3"></path>
+        </svg>
         <h2>MESA Data</h2>
       </div>
       <nav class="nav-menu">
+        <div class="nav-group-title">VERİ</div>
         <button class="nav-btn active" data-view="dashboard">
-          <span class="nav-icon">📊</span> Genel Bakış
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+          Genel Bakış
         </button>
         <button class="nav-btn" data-view="add_data">
-          <span class="nav-icon">➕</span> Veri Ekle
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+          Veri Ekle
         </button>
         <button class="nav-btn" data-view="documents">
-          <span class="nav-icon">📄</span> Belgeler
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+          Belgeler
         </button>
         <button class="nav-btn" data-view="explorer">
-          <span class="nav-icon">🔎</span> Veri Gezgini
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          Veri Gezgini
         </button>
+
+        <div class="nav-group-title">KALİTE</div>
         <button class="nav-btn" data-view="reviews">
-          <span class="nav-icon">🔍</span> İnceleme Masası
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+          İnceleme Masası
         </button>
         <button class="nav-btn" data-view="issues">
-          <span class="nav-icon">⚠️</span> Sorunlar
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          Sorunlar
         </button>
+
+        <div class="nav-group-title">DAĞITIM</div>
         <button class="nav-btn" data-view="sources">
-          <span class="nav-icon">🌐</span> Kaynaklar
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+          Kaynaklar
         </button>
         <button class="nav-btn" data-view="releases">
-          <span class="nav-icon">📦</span> Release Merkezi
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          Release Merkezi
         </button>
         <button class="nav-btn" data-view="exports">
-          <span class="nav-icon">📤</span> Dışa Aktarma
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          Dışa Aktarma
         </button>
+
+        <div class="nav-group-title">SİSTEM</div>
         <button class="nav-btn" data-view="operations">
-          <span class="nav-icon">🔄</span> Operasyonlar
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          Operasyonlar
         </button>
         <button class="nav-btn" data-view="audit">
-          <span class="nav-icon">📋</span> Audit
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><path d="M16 13H8"></path><path d="M16 17H8"></path><path d="M10 9H8"></path></svg>
+          Audit
         </button>
         <button class="nav-btn" data-view="system">
-          <span class="nav-icon">⚙️</span> Sistem
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          Sistem
         </button>
       </nav>
       <div class="sidebar-footer">
-        <span class="status-indicator online">● Sürücü Bağlı</span>
-        <small id="app-version">v0.1.0</small>
+        <span id="api-status-text" class="status-indicator online">API Erişilebilir</span>
+        <small id="app-version">Sürüm v1.0.0</small>
       </div>
     </aside>
 
     <!-- Main Content Area -->
-    <main class="main-content">
+    <main id="main-content" class="main-content" tabindex="-1">
       <header class="top-header">
-        <h1 id="view-title">Genel Bakış</h1>
+        <div class="header-left">
+          <button id="btn-mobile-menu" class="mobile-menu-btn" aria-label="Navigasyon menüsünü aç/kapat">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+          </button>
+          <div class="header-title-group">
+            <h1 id="view-title">Genel Bakış</h1>
+            <p id="view-desc">Sistemin veri, kalite ve release durumunu tek yerde izleyin.</p>
+          </div>
+        </div>
         <div class="header-actions">
-          <button id="btn-token" class="btn btn-secondary">🔑 Admin Token</button>
-          <span id="busy-spinner" class="spinner hidden">İşleniyor...</span>
+          <select id="sel-theme-control" class="theme-select" aria-label="Tema Seçimi">
+            <option value="system">Sistem Teması</option>
+            <option value="light">Açık Tema</option>
+            <option value="dark">Koyu Tema (Siyah)</option>
+          </select>
+          <button id="btn-token" class="btn btn-secondary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.778-7.778zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
+            Yönetici Erişimi
+          </button>
+          <span id="busy-spinner" class="spinner hidden" role="status">İşleniyor...</span>
         </div>
       </header>
 
@@ -89,19 +138,19 @@
               <span class="stat-label">Canonical Kayıt</span>
               <span class="stat-val" id="stat-records">0</span>
             </div>
-            <div class="stat-card warning">
+            <div class="stat-card">
               <span class="stat-label">İnceleme Bekleyen</span>
               <span class="stat-val" id="stat-pending">0</span>
             </div>
-            <div class="stat-card success">
+            <div class="stat-card">
               <span class="stat-label">Onaylı Kayıt</span>
               <span class="stat-val" id="stat-approved">0</span>
             </div>
-            <div class="stat-card danger">
+            <div class="stat-card">
               <span class="stat-label">Açık Blocker / Error</span>
               <span class="stat-val" id="stat-issues">0</span>
             </div>
-            <div class="stat-card primary">
+            <div class="stat-card">
               <span class="stat-label">Published Release</span>
               <span class="stat-val" id="stat-releases">0</span>
             </div>
@@ -153,8 +202,8 @@
         <section id="view-add_data" class="view-panel hidden">
           <div class="panel-box">
             <div class="tab-buttons">
-              <button class="tab-btn active" data-tab="tab-file">📁 Dosyadan Yükle</button>
-              <button class="tab-btn" data-tab="tab-url">🔗 Resmî URL'den Yükle</button>
+              <button class="tab-btn active" data-tab="tab-file">Dosyadan Yükle</button>
+              <button class="tab-btn" data-tab="tab-url">Resmî URL'den Yükle</button>
             </div>
 
             <!-- Tab 1: File Upload Form -->
@@ -182,6 +231,7 @@
               <div class="form-group">
                 <label for="file-doc-id">Document ID</label>
                 <input type="text" id="file-doc-id" placeholder="tr:legislation:law:4721" required>
+                <span class="form-help">Örnek: tr:legislation:law:4721</span>
               </div>
               <div class="form-group">
                 <label for="file-title">Başlık (Opsiyonel)</label>
@@ -201,6 +251,7 @@
               <div class="form-group">
                 <label for="url-input">Resmî HTTPS URL</label>
                 <input type="url" id="url-input" placeholder="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf" required>
+                <span class="form-help">Yalnız sources.yaml içinde izin verilen HTTPS adresleri kabul edilir.</span>
               </div>
               <div class="form-group">
                 <label for="url-doc-id">Document ID</label>
@@ -404,6 +455,7 @@
         <section id="view-sources" class="view-panel hidden">
           <div class="panel-box">
             <h3>Kaynak Yapılandırmaları (Salt Okunur)</h3>
+            <span class="form-help">Kaynak limitleri ve ayarları sources.yaml üzerinden yönetilir.</span>
             <div id="sources-list"></div>
           </div>
         </section>
@@ -503,8 +555,8 @@
           <div class="panel-box">
             <h3>Sistem Teşhisi ve Sağlık Durumu</h3>
             <div class="system-actions">
-              <button id="btn-sys-doctor" class="btn btn-secondary">🏥 Doctor Çalıştır</button>
-              <button id="btn-sys-backup" class="btn btn-secondary">💾 Catalog Backup Al</button>
+              <button id="btn-sys-doctor" class="btn btn-secondary">Doctor Çalıştır</button>
+              <button id="btn-sys-backup" class="btn btn-secondary">Catalog Backup Al</button>
             </div>
             <pre id="sys-status-output" class="code-box">Yükleniyor...</pre>
           </div>
@@ -515,34 +567,35 @@
   </div>
 
   <!-- Modal: Token Entry -->
-  <div id="modal-token" class="modal-backdrop hidden">
+  <div id="modal-token" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="token-modal-title">
     <div class="modal-card">
-      <h3>🔑 Admin Token Kimlik Doğrulama</h3>
-      <p>Sunucuya erişmek için admin token'ınızı giriniz.</p>
+      <h3 id="token-modal-title">Yönetici Kimlik Doğrulama</h3>
+      <p>Sunucuya yönetici erişimi için admin token'ınızı giriniz.</p>
       <input type="password" id="txt-token-input" placeholder="Admin Token">
-      <div class="modal-actions">
+      <div class="modal-footer">
         <button id="btn-save-token" class="btn btn-primary">Kaydet</button>
+        <button class="btn btn-secondary" data-close="modal-token">İptal</button>
       </div>
     </div>
   </div>
 
   <!-- Modal: Document Detail -->
-  <div id="modal-doc-detail" class="modal-backdrop hidden">
+  <div id="modal-doc-detail" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="doc-modal-title">
     <div class="modal-card large">
       <div class="modal-header">
         <h3 id="doc-modal-title">Belge Detayı</h3>
-        <button class="btn-close" data-close="modal-doc-detail">×</button>
+        <button class="btn-close" data-close="modal-doc-detail" aria-label="Kapat">×</button>
       </div>
       <div id="doc-modal-body" class="modal-body"></div>
     </div>
   </div>
 
   <!-- Modal: Record Review Detail -->
-  <div id="modal-record-detail" class="modal-backdrop hidden">
+  <div id="modal-record-detail" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="record-modal-title">
     <div class="modal-card large">
       <div class="modal-header">
         <h3 id="record-modal-title">Kayıt İnceleme</h3>
-        <button class="btn-close" data-close="modal-record-detail">×</button>
+        <button class="btn-close" data-close="modal-record-detail" aria-label="Kapat">×</button>
       </div>
       <div id="record-modal-body" class="modal-body"></div>
       <div class="modal-footer">
@@ -554,6 +607,8 @@
     </div>
   </div>
 
+  <script src="/static/theme.js"></script>
+  <script src="/static/ui.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

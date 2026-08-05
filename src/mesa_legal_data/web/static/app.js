@@ -7,6 +7,21 @@ const state = {
   currentVersionId: null,
 };
 
+const VIEW_DESCRIPTIONS = {
+  dashboard: "Sistemin veri, kalite ve release durumunu tek yerde izleyin.",
+  add_data: "Yerel belge veya izinli resmî HTTPS kaynağı sisteme alın.",
+  documents: "Artifact, pipeline ve provenance durumlarını yönetin.",
+  explorer: "Filtreler ile canonical veri varlıklarında arama yapın.",
+  reviews: "Kayıtları inceleyin, onaylayın veya reddedin.",
+  issues: "Veri kalitesi ve işlem hatalarını takip edin.",
+  sources: "Resmî veri kaynaklarının kurallarını ve izinlerini görün.",
+  releases: "Yayınlanabilir veri paketleri oluşturun ve doğrulayın.",
+  exports: "Kayıt, audit ve provenance verilerini dışa aktarın.",
+  operations: "Arka plan veri operasyonlarını çalıştırın ve izleyin.",
+  audit: "Sistemde gerçekleşen kritik eylemlerin geçmişini inceleyin.",
+  system: "Sistem sağlığını ve veritabanı durumunu denetleyin.",
+};
+
 // --- Utilities ---
 function escapeHtml(str) {
   if (!str) return "";
@@ -19,32 +34,41 @@ function escapeHtml(str) {
 }
 
 function showToast(message, type = "success") {
-  const container = document.getElementById("toast-container");
-  const toast = document.createElement("div");
-  toast.className = `toast ${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => {
-    toast.remove();
-  }, 4000);
+  if (window.MesaUI && window.MesaUI.showToast) {
+    window.MesaUI.showToast(message, type);
+  } else {
+    alert(message);
+  }
+}
+
+function showModal(modalId) {
+  if (window.MesaUI && window.MesaUI.showModal) {
+    window.MesaUI.showModal(modalId);
+  } else {
+    const el = document.getElementById(modalId);
+    if (el) el.classList.remove("hidden");
+  }
+}
+
+function closeModal(modalId) {
+  if (window.MesaUI && window.MesaUI.closeModal) {
+    window.MesaUI.closeModal(modalId);
+  } else {
+    const el = document.getElementById(modalId);
+    if (el) el.classList.add("hidden");
+  }
 }
 
 function setBusy(isBusy) {
   state.busy = isBusy;
   const spinner = document.getElementById("busy-spinner");
-  if (isBusy) {
-    spinner.classList.remove("hidden");
-  } else {
-    spinner.classList.add("hidden");
-  }
-
-  document.querySelectorAll("button, input[type='submit']").forEach((btn) => {
+  if (spinner) {
     if (isBusy) {
-      btn.setAttribute("disabled", "true");
+      spinner.classList.remove("hidden");
     } else {
-      btn.removeAttribute("disabled");
+      spinner.classList.add("hidden");
     }
-  });
+  }
 }
 
 function statusBadge(statusStr) {
@@ -72,7 +96,7 @@ function statusBadge(statusStr) {
   return `<span class="badge ${badgeClass}">${escapeHtml(label)}</span>`;
 }
 
-// --- API Wrapper ---
+// --- Safe API Wrapper ---
 async function apiRequest(endpoint, options = {}) {
   const headers = options.headers || {};
 
@@ -90,7 +114,10 @@ async function apiRequest(endpoint, options = {}) {
 
   try {
     const response = await fetch(endpoint, options);
-    const result = await response.json();
+    const contentType = response.headers.get("content-type") || "";
+    const result = contentType.includes("application/json")
+      ? await response.json()
+      : { ok: response.ok, data: null, error: { message: await response.text() } };
 
     if (response.status === 401) {
       showModal("modal-token");
@@ -148,155 +175,199 @@ function switchView(viewName) {
     releases: "Release Merkezi",
     exports: "Dışa Aktarma",
     operations: "Operasyonlar",
-    audit: "Audit Geçmişi",
-    system: "Sistem Durumu",
+    audit: "Audit",
+    system: "Sistem",
   };
-  document.getElementById("view-title").textContent = titles[viewName] || "MESA Panel";
 
-  // Trigger view reload
+  const viewTitle = titles[viewName] || viewName;
+  const viewDesc = VIEW_DESCRIPTIONS[viewName] || "";
+
+  document.getElementById("view-title").textContent = viewTitle;
+  document.getElementById("view-desc").textContent = viewDesc;
+
+  // Close mobile sidebar if open
+  closeMobileSidebar();
+
+  // Load view content
   if (viewName === "dashboard") loadDashboard();
   if (viewName === "documents") loadDocuments();
-  if (viewName === "explorer") loadExplorer();
   if (viewName === "reviews") loadReviews();
+  if (viewName === "releases") loadReleases();
+  if (viewName === "explorer") loadExplorer();
   if (viewName === "issues") loadIssues();
   if (viewName === "sources") loadSources();
-  if (viewName === "releases") loadReleases();
   if (viewName === "exports") loadExports();
   if (viewName === "operations") loadOperations();
   if (viewName === "audit") loadAudit();
-  if (viewName === "system") loadSystemStatus();
+  if (viewName === "system") loadSystem();
 }
 
-// --- View Loaders ---
+function closeMobileSidebar() {
+  const sidebar = document.getElementById("app-sidebar");
+  const overlay = document.getElementById("sidebar-overlay");
+  if (sidebar) sidebar.classList.remove("open");
+  if (overlay) overlay.classList.remove("open");
+}
 
-// 1. Dashboard
+// --- Dashboard Handler ---
 async function loadDashboard() {
   try {
-    const data = await apiRequest("/api/dashboard");
-    const counts = data.counts || {};
+    setBusy(true);
+    const data = await apiRequest("/api/dashboard/stats");
 
-    document.getElementById("stat-docs").textContent = counts.documents || 0;
-    document.getElementById("stat-artifacts").textContent = counts.artifacts || 0;
-    document.getElementById("stat-records").textContent = counts.records || 0;
-    document.getElementById("stat-pending").textContent = counts.pending_reviews || 0;
-    document.getElementById("stat-approved").textContent = counts.approved_records || 0;
-    document.getElementById("stat-issues").textContent = (counts.open_blockers || 0) + (counts.open_errors || 0);
-    document.getElementById("stat-releases").textContent = counts.published_releases || 0;
-    document.getElementById("stat-active-release").textContent = counts.active_release_id || "YOK";
+    document.getElementById("stat-docs").textContent = data.documents_count || 0;
+    document.getElementById("stat-artifacts").textContent = data.raw_artifacts_count || 0;
+    document.getElementById("stat-records").textContent = data.canonical_records_count || 0;
+    document.getElementById("stat-pending").textContent = data.pending_reviews_count || 0;
+    document.getElementById("stat-approved").textContent = data.approved_records_count || 0;
+    document.getElementById("stat-issues").textContent = data.open_issues_count || 0;
+    document.getElementById("stat-releases").textContent = data.published_releases_count || 0;
+    document.getElementById("stat-active-release").textContent = data.active_release_id || "YOK";
 
-    // Recent docs table
+    // Table: Recent Docs
     const tblDocs = document.getElementById("tbl-recent-docs");
     tblDocs.innerHTML = "";
-    (data.recent_documents || []).forEach((d) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><code>${escapeHtml(d.document_id)}</code></td>
-        <td>${escapeHtml(d.family)} / ${escapeHtml(d.document_type)}</td>
-        <td>${escapeHtml(d.title || "-")}</td>
-        <td>${statusBadge(d.status)}</td>
-        <td>${escapeHtml(d.updated_at ? d.updated_at.substring(0, 19) : "")}</td>
-      `;
-      tblDocs.appendChild(tr);
-    });
+    if (data.recent_documents && data.recent_documents.length > 0) {
+      data.recent_documents.forEach((doc) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(doc.document_id)}</code></td>
+          <td>${escapeHtml(doc.document_type)}</td>
+          <td>${escapeHtml(doc.title || "-")}</td>
+          <td>${statusBadge(doc.lifecycle_status)}</td>
+          <td>${escapeHtml(doc.updated_at ? doc.updated_at.split("T")[0] : "-")}</td>
+        `;
+        tblDocs.appendChild(tr);
+      });
+    } else {
+      tblDocs.innerHTML = `<tr><td colspan="5" class="text-muted">Henüz belge bulunmuyor.</td></tr>`;
+    }
 
-    // Recent runs table
+    // Table: Recent Runs
     const tblRuns = document.getElementById("tbl-recent-runs");
     tblRuns.innerHTML = "";
-    (data.recent_runs || []).forEach((r) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><code>${escapeHtml(r.run_id)}</code></td>
-        <td><code>${escapeHtml(r.command)}</code></td>
-        <td>${statusBadge(r.status)}</td>
-        <td>${escapeHtml(r.started_at ? r.started_at.substring(0, 19) : "")}</td>
-      `;
-      tblRuns.appendChild(tr);
-    });
-  } catch (e) {
-    console.error("Dashboard error:", e);
+    if (data.recent_runs && data.recent_runs.length > 0) {
+      data.recent_runs.forEach((run) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(run.run_id)}</code></td>
+          <td><code>${escapeHtml(run.command)}</code></td>
+          <td>${statusBadge(run.status)}</td>
+          <td>${escapeHtml(run.started_at ? run.started_at.split("T")[0] : "-")}</td>
+        `;
+        tblRuns.appendChild(tr);
+      });
+    } else {
+      tblRuns.innerHTML = `<tr><td colspan="4" class="text-muted">Henüz işlem geçmişi yok.</td></tr>`;
+    }
+  } catch (err) {
+    console.error("Dashboard yüklenemedi:", err);
+  } finally {
+    setBusy(false);
   }
 }
 
-// 2. Add Data
+// --- Add Data Form Handlers ---
 function setupAddDataForms() {
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
+  const tabBtns = document.querySelectorAll("#view-add_data .tab-btn");
+  tabBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach((c) => {
-        c.classList.add("hidden");
-        c.classList.remove("active");
-      });
-
+      tabBtns.forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
-      const targetForm = document.getElementById(btn.dataset.tab === "tab-file" ? "form-upload-file" : "form-upload-url");
-      targetForm.classList.remove("hidden");
-      targetForm.classList.add("active");
+
+      const targetTab = btn.dataset.tab;
+      document.getElementById("form-upload-file").classList.toggle("hidden", targetTab !== "tab-file");
+      document.getElementById("form-upload-file").classList.toggle("active", targetTab === "tab-file");
+      document.getElementById("form-upload-url").classList.toggle("hidden", targetTab !== "tab-url");
+      document.getElementById("form-upload-url").classList.toggle("active", targetTab === "tab-url");
     });
   });
 
-  // Form file upload
-  document.getElementById("form-upload-file").addEventListener("submit", async (e) => {
+  // File Upload Form Submit
+  const formFile = document.getElementById("form-upload-file");
+  formFile.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const btnSubmit = document.getElementById("btn-submit-file");
     const fileInput = document.getElementById("file-input");
-    if (!fileInput.files.length) return;
+    if (!fileInput.files[0]) return;
 
     const formData = new FormData();
     formData.append("file", fileInput.files[0]);
     formData.append("source_id", document.getElementById("file-source").value);
     formData.append("family", document.getElementById("file-family").value);
-    formData.append("document_id", document.getElementById("file-doc-id").value);
-    const titleVal = document.getElementById("file-title").value;
-    if (titleVal) formData.append("title", titleVal);
+    formData.append("document_id", document.getElementById("file-doc-id").value.trim());
+    formData.append("title", document.getElementById("file-title").value.trim());
 
     try {
-      setBusy(true);
-      const res = await apiRequest("/api/artifacts/upload", {
+      window.MesaUI.setElementBusy(btnSubmit, true, "Yükleniyor...");
+      const headers = {};
+      if (state.token) headers["Authorization"] = `Bearer ${state.token}`;
+      headers["X-MESA-Requested-With"] = "web-admin";
+      headers["X-MESA-Actor"] = sessionStorage.getItem("mesa_actor") || "operator";
+
+      const resp = await fetch("/api/manual/upload-file", {
         method: "POST",
+        headers: headers,
         body: formData,
       });
-      showToast(`Dosya başarıyla yüklendi! Artifact ID: ${res.artifact_id}`);
+
+      const res = await resp.json();
+      if (!resp.ok || !res.ok) {
+        throw new Error(res.error?.message || "Dosya yüklenemedi.");
+      }
+
+      showToast("Dosya başarıyla yüklendi!");
+      formFile.reset();
       switchView("documents");
     } catch (err) {
-      console.error(err);
+      showToast(err.message, "danger");
     } finally {
-      setBusy(false);
+      window.MesaUI.setElementBusy(btnSubmit, false);
     }
   });
 
-  // Form URL upload
-  document.getElementById("form-upload-url").addEventListener("submit", async (e) => {
+  // URL Import Form Submit
+  const formUrl = document.getElementById("form-upload-url");
+  formUrl.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const reqBody = {
+    const btnSubmit = document.getElementById("btn-submit-url");
+    const payload = {
+      url: document.getElementById("url-input").value.trim(),
       source_id: document.getElementById("url-source").value,
-      url: document.getElementById("url-input").value,
-      document_id: document.getElementById("url-doc-id").value,
-      title: document.getElementById("url-title").value || null,
+      document_id: document.getElementById("url-doc-id").value.trim(),
+      title: document.getElementById("url-title").value.trim(),
+      family: "legislation",
     };
 
     try {
-      setBusy(true);
-      const res = await apiRequest("/api/artifacts/from-url", {
+      window.MesaUI.setElementBusy(btnSubmit, true, "İndiriliyor...");
+      await apiRequest("/api/manual/import-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(reqBody),
+        body: JSON.stringify(payload),
       });
-      showToast(`URL başarıyla içe aktarıldı! Artifact ID: ${res.artifact_id}`);
+
+      showToast("URL başarıyla indirildi ve içe aktarıldı!");
+      formUrl.reset();
       switchView("documents");
     } catch (err) {
-      console.error(err);
+      showToast(err.message, "danger");
     } finally {
-      setBusy(false);
+      window.MesaUI.setElementBusy(btnSubmit, false);
     }
   });
 }
 
-// 3. Documents
+// --- Documents Handler ---
 async function loadDocuments() {
   try {
-    const q = document.getElementById("filter-doc-q").value;
+    setBusy(true);
+    const q = document.getElementById("filter-doc-q").value.trim();
     const status = document.getElementById("filter-doc-status").value;
+    const limit = 20;
+    const offset = (state.docPage - 1) * limit;
 
-    let url = `/api/documents?page=${state.docPage}&page_size=20`;
+    let url = `/api/documents?limit=${limit}&offset=${offset}`;
     if (q) url += `&q=${encodeURIComponent(q)}`;
     if (status) url += `&status=${encodeURIComponent(status)}`;
 
@@ -304,646 +375,529 @@ async function loadDocuments() {
     const tbl = document.getElementById("tbl-docs");
     tbl.innerHTML = "";
 
-    (data.items || []).forEach((d) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><code>${escapeHtml(d.document_id)}</code></td>
-        <td>${escapeHtml(d.family)} / ${escapeHtml(d.document_type)}</td>
-        <td>${escapeHtml(d.title || "-")}</td>
-        <td>${statusBadge(d.lifecycle_status)}</td>
-        <td>${d.artifact_count}</td>
-        <td>${escapeHtml(d.updated_at ? d.updated_at.substring(0, 19) : "")}</td>
-        <td>
-          <button class="btn btn-sm btn-secondary btn-doc-detail" data-id="${escapeHtml(d.document_id)}">Detay</button>
-        </td>
-      `;
-      tbl.appendChild(tr);
-    });
+    document.getElementById("lbl-doc-page").textContent = `Sayfa ${state.docPage}`;
 
-    document.getElementById("lbl-doc-page").textContent = `Sayfa ${data.page}`;
-
-    // Detail button clicks
-    document.querySelectorAll(".btn-doc-detail").forEach((b) => {
-      b.addEventListener("click", () => openDocumentModal(b.dataset.id));
-    });
+    if (data.items && data.items.length > 0) {
+      data.items.forEach((doc) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(doc.document_id)}</code></td>
+          <td>${escapeHtml(doc.family)} / ${escapeHtml(doc.document_type)}</td>
+          <td>${escapeHtml(doc.title || "-")}</td>
+          <td>${statusBadge(doc.lifecycle_status)}</td>
+          <td><code>${escapeHtml(doc.latest_artifact_id || "-")}</code></td>
+          <td>${escapeHtml(doc.updated_at ? doc.updated_at.split("T")[0] : "-")}</td>
+          <td>
+            <button class="btn btn-secondary btn-sm" onclick="viewDocDetail('${escapeHtml(doc.document_id)}')">Detay</button>
+            <button class="btn btn-primary btn-sm" onclick="runPipeline('${escapeHtml(doc.document_id)}')">Pipeline Çalıştır</button>
+          </td>
+        `;
+        tbl.appendChild(tr);
+      });
+    } else {
+      tbl.innerHTML = `<tr><td colspan="7" class="text-muted">Kayıt bulunamadı.</td></tr>`;
+    }
   } catch (err) {
-    console.error(err);
+    console.error("Belgeler yüklenemedi:", err);
+  } finally {
+    setBusy(false);
   }
 }
 
-async function openDocumentModal(documentId) {
+async function viewDocDetail(docId) {
   try {
-    const doc = await apiRequest(`/api/documents/${encodeURIComponent(documentId)}`);
-    document.getElementById("doc-modal-title").textContent = `Belge: ${doc.document_id}`;
+    setBusy(true);
+    const data = await apiRequest(`/api/documents/${encodeURIComponent(docId)}`);
+    document.getElementById("doc-modal-title").textContent = `Belge Detayı: ${docId}`;
 
     const body = document.getElementById("doc-modal-body");
     body.innerHTML = `
-      <p><strong>Başlık:</strong> ${escapeHtml(doc.title || "-")}</p>
-      <p><strong>Durum:</strong> ${statusBadge(doc.lifecycle_status)}</p>
-      <p><strong>Current Version:</strong> <code>${escapeHtml(doc.current_version_id || "yok")}</code></p>
-      <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
-        <button id="btn-read-doc-inline" class="btn btn-sm btn-primary">📖 Metni Ekranda Oku</button>
-        <a href="/api/documents/${encodeURIComponent(doc.document_id)}/download/raw?inline=true" target="_blank" class="btn btn-sm btn-secondary">Ham Dosyayı Sekmede Aç</a>
-        <a href="/api/documents/${encodeURIComponent(doc.document_id)}/download/canonical?inline=true" target="_blank" class="btn btn-sm btn-secondary">Canonical JSONL Aç</a>
+      <div class="panel-box">
+        <h4>Genel Bilgiler</h4>
+        <p><strong>Belge Ailesi:</strong> ${escapeHtml(data.document.family)}</p>
+        <p><strong>Tür:</strong> ${escapeHtml(data.document.document_type)}</p>
+        <p><strong>Başlık:</strong> ${escapeHtml(data.document.title || "-")}</p>
+        <p><strong>Durum:</strong> ${statusBadge(data.document.lifecycle_status)}</p>
       </div>
-      <div id="doc-inline-container" class="hidden" style="margin-bottom: 15px;">
-        <div style="font-weight: bold; margin-bottom: 4px; font-size: 0.9em;">Belge Metni Önizleme:</div>
-        <pre id="doc-inline-text-view" style="max-height: 280px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-color); padding: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.85em; border-radius: 6px; color: var(--text-color);"></pre>
+      <div class="panel-box">
+        <h4>Raw Artifacts (${data.artifacts ? data.artifacts.length : 0})</h4>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr><th>Artifact ID</th><th>Kaynak</th><th>MIME</th><th>Boyut</th><th>İndir</th></tr>
+            </thead>
+            <tbody>
+              ${
+                data.artifacts && data.artifacts.length > 0
+                  ? data.artifacts
+                      .map(
+                        (a) => `
+                    <tr>
+                      <td><code>${escapeHtml(a.artifact_id)}</code></td>
+                      <td>${escapeHtml(a.source_id)}</td>
+                      <td>${escapeHtml(a.detected_content_type)}</td>
+                      <td>${a.byte_size} B</td>
+                      <td><a href="/api/artifacts/${encodeURIComponent(a.artifact_id)}/download" class="btn btn-secondary btn-sm" target="_blank">İndir</a></td>
+                    </tr>
+                  `
+                      )
+                      .join("")
+                  : '<tr><td colspan="5">Artifact yok.</td></tr>'
+              }
+            </tbody>
+          </table>
+        </div>
       </div>
-      <h4>Artifact Listesi:</h4>
-      <ul>
-        ${(doc.artifacts || [])
-          .map(
-            (a) => `
-          <li style="margin-bottom: 8px;">
-            <div><code>${escapeHtml(a.artifact_id)}</code> (${escapeHtml(a.source_id)}) - ${statusBadge(a.transport_status)}</div>
-            <div style="font-size: 0.85em; color: var(--text-muted); margin: 2px 0;">Diskteki Yol: <code>${escapeHtml(a.raw_path || "-")}</code></div>
-            <button class="btn btn-sm btn-primary btn-process-art" data-id="${escapeHtml(a.artifact_id)}">Pipeline Çalıştır</button>
-          </li>
-        `
-          )
-          .join("")}
-      </ul>
     `;
 
     showModal("modal-doc-detail");
-
-    document.getElementById("btn-read-doc-inline").addEventListener("click", async () => {
-      try {
-        setBusy(true);
-        const res = await apiRequest(`/api/documents/${encodeURIComponent(documentId)}/text`);
-        const container = document.getElementById("doc-inline-container");
-        const textView = document.getElementById("doc-inline-text-view");
-        textView.textContent = res.content || "İçerik bulunamadı.";
-        container.classList.remove("hidden");
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setBusy(false);
-      }
-    });
-
-    body.querySelectorAll(".btn-process-art").forEach((b) => {
-      b.addEventListener("click", async () => {
-        try {
-          setBusy(true);
-          const res = await apiRequest(`/api/artifacts/${encodeURIComponent(b.dataset.id)}/process`, {
-            method: "POST",
-          });
-          showToast(`Pipeline tamamlandı: status '${res.pipeline_status}'`);
-          closeModal("modal-doc-detail");
-          loadDocuments();
-        } catch (e) {
-          console.error(e);
-        } finally {
-          setBusy(false);
-        }
-      });
-    });
   } catch (err) {
     console.error(err);
+  } finally {
+    setBusy(false);
   }
 }
 
-// 4. Reviews
+async function runPipeline(docId) {
+  try {
+    setBusy(true);
+    await apiRequest(`/api/documents/${encodeURIComponent(docId)}/pipeline`, {
+      method: "POST",
+    });
+    showToast("Pipeline işlemi başarıyla başlatıldı ve tamamlandı!");
+    loadDocuments();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    setBusy(false);
+  }
+}
+
+// --- Reviews Handler ---
 async function loadReviews() {
   try {
+    setBusy(true);
     const status = document.getElementById("filter-review-status").value;
-    const data = await apiRequest(`/api/records?approval_status=${encodeURIComponent(status)}`);
+    const data = await apiRequest(`/api/reviews/records?status=${status}`);
 
     const tbl = document.getElementById("tbl-reviews");
     tbl.innerHTML = "";
 
-    (data.items || []).forEach((r) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><code>${escapeHtml(r.record_id)}</code></td>
-        <td>${escapeHtml(r.record_type)}</td>
-        <td><code>${escapeHtml(r.document_id)}</code></td>
-        <td>${statusBadge(r.validation_status)}</td>
-        <td>${statusBadge(r.approval_status)}</td>
-        <td>${escapeHtml(r.created_at ? r.created_at.substring(0, 19) : "")}</td>
-        <td>
-          <button class="btn btn-sm btn-secondary btn-rec-detail" data-id="${escapeHtml(r.record_id)}">İncele</button>
-        </td>
-      `;
-      tbl.appendChild(tr);
-    });
-
-    document.querySelectorAll(".btn-rec-detail").forEach((b) => {
-      b.addEventListener("click", () => openRecordModal(b.dataset.id));
-    });
+    if (data && data.length > 0) {
+      data.forEach((rec) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(rec.record_id)}</code></td>
+          <td>${escapeHtml(rec.record_type)}</td>
+          <td><code>${escapeHtml(rec.document_id)}</code></td>
+          <td>${rec.validation_ok ? '<span class="badge badge-success">OK</span>' : '<span class="badge badge-danger">Hata</span>'}</td>
+          <td>${statusBadge(rec.approval_status)}</td>
+          <td>${escapeHtml(rec.created_at ? rec.created_at.split("T")[0] : "-")}</td>
+          <td>
+            <button class="btn btn-secondary btn-sm" onclick="openReviewModal('${escapeHtml(rec.record_id)}')">İncele</button>
+          </td>
+        `;
+        tbl.appendChild(tr);
+      });
+    } else {
+      tbl.innerHTML = `<tr><td colspan="7" class="text-muted">İnceleme kaydı bulunmuyor.</td></tr>`;
+    }
   } catch (err) {
-    console.error(err);
+    console.error("İncelemeler yüklenemedi:", err);
+  } finally {
+    setBusy(false);
   }
 }
 
-async function openRecordModal(recordId) {
+async function openReviewModal(recordId) {
   try {
+    setBusy(true);
     state.currentRecordId = recordId;
-    const rec = await apiRequest(`/api/records/${encodeURIComponent(recordId)}`);
-    state.currentVersionId = rec.version_id;
+    const data = await apiRequest(`/api/reviews/records/${encodeURIComponent(recordId)}`);
+    state.currentVersionId = data.version_id;
 
-    document.getElementById("record-modal-title").textContent = `Kayıt İnceleme: ${rec.record_id}`;
+    document.getElementById("record-modal-title").textContent = `Kayıt İnceleme: ${recordId}`;
     const body = document.getElementById("record-modal-body");
-
-    const blockers = rec.open_blockers || [];
-    const hasBlockers = blockers.length > 0;
-
     body.innerHTML = `
-      <p><strong>Tür:</strong> ${escapeHtml(rec.record_type)} | <strong>Version:</strong> <code>${escapeHtml(rec.version_id)}</code></p>
-      <p><strong>Onay Durumu:</strong> ${statusBadge(rec.approval_status)} | <strong>Validation:</strong> ${statusBadge(rec.validation_status)}</p>
-      <p><strong>Record SHA256:</strong> <code>${escapeHtml(rec.record_sha256)}</code></p>
-      ${hasBlockers ? `<div class="toast danger">⚠️ Açık Blocker Sorunları Bulunuyor (${blockers.length})</div>` : ""}
-      <h4>Metin Önizlemesi (JSONL Line):</h4>
-      <pre class="code-box">${escapeHtml(rec.text_preview || "Metin bulunamadı")}</pre>
+      <div class="panel-box">
+        <p><strong>Tür:</strong> ${escapeHtml(data.record_type)} | <strong>Document ID:</strong> <code>${escapeHtml(data.document_id)}</code></p>
+        <p><strong>Validation Status:</strong> ${data.validation_ok ? '<span class="badge badge-success">OK</span>' : '<span class="badge badge-danger">Fail</span>'}</p>
+      </div>
+      <div class="panel-box">
+        <h4>Payload (JSON)</h4>
+        <pre class="code-box">${escapeHtml(JSON.stringify(JSON.parse(data.payload_json || "{}"), null, 2))}</pre>
+      </div>
     `;
-
-    const approveBtn = document.getElementById("btn-record-approve");
-    if (hasBlockers) {
-      approveBtn.setAttribute("disabled", "true");
-    } else {
-      approveBtn.removeAttribute("disabled");
-    }
 
     showModal("modal-record-detail");
   } catch (err) {
     console.error(err);
+  } finally {
+    setBusy(false);
   }
 }
 
-// Setup Review Modal Handlers
 function setupReviewHandlers() {
   document.getElementById("btn-record-approve").addEventListener("click", async () => {
-    if (!state.currentRecordId) return;
-    const reviewer = document.getElementById("txt-reviewer-name").value || "yasin";
-    const note = document.getElementById("txt-reviewer-note").value || null;
+    if (!state.currentRecordId || !state.currentVersionId) return;
+    const reviewer = document.getElementById("txt-reviewer-name").value.trim() || "operator";
+    const note = document.getElementById("txt-reviewer-note").value.trim();
 
     try {
       setBusy(true);
-      await apiRequest(`/api/versions/${encodeURIComponent(state.currentVersionId)}/approve`, {
+      await apiRequest(`/api/reviews/records/${encodeURIComponent(state.currentRecordId)}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reviewer, note }),
+        body: JSON.stringify({ version_id: state.currentVersionId, reviewer: reviewer, note: note }),
       });
-      showToast(`Kayıt versiyonu başarıyla ONAYLANDI!`);
+      showToast("Kayıt onaylandı!");
       closeModal("modal-record-detail");
       loadReviews();
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error(err);
     } finally {
       setBusy(false);
     }
   });
 
   document.getElementById("btn-record-reject").addEventListener("click", async () => {
-    if (!state.currentRecordId) return;
-    const reviewer = document.getElementById("txt-reviewer-name").value || "yasin";
-    const note = document.getElementById("txt-reviewer-note").value || null;
+    if (!state.currentRecordId || !state.currentVersionId) return;
+    const reviewer = document.getElementById("txt-reviewer-name").value.trim() || "operator";
+    const note = document.getElementById("txt-reviewer-note").value.trim();
 
     try {
       setBusy(true);
-      await apiRequest(`/api/records/${encodeURIComponent(state.currentRecordId)}/reject`, {
+      await apiRequest(`/api/reviews/records/${encodeURIComponent(state.currentRecordId)}/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reviewer, note }),
+        body: JSON.stringify({ version_id: state.currentVersionId, reviewer: reviewer, note: note }),
       });
-      showToast(`Kayıt REDDEDİLDİ!`, "warning");
+      showToast("Kayıt reddedildi!");
       closeModal("modal-record-detail");
       loadReviews();
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error(err);
     } finally {
       setBusy(false);
     }
   });
 }
 
-// 5. Releases
+// --- Releases Handler ---
 async function loadReleases() {
   try {
-    const releases = await apiRequest("/api/releases");
+    setBusy(true);
+    const data = await apiRequest("/api/releases");
     const tbl = document.getElementById("tbl-releases");
     tbl.innerHTML = "";
 
-    (releases || []).forEach((r) => {
-      const counts = r.counts || {};
-      const tr = document.createElement("tr");
-
-      let actionsHtml = "";
-      if (r.status === "verified") {
-        actionsHtml = `<button class="btn btn-sm btn-primary btn-rel-pub" data-id="${escapeHtml(r.release_id)}">Publish</button>`;
-      } else if (r.status === "published") {
-        actionsHtml = `
-          <button class="btn btn-sm btn-success btn-rel-imp" data-id="${escapeHtml(r.release_id)}">Import Staging</button>
-          <button class="btn btn-sm btn-danger btn-rel-rev" data-id="${escapeHtml(r.release_id)}">Revoke</button>
+    if (data && data.length > 0) {
+      data.forEach((rel) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(rel.release_id)}</code></td>
+          <td>${statusBadge(rel.status)}</td>
+          <td>${rel.counts?.legislation || 0}</td>
+          <td>${rel.counts?.article || 0}</td>
+          <td>${rel.counts?.decision || 0}</td>
+          <td>${rel.counts?.citation || 0}</td>
+          <td>${escapeHtml(rel.created_at ? rel.created_at.split("T")[0] : "-")}</td>
+          <td>
+            ${rel.status === "created" ? `<button class="btn btn-primary btn-sm" onclick="publishRelease('${escapeHtml(rel.release_id)}')">Yayınla</button>` : ""}
+            ${rel.status === "published" ? `<button class="btn btn-success btn-sm" onclick="importRelease('${escapeHtml(rel.release_id)}')">MESA'ya Aktar</button>` : ""}
+            ${rel.status === "imported" ? `<button class="btn btn-danger btn-sm" onclick="rollbackRelease('${escapeHtml(rel.release_id)}')">Rollback</button>` : ""}
+            <a href="/api/releases/${encodeURIComponent(rel.release_id)}/package" class="btn btn-secondary btn-sm" target="_blank">İndir</a>
+          </td>
         `;
-      }
-
-      tr.innerHTML = `
-        <td><code>${escapeHtml(r.release_id)}</code></td>
-        <td>${statusBadge(r.status)}</td>
-        <td>${counts.legislation_count || 0}</td>
-        <td>${counts.article_count || 0}</td>
-        <td>${counts.decision_count || 0}</td>
-        <td>${counts.citation_count || 0}</td>
-        <td>${escapeHtml(r.created_at ? r.created_at.substring(0, 19) : "")}</td>
-        <td>
-          <button class="btn btn-sm btn-secondary btn-rel-ver" data-id="${escapeHtml(r.release_id)}">Verify</button>
-          ${actionsHtml}
-        </td>
-      `;
-      tbl.appendChild(tr);
-    });
-
-    // Attach release action events
-    tbl.querySelectorAll(".btn-rel-ver").forEach((b) => {
-      b.addEventListener("click", async () => {
-        try {
-          const res = await apiRequest(`/api/releases/${encodeURIComponent(b.dataset.id)}/verify`, { method: "POST" });
-          showToast(`Release ${b.dataset.id} doğrulaması BAŞARILI!`);
-        } catch (e) {
-          console.error(e);
-        }
+        tbl.appendChild(tr);
       });
-    });
-
-    tbl.querySelectorAll(".btn-rel-pub").forEach((b) => {
-      b.addEventListener("click", async () => {
-        try {
-          setBusy(true);
-          await apiRequest(`/api/releases/${encodeURIComponent(b.dataset.id)}/publish`, { method: "POST" });
-          showToast(`Release ${b.dataset.id} YAYINLANDI!`);
-          loadReleases();
-        } catch (e) {
-          console.error(e);
-        } finally {
-          setBusy(false);
-        }
-      });
-    });
-
-    tbl.querySelectorAll(".btn-rel-imp").forEach((b) => {
-      b.addEventListener("click", async () => {
-        try {
-          setBusy(true);
-          const res = await apiRequest(`/api/releases/${encodeURIComponent(b.dataset.id)}/import`, { method: "POST" });
-          showToast(`Release ${b.dataset.id} MESA Staging'e AKTARILDI! (${res.status})`);
-          loadDashboard();
-        } catch (e) {
-          console.error(e);
-        } finally {
-          setBusy(false);
-        }
-      });
-    });
-
-    tbl.querySelectorAll(".btn-rel-rev").forEach((b) => {
-      b.addEventListener("click", async () => {
-        const reason = prompt("Revoke gerekçesi giriniz:");
-        if (!reason) return;
-        try {
-          setBusy(true);
-          await apiRequest(`/api/releases/${encodeURIComponent(b.dataset.id)}/revoke`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reason }),
-          });
-          showToast(`Release ${b.dataset.id} GERİ ÇEKİLDİ (Revoked).`, "warning");
-          loadReleases();
-        } catch (e) {
-          console.error(e);
-        } finally {
-          setBusy(false);
-        }
-      });
-    });
+    } else {
+      tbl.innerHTML = `<tr><td colspan="8" class="text-muted">Release bulunamadı.</td></tr>`;
+    }
   } catch (err) {
-    console.error(err);
+    console.error("Releaseler yüklenemedi:", err);
+  } finally {
+    setBusy(false);
   }
 }
 
-// Build Release Setup
 function setupReleaseBuildHandler() {
   document.getElementById("btn-build-release").addEventListener("click", async () => {
-    const relId = document.getElementById("txt-release-id").value.trim();
-    if (!relId) {
+    const releaseId = document.getElementById("txt-release-id").value.trim();
+    if (!releaseId) {
       showToast("Lütfen bir Release ID giriniz.", "warning");
       return;
     }
 
     try {
       setBusy(true);
-      const res = await apiRequest("/api/releases", {
+      await apiRequest("/api/releases/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ release_id: relId }),
+        body: JSON.stringify({ release_id: releaseId }),
       });
-      showToast(`Release ${res.release_id} başarıyla paketlendi!`);
+      showToast("Release başarıyla paketlendi!");
       document.getElementById("txt-release-id").value = "";
       loadReleases();
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error(err);
     } finally {
       setBusy(false);
     }
   });
 }
 
-// 6. System
-async function loadSystemStatus() {
+async function publishRelease(releaseId) {
   try {
-    const data = await apiRequest("/api/system/status");
-    document.getElementById("sys-status-output").textContent = JSON.stringify(data, null, 2);
-  } catch (err) {
-    console.error(err);
-  }
+    setBusy(true);
+    await apiRequest(`/api/releases/${encodeURIComponent(releaseId)}/publish`, { method: "POST" });
+    showToast("Release yayınlandı!");
+    loadReleases();
+  } catch (err) { console.error(err); } finally { setBusy(false); }
 }
 
-// 7. Explorer
-const explorerState = { page: 1 };
+async function importRelease(releaseId) {
+  try {
+    setBusy(true);
+    await apiRequest(`/api/releases/${encodeURIComponent(releaseId)}/import-to-mesa`, { method: "POST" });
+    showToast("Release MESA'ya aktarıldı!");
+    loadReleases();
+  } catch (err) { console.error(err); } finally { setBusy(false); }
+}
 
+async function rollbackRelease(releaseId) {
+  if (!confirm(`Release ${releaseId} geri çekilsin mi?`)) return;
+  try {
+    setBusy(true);
+    await apiRequest(`/api/releases/${encodeURIComponent(releaseId)}/rollback`, { method: "POST" });
+    showToast("Release geri çekildi!");
+    loadReleases();
+  } catch (err) { console.error(err); } finally { setBusy(false); }
+}
+
+// --- Explorer Handler ---
+let explorerState = { page: 1, limit: 20 };
 async function loadExplorer() {
   try {
-    const q = document.getElementById("filter-explorer-q").value;
-    const rType = document.getElementById("filter-explorer-type").value;
+    setBusy(true);
+    const q = document.getElementById("filter-explorer-q").value.trim();
+    const type = document.getElementById("filter-explorer-type").value;
     const approval = document.getElementById("filter-explorer-approval").value;
     const sort = document.getElementById("filter-explorer-sort").value;
+    const offset = (explorerState.page - 1) * explorerState.limit;
 
-    let url = `/api/explorer/search?page=${explorerState.page}&page_size=25`;
+    let url = `/api/explorer/records?limit=${explorerState.limit}&offset=${offset}&sort=${sort}`;
     if (q) url += `&q=${encodeURIComponent(q)}`;
-    if (rType) url += `&record_type=${encodeURIComponent(rType)}`;
-    if (approval) url += `&approval_status=${encodeURIComponent(approval)}`;
-    if (sort) url += `&sort=${encodeURIComponent(sort)}`;
+    if (type) url += `&type=${encodeURIComponent(type)}`;
+    if (approval) url += `&approval=${encodeURIComponent(approval)}`;
 
     const data = await apiRequest(url);
+    document.getElementById("lbl-explorer-page").textContent = `Sayfa ${explorerState.page}`;
+
     const tbl = document.getElementById("tbl-explorer");
     tbl.innerHTML = "";
 
-    (data.items || []).forEach((r) => {
-      const tr = document.createElement("tr");
-      const td1 = document.createElement("td");
-      const chk = document.createElement("input");
-      chk.type = "checkbox";
-      chk.dataset.id = r.record_id;
-      td1.appendChild(chk);
-      tr.appendChild(td1);
-
-      const cells = [
-        r.record_id, r.record_type,
-        r.document_id || "-", r.source_id || "-",
-        r.approval_status, r.validation_status,
-        r.created_at ? r.created_at.substring(0, 19) : "",
-      ];
-      cells.forEach((val, i) => {
-        const td = document.createElement("td");
-        if (i === 4 || i === 5) {
-          td.innerHTML = statusBadge(val);
-        } else if (i === 0) {
-          const code = document.createElement("code");
-          code.textContent = val;
-          td.appendChild(code);
-        } else {
-          td.textContent = val;
-        }
-        tr.appendChild(td);
+    if (data.items && data.items.length > 0) {
+      data.items.forEach((item) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><input type="checkbox" value="${escapeHtml(item.record_id)}"></td>
+          <td><code>${escapeHtml(item.record_id)}</code></td>
+          <td>${escapeHtml(item.record_type)}</td>
+          <td><code>${escapeHtml(item.document_id)}</code></td>
+          <td>${escapeHtml(item.source_id)}</td>
+          <td>${statusBadge(item.approval_status)}</td>
+          <td>${item.validation_ok ? '<span class="badge badge-success">OK</span>' : '<span class="badge badge-danger">Fail</span>'}</td>
+          <td>${escapeHtml(item.created_at ? item.created_at.split("T")[0] : "-")}</td>
+        `;
+        tbl.appendChild(tr);
       });
-      tbl.appendChild(tr);
-    });
-
-    document.getElementById("lbl-explorer-page").textContent = `Sayfa ${data.page || explorerState.page}`;
-
-    // Facets
-    try {
-      const facets = await apiRequest("/api/explorer/facets");
-      const facetsBar = document.getElementById("explorer-facets");
-      facetsBar.innerHTML = "";
-      if (facets.record_types) {
-        Object.entries(facets.record_types).forEach(([k, v]) => {
-          const span = document.createElement("span");
-          span.className = "badge badge-info";
-          span.textContent = `${k}: ${v}`;
-          facetsBar.appendChild(span);
-        });
-      }
-      if (facets.approval_statuses) {
-        Object.entries(facets.approval_statuses).forEach(([k, v]) => {
-          const span = document.createElement("span");
-          span.className = "badge badge-warning";
-          span.textContent = `${k}: ${v}`;
-          facetsBar.appendChild(span);
-        });
-      }
-    } catch (_) {}
-  } catch (err) {
-    console.error("Explorer error:", err);
-  }
+    } else {
+      tbl.innerHTML = `<tr><td colspan="8" class="text-muted">Kayıt bulunamadı.</td></tr>`;
+    }
+  } catch (err) { console.error(err); } finally { setBusy(false); }
 }
 
-// 8. Issues
+// --- Issues Handler ---
 async function loadIssues() {
   try {
+    setBusy(true);
     const status = document.getElementById("filter-issue-status").value;
     const severity = document.getElementById("filter-issue-severity").value;
+
     let url = "/api/issues?";
     if (status) url += `status=${encodeURIComponent(status)}&`;
-    if (severity) url += `severity=${encodeURIComponent(severity)}&`;
+    if (severity) url += `severity=${encodeURIComponent(severity)}`;
 
     const data = await apiRequest(url);
     const tbl = document.getElementById("tbl-issues");
     tbl.innerHTML = "";
 
-    (data || []).forEach((iss) => {
-      const tr = document.createElement("tr");
-      const fields = [iss.issue_id, iss.subject_type, iss.subject_id, iss.severity, iss.code, iss.message, iss.status];
-      fields.forEach((val, i) => {
-        const td = document.createElement("td");
-        if (i === 3) {
-          td.innerHTML = statusBadge(val);
-        } else if (i === 6) {
-          td.innerHTML = statusBadge(val);
-        } else if (i === 0) {
-          const code = document.createElement("code");
-          code.textContent = val;
-          td.appendChild(code);
-        } else {
-          td.textContent = val || "-";
-        }
-        tr.appendChild(td);
+    if (data && data.length > 0) {
+      data.forEach((issue) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(issue.issue_id)}</code></td>
+          <td>${escapeHtml(issue.subject_type)}</td>
+          <td><code>${escapeHtml(issue.subject_id)}</code></td>
+          <td><span class="badge badge-${issue.severity === 'blocker' || issue.severity === 'error' ? 'danger' : 'warning'}">${escapeHtml(issue.severity)}</span></td>
+          <td><code>${escapeHtml(issue.code)}</code></td>
+          <td>${escapeHtml(issue.message)}</td>
+          <td>${statusBadge(issue.status)}</td>
+        `;
+        tbl.appendChild(tr);
       });
-      tbl.appendChild(tr);
-    });
-  } catch (err) {
-    console.error("Issues error:", err);
-  }
+    } else {
+      tbl.innerHTML = `<tr><td colspan="7" class="text-muted">Sorun bulunmuyor.</td></tr>`;
+    }
+  } catch (err) { console.error(err); } finally { setBusy(false); }
 }
 
-// 9. Sources
+// --- Sources Handler (Read Only) ---
 async function loadSources() {
   try {
+    setBusy(true);
     const data = await apiRequest("/api/sources");
     const container = document.getElementById("sources-list");
     container.innerHTML = "";
-    (data || []).forEach((s) => {
-      const div = document.createElement("div");
-      div.className = "stat-card";
-      const lbl = document.createElement("span");
-      lbl.className = "stat-label";
-      lbl.textContent = s.source_id;
-      const val = document.createElement("span");
-      val.className = "stat-val";
-      val.textContent = s.policy_version || "1.0.0";
-      div.appendChild(lbl);
-      div.appendChild(val);
-      container.appendChild(div);
-    });
-  } catch (_) {
-    document.getElementById("sources-list").textContent = "Kaynak bilgisi yüklenmedi.";
-  }
 
-
+    if (data && data.length > 0) {
+      data.forEach((src) => {
+        const card = document.createElement("div");
+        card.className = "stat-card";
+        card.innerHTML = `
+          <h4>${escapeHtml(src.name || src.source_id)} <code>(${escapeHtml(src.source_id)})</code></h4>
+          <p><strong>Base URL:</strong> ${escapeHtml(src.base_url)}</p>
+          <p><strong>Access Mode:</strong> ${escapeHtml(src.access_mode)} | <strong>Enabled:</strong> ${src.enabled ? "Evet" : "Hayır"}</p>
+          <p><strong>Concurrency:</strong> ${src.http?.concurrency || 1} | <strong>Min Interval:</strong> ${src.http?.min_interval_seconds || 0}s | <strong>Max Download:</strong> ${Math.round((src.http?.max_download_bytes || 0) / 1024 / 1024)} MB</p>
+        `;
+        container.appendChild(card);
+      });
+    } else {
+      container.innerHTML = `<p class="text-muted">Kaynak bilgisi yok.</p>`;
+    }
+  } catch (err) { console.error(err); } finally { setBusy(false); }
 }
 
-// 10. Exports
+// --- Exports Handler ---
 async function loadExports() {
   try {
+    setBusy(true);
     const data = await apiRequest("/api/exports");
     const tbl = document.getElementById("tbl-exports");
     tbl.innerHTML = "";
-    (Array.isArray(data) ? data : []).forEach((ex) => {
-      const tr = document.createElement("tr");
-      const cells = [ex.export_id, ex.export_type, ex.status, ex.file_path || "-", ex.created_at ? ex.created_at.substring(0, 19) : ""];
-      cells.forEach((val, i) => {
-        const td = document.createElement("td");
-        if (i === 2) {
-          td.innerHTML = statusBadge(val);
-        } else {
-          td.textContent = val || "-";
-        }
-        tr.appendChild(td);
+
+    if (data && data.length > 0) {
+      data.forEach((exp) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(exp.export_id)}</code></td>
+          <td>${escapeHtml(exp.export_type)}</td>
+          <td>${statusBadge(exp.status)}</td>
+          <td><code>${escapeHtml(exp.filename)}</code></td>
+          <td>${escapeHtml(exp.created_at ? exp.created_at.split("T")[0] : "-")}</td>
+          <td><a href="/api/exports/${encodeURIComponent(exp.export_id)}/download" class="btn btn-secondary btn-sm" target="_blank">İndir</a></td>
+        `;
+        tbl.appendChild(tr);
       });
-      const tdDl = document.createElement("td");
-      if (ex.status === "ready" && ex.download_path) {
-        const a = document.createElement("a");
-        a.href = ex.download_path;
-        a.textContent = "İndir";
-        a.className = "btn btn-sm btn-success";
-        tdDl.appendChild(a);
-      }
-      tr.appendChild(tdDl);
-      tbl.appendChild(tr);
-    });
-  } catch (err) {
-    console.error("Exports error:", err);
-  }
+    } else {
+      tbl.innerHTML = `<tr><td colspan="6" class="text-muted">Dışa aktarma kaydı yok.</td></tr>`;
+    }
+  } catch (err) { console.error(err); } finally { setBusy(false); }
 }
 
-// 11. Operations
+// --- Operations Handler ---
 async function loadOperations() {
   try {
+    setBusy(true);
     const data = await apiRequest("/api/operations/jobs");
     const tbl = document.getElementById("tbl-operations");
     tbl.innerHTML = "";
-    (Array.isArray(data) ? data : []).forEach((job) => {
-      const tr = document.createElement("tr");
-      const cells = [
-        job.job_id, job.operation_type, job.status,
-        job.progress || "-",
-        job.started_at ? job.started_at.substring(0, 19) : "-",
-        job.finished_at ? job.finished_at.substring(0, 19) : "-",
-      ];
-      cells.forEach((val, i) => {
-        const td = document.createElement("td");
-        if (i === 2) {
-          td.innerHTML = statusBadge(val);
-        } else {
-          td.textContent = val;
-        }
-        tr.appendChild(td);
+
+    if (data && data.length > 0) {
+      data.forEach((job) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${escapeHtml(job.job_id)}</code></td>
+          <td>${escapeHtml(job.operation_type)}</td>
+          <td>${statusBadge(job.status)}</td>
+          <td>${job.progress_pct || 0}%</td>
+          <td>${escapeHtml(job.started_at ? job.started_at.split("T")[0] : "-")}</td>
+          <td>${escapeHtml(job.completed_at ? job.completed_at.split("T")[0] : "-")}</td>
+        `;
+        tbl.appendChild(tr);
       });
-      tbl.appendChild(tr);
-    });
-  } catch (err) {
-    console.error("Operations error:", err);
-  }
+    } else {
+      tbl.innerHTML = `<tr><td colspan="6" class="text-muted">Operasyon kaydı yok.</td></tr>`;
+    }
+  } catch (err) { console.error(err); } finally { setBusy(false); }
 }
 
-// 12. Audit
+// --- Audit Handler ---
 async function loadAudit() {
   try {
-    const actor = document.getElementById("filter-audit-actor").value;
-    let url = "/api/audit-events";
-    if (actor) url += `?actor=${encodeURIComponent(actor)}`;
+    setBusy(true);
+    const actor = document.getElementById("filter-audit-actor").value.trim();
+    let url = "/api/audit/logs?limit=50";
+    if (actor) url += `&actor=${encodeURIComponent(actor)}`;
 
-    let data;
-    try {
-      data = await apiRequest(url);
-    } catch (_) {
-      data = await apiRequest("/api/audit");
-    }
-
+    const data = await apiRequest(url);
     const tbl = document.getElementById("tbl-audit");
     tbl.innerHTML = "";
-    (Array.isArray(data) ? data : []).forEach((evt) => {
-      const tr = document.createElement("tr");
-      const cells = [
-        evt.timestamp || evt.created_at || "-",
-        evt.actor || "-",
-        evt.action || evt.event_type || "-",
-        evt.subject_id || evt.target || "-",
-        evt.details ? (typeof evt.details === "string" ? evt.details : JSON.stringify(evt.details)) : "-",
-      ];
-      cells.forEach((val) => {
-        const td = document.createElement("td");
-        td.textContent = val;
-        tr.appendChild(td);
+
+    if (data && data.length > 0) {
+      data.forEach((log) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${escapeHtml(log.created_at ? log.created_at.replace("T", " ").substring(0, 19) : "-")}</td>
+          <td>${escapeHtml(log.actor)}</td>
+          <td><code>${escapeHtml(log.action)}</code></td>
+          <td><code>${escapeHtml(log.subject_id || "-")}</code></td>
+          <td><small>${escapeHtml(log.details_json || "-")}</small></td>
+        `;
+        tbl.appendChild(tr);
       });
-      tbl.appendChild(tr);
-    });
-  } catch (err) {
-    console.error("Audit error:", err);
-  }
+    } else {
+      tbl.innerHTML = `<tr><td colspan="5" class="text-muted">Audit kaydı yok.</td></tr>`;
+    }
+  } catch (err) { console.error(err); } finally { setBusy(false); }
+}
+
+// --- System Handler ---
+async function loadSystem() {
+  try {
+    setBusy(true);
+    const data = await apiRequest("/api/system/status");
+    document.getElementById("sys-status-output").textContent = JSON.stringify(data, null, 2);
+  } catch (err) { console.error(err); } finally { setBusy(false); }
 }
 
 function setupSystemHandlers() {
   document.getElementById("btn-sys-doctor").addEventListener("click", async () => {
     try {
       setBusy(true);
-      const res = await apiRequest("/api/system/doctor", { method: "POST" });
-      document.getElementById("sys-status-output").textContent = JSON.stringify(res, null, 2);
+      const data = await apiRequest("/api/system/doctor", { method: "POST" });
+      document.getElementById("sys-status-output").textContent = JSON.stringify(data, null, 2);
       showToast("Doctor kontrolü tamamlandı.");
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
-    }
+    } catch (err) { console.error(err); } finally { setBusy(false); }
   });
 
   document.getElementById("btn-sys-backup").addEventListener("click", async () => {
     try {
       setBusy(true);
-      const res = await apiRequest("/api/system/backup", { method: "POST" });
-      showToast(`Backup alındı: ${res.backup_path}`);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
-    }
+      const data = await apiRequest("/api/system/backup", { method: "POST" });
+      showToast(`Backup alındı: ${data.backup_path || 'Tamamlandı'}`);
+      loadSystem();
+    } catch (err) { console.error(err); } finally { setBusy(false); }
   });
 }
 
-// --- Modals ---
-function showModal(modalId) {
-  document.getElementById(modalId)?.classList.remove("hidden");
-}
-
-function closeModal(modalId) {
-  document.getElementById(modalId)?.classList.add("hidden");
-}
-
+// --- Setup Modals & Mobile Controls ---
 function setupModals() {
   document.querySelectorAll("[data-close]").forEach((btn) => {
-    btn.addEventListener("click", () => closeModal(btn.dataset.close));
+    btn.addEventListener("click", () => {
+      closeModal(btn.dataset.close);
+    });
   });
 
   document.getElementById("btn-token").addEventListener("click", () => {
@@ -958,6 +912,39 @@ function setupModals() {
     closeModal("modal-token");
     showToast("Admin Token kaydedildi.");
     loadDashboard();
+  });
+
+  // Mobile menu listeners
+  const btnMobile = document.getElementById("btn-mobile-menu");
+  const overlay = document.getElementById("sidebar-overlay");
+  if (btnMobile) {
+    btnMobile.addEventListener("click", () => {
+      const sidebar = document.getElementById("app-sidebar");
+      if (sidebar) sidebar.classList.toggle("open");
+      if (overlay) overlay.classList.toggle("open");
+    });
+  }
+  if (overlay) {
+    overlay.addEventListener("click", closeMobileSidebar);
+  }
+
+  // Theme selector listener
+  const themeSelect = document.getElementById("sel-theme-control");
+  if (themeSelect && window.MesaTheme) {
+    themeSelect.value = window.MesaTheme.get();
+    themeSelect.addEventListener("change", (e) => {
+      window.MesaTheme.set(e.target.value);
+    });
+  }
+
+  // Escape key closes modals
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => {
+        closeModal(m.id);
+      });
+      closeMobileSidebar();
+    }
   });
 }
 
@@ -1000,7 +987,6 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function setupNewViewHandlers() {
-  // Explorer
   document.getElementById("btn-explorer-search").addEventListener("click", () => {
     explorerState.page = 1;
     loadExplorer();
@@ -1018,12 +1004,8 @@ function setupNewViewHandlers() {
     });
   });
 
-  // Issues
   document.getElementById("btn-issue-filter").addEventListener("click", () => loadIssues());
 
-
-
-  // Exports
   document.getElementById("btn-export-create").addEventListener("click", async () => {
     const exportType = document.getElementById("sel-export-type").value;
     try {
@@ -1039,7 +1021,6 @@ function setupNewViewHandlers() {
     finally { setBusy(false); }
   });
 
-  // Operations
   document.getElementById("btn-op-create").addEventListener("click", async () => {
     const opType = document.getElementById("sel-op-type").value;
     const scope = document.getElementById("txt-op-scope").value;
@@ -1056,6 +1037,5 @@ function setupNewViewHandlers() {
     finally { setBusy(false); }
   });
 
-  // Audit
   document.getElementById("btn-audit-filter").addEventListener("click", () => loadAudit());
 }

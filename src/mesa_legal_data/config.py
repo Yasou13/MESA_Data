@@ -51,12 +51,12 @@ class SettingsModel(BaseSettings):
 class HttpConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user_agent: str
-    concurrency: int
-    min_interval_seconds: int
-    timeout_seconds: int
-    retries: int
-    max_requests_per_run: int
-    max_download_bytes: int
+    concurrency: int = Field(default=1, ge=1)
+    min_interval_seconds: float = Field(default=0, ge=0)
+    timeout_seconds: float = Field(default=30.0, gt=0)
+    retries: int = Field(default=3, ge=0)
+    max_requests_per_run: int = Field(default=100, ge=1)
+    max_download_bytes: int = Field(default=52428800, ge=1)
 
 
 class SourceConfig(BaseModel):

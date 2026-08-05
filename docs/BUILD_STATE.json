@@ -14,9 +14,24 @@
     "FREEZE-009",
     "FREEZE-010",
     "FREEZE-011",
-    "FREEZE-012"
+    "FREEZE-012",
+    "POLISH-001",
+    "POLISH-002",
+    "POLISH-003",
+    "POLISH-004",
+    "POLISH-005",
+    "POLISH-006",
+    "POLISH-007",
+    "POLISH-008",
+    "POLISH-009",
+    "POLISH-010",
+    "POLISH-011",
+    "POLISH-012",
+    "POLISH-013"
   ],
   "last_test_command": "uv run pytest -q",
   "last_test_result": "passed",
-  "updated_at": "2026-08-05T15:19:00+03:00"
+  "polish_status": "completed",
+  "polish_current_task": "CLOSED",
+  "updated_at": "2026-08-05T16:30:00+03:00"
 }
