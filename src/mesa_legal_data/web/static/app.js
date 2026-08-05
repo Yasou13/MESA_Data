@@ -83,6 +83,7 @@ async function apiRequest(endpoint, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
     headers["X-MESA-Requested-With"] = "web-admin";
+    headers["X-MESA-Actor"] = sessionStorage.getItem("mesa_actor") || "operator";
   }
 
   options.headers = headers;
@@ -140,8 +141,14 @@ function switchView(viewName) {
     dashboard: "Genel Bakış",
     add_data: "Veri Ekle",
     documents: "Belgeler",
-    reviews: "Kayıt İnceleme",
-    releases: "Release Yönetimi",
+    explorer: "Veri Gezgini",
+    reviews: "İnceleme Masası",
+    issues: "Sorunlar",
+    sources: "Kaynaklar",
+    releases: "Release Merkezi",
+    exports: "Dışa Aktarma",
+    operations: "Operasyonlar",
+    audit: "Audit Geçmişi",
     system: "Sistem Durumu",
   };
   document.getElementById("view-title").textContent = titles[viewName] || "MESA Panel";
@@ -149,8 +156,14 @@ function switchView(viewName) {
   // Trigger view reload
   if (viewName === "dashboard") loadDashboard();
   if (viewName === "documents") loadDocuments();
+  if (viewName === "explorer") loadExplorer();
   if (viewName === "reviews") loadReviews();
+  if (viewName === "issues") loadIssues();
+  if (viewName === "sources") loadSources();
   if (viewName === "releases") loadReleases();
+  if (viewName === "exports") loadExports();
+  if (viewName === "operations") loadOperations();
+  if (viewName === "audit") loadAudit();
   if (viewName === "system") loadSystemStatus();
 }
 
@@ -623,6 +636,287 @@ async function loadSystemStatus() {
   }
 }
 
+// 7. Explorer
+const explorerState = { page: 1 };
+
+async function loadExplorer() {
+  try {
+    const q = document.getElementById("filter-explorer-q").value;
+    const rType = document.getElementById("filter-explorer-type").value;
+    const approval = document.getElementById("filter-explorer-approval").value;
+    const sort = document.getElementById("filter-explorer-sort").value;
+
+    let url = `/api/explorer/search?page=${explorerState.page}&page_size=25`;
+    if (q) url += `&q=${encodeURIComponent(q)}`;
+    if (rType) url += `&record_type=${encodeURIComponent(rType)}`;
+    if (approval) url += `&approval_status=${encodeURIComponent(approval)}`;
+    if (sort) url += `&sort=${encodeURIComponent(sort)}`;
+
+    const data = await apiRequest(url);
+    const tbl = document.getElementById("tbl-explorer");
+    tbl.innerHTML = "";
+
+    (data.items || []).forEach((r) => {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td");
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.dataset.id = r.record_id;
+      td1.appendChild(chk);
+      tr.appendChild(td1);
+
+      const cells = [
+        r.record_id, r.record_type,
+        r.document_id || "-", r.source_id || "-",
+        r.approval_status, r.validation_status,
+        r.created_at ? r.created_at.substring(0, 19) : "",
+      ];
+      cells.forEach((val, i) => {
+        const td = document.createElement("td");
+        if (i === 4 || i === 5) {
+          td.innerHTML = statusBadge(val);
+        } else if (i === 0) {
+          const code = document.createElement("code");
+          code.textContent = val;
+          td.appendChild(code);
+        } else {
+          td.textContent = val;
+        }
+        tr.appendChild(td);
+      });
+      tbl.appendChild(tr);
+    });
+
+    document.getElementById("lbl-explorer-page").textContent = `Sayfa ${data.page || explorerState.page}`;
+
+    // Facets
+    try {
+      const facets = await apiRequest("/api/explorer/facets");
+      const facetsBar = document.getElementById("explorer-facets");
+      facetsBar.innerHTML = "";
+      if (facets.record_types) {
+        Object.entries(facets.record_types).forEach(([k, v]) => {
+          const span = document.createElement("span");
+          span.className = "badge badge-info";
+          span.textContent = `${k}: ${v}`;
+          facetsBar.appendChild(span);
+        });
+      }
+      if (facets.approval_statuses) {
+        Object.entries(facets.approval_statuses).forEach(([k, v]) => {
+          const span = document.createElement("span");
+          span.className = "badge badge-warning";
+          span.textContent = `${k}: ${v}`;
+          facetsBar.appendChild(span);
+        });
+      }
+    } catch (_) {}
+  } catch (err) {
+    console.error("Explorer error:", err);
+  }
+}
+
+// 8. Issues
+async function loadIssues() {
+  try {
+    const status = document.getElementById("filter-issue-status").value;
+    const severity = document.getElementById("filter-issue-severity").value;
+    let url = "/api/issues?";
+    if (status) url += `status=${encodeURIComponent(status)}&`;
+    if (severity) url += `severity=${encodeURIComponent(severity)}&`;
+
+    const data = await apiRequest(url);
+    const tbl = document.getElementById("tbl-issues");
+    tbl.innerHTML = "";
+
+    (data || []).forEach((iss) => {
+      const tr = document.createElement("tr");
+      const fields = [iss.issue_id, iss.subject_type, iss.subject_id, iss.severity, iss.code, iss.message, iss.status];
+      fields.forEach((val, i) => {
+        const td = document.createElement("td");
+        if (i === 3) {
+          td.innerHTML = statusBadge(val);
+        } else if (i === 6) {
+          td.innerHTML = statusBadge(val);
+        } else if (i === 0) {
+          const code = document.createElement("code");
+          code.textContent = val;
+          td.appendChild(code);
+        } else {
+          td.textContent = val || "-";
+        }
+        tr.appendChild(td);
+      });
+      tbl.appendChild(tr);
+    });
+  } catch (err) {
+    console.error("Issues error:", err);
+  }
+}
+
+// 9. Sources
+async function loadSources() {
+  try {
+    const data = await apiRequest("/api/sources");
+    const container = document.getElementById("sources-list");
+    container.innerHTML = "";
+    (data || []).forEach((s) => {
+      const div = document.createElement("div");
+      div.className = "stat-card";
+      const lbl = document.createElement("span");
+      lbl.className = "stat-label";
+      lbl.textContent = s.source_id;
+      const val = document.createElement("span");
+      val.className = "stat-val";
+      val.textContent = s.policy_version || "1.0.0";
+      div.appendChild(lbl);
+      div.appendChild(val);
+      container.appendChild(div);
+    });
+  } catch (_) {
+    document.getElementById("sources-list").textContent = "Kaynak bilgisi yüklenmedi.";
+  }
+
+  // Config revisions
+  try {
+    const revs = await apiRequest("/api/source-configs/revisions");
+    const tbl = document.getElementById("tbl-source-revs");
+    tbl.innerHTML = "";
+    (revs || []).forEach((rev) => {
+      const tr = document.createElement("tr");
+      const cells = [rev.revision_id, rev.status, rev.created_by, rev.reason, rev.created_at ? rev.created_at.substring(0, 19) : ""];
+      cells.forEach((val, i) => {
+        const td = document.createElement("td");
+        if (i === 1) {
+          td.innerHTML = statusBadge(val);
+        } else {
+          td.textContent = val || "-";
+        }
+        tr.appendChild(td);
+      });
+      const tdAct = document.createElement("td");
+      if (rev.status === "pending" || rev.status === "draft") {
+        const btn = document.createElement("button");
+        btn.className = "btn btn-sm btn-primary";
+        btn.textContent = "Aktifleştir";
+        btn.addEventListener("click", async () => {
+          try {
+            setBusy(true);
+            await apiRequest(`/api/source-configs/revisions/${encodeURIComponent(rev.revision_id)}/activate`, { method: "POST" });
+            showToast("Config revision aktifleştirildi!");
+            loadSources();
+          } catch (e) { console.error(e); }
+          finally { setBusy(false); }
+        });
+        tdAct.appendChild(btn);
+      }
+      tr.appendChild(tdAct);
+      tbl.appendChild(tr);
+    });
+  } catch (_) {}
+}
+
+// 10. Exports
+async function loadExports() {
+  try {
+    const data = await apiRequest("/api/exports");
+    const tbl = document.getElementById("tbl-exports");
+    tbl.innerHTML = "";
+    (Array.isArray(data) ? data : []).forEach((ex) => {
+      const tr = document.createElement("tr");
+      const cells = [ex.export_id, ex.export_type, ex.status, ex.file_path || "-", ex.created_at ? ex.created_at.substring(0, 19) : ""];
+      cells.forEach((val, i) => {
+        const td = document.createElement("td");
+        if (i === 2) {
+          td.innerHTML = statusBadge(val);
+        } else {
+          td.textContent = val || "-";
+        }
+        tr.appendChild(td);
+      });
+      const tdDl = document.createElement("td");
+      if (ex.status === "ready" && ex.download_path) {
+        const a = document.createElement("a");
+        a.href = ex.download_path;
+        a.textContent = "İndir";
+        a.className = "btn btn-sm btn-success";
+        tdDl.appendChild(a);
+      }
+      tr.appendChild(tdDl);
+      tbl.appendChild(tr);
+    });
+  } catch (err) {
+    console.error("Exports error:", err);
+  }
+}
+
+// 11. Operations
+async function loadOperations() {
+  try {
+    const data = await apiRequest("/api/operations/jobs");
+    const tbl = document.getElementById("tbl-operations");
+    tbl.innerHTML = "";
+    (Array.isArray(data) ? data : []).forEach((job) => {
+      const tr = document.createElement("tr");
+      const cells = [
+        job.job_id, job.operation_type, job.status,
+        job.progress || "-",
+        job.started_at ? job.started_at.substring(0, 19) : "-",
+        job.finished_at ? job.finished_at.substring(0, 19) : "-",
+      ];
+      cells.forEach((val, i) => {
+        const td = document.createElement("td");
+        if (i === 2) {
+          td.innerHTML = statusBadge(val);
+        } else {
+          td.textContent = val;
+        }
+        tr.appendChild(td);
+      });
+      tbl.appendChild(tr);
+    });
+  } catch (err) {
+    console.error("Operations error:", err);
+  }
+}
+
+// 12. Audit
+async function loadAudit() {
+  try {
+    const actor = document.getElementById("filter-audit-actor").value;
+    let url = "/api/audit-events";
+    if (actor) url += `?actor=${encodeURIComponent(actor)}`;
+
+    let data;
+    try {
+      data = await apiRequest(url);
+    } catch (_) {
+      data = await apiRequest("/api/audit");
+    }
+
+    const tbl = document.getElementById("tbl-audit");
+    tbl.innerHTML = "";
+    (Array.isArray(data) ? data : []).forEach((evt) => {
+      const tr = document.createElement("tr");
+      const cells = [
+        evt.timestamp || evt.created_at || "-",
+        evt.actor || "-",
+        evt.action || evt.event_type || "-",
+        evt.subject_id || evt.target || "-",
+        evt.details ? (typeof evt.details === "string" ? evt.details : JSON.stringify(evt.details)) : "-",
+      ];
+      cells.forEach((val) => {
+        const td = document.createElement("td");
+        td.textContent = val;
+        tr.appendChild(td);
+      });
+      tbl.appendChild(tr);
+    });
+  } catch (err) {
+    console.error("Audit error:", err);
+  }
+}
+
 function setupSystemHandlers() {
   document.getElementById("btn-sys-doctor").addEventListener("click", async () => {
     try {
@@ -711,7 +1005,87 @@ document.addEventListener("DOMContentLoaded", () => {
   setupReleaseBuildHandler();
   setupSystemHandlers();
   setupModals();
+  setupNewViewHandlers();
 
   // Load initial view
   switchView("dashboard");
 });
+
+function setupNewViewHandlers() {
+  // Explorer
+  document.getElementById("btn-explorer-search").addEventListener("click", () => {
+    explorerState.page = 1;
+    loadExplorer();
+  });
+  document.getElementById("btn-explorer-prev").addEventListener("click", () => {
+    if (explorerState.page > 1) { explorerState.page--; loadExplorer(); }
+  });
+  document.getElementById("btn-explorer-next").addEventListener("click", () => {
+    explorerState.page++;
+    loadExplorer();
+  });
+  document.getElementById("chk-explorer-all").addEventListener("change", (e) => {
+    document.querySelectorAll("#tbl-explorer input[type='checkbox']").forEach((c) => {
+      c.checked = e.target.checked;
+    });
+  });
+
+  // Issues
+  document.getElementById("btn-issue-filter").addEventListener("click", () => loadIssues());
+
+  // Sources
+  document.getElementById("btn-source-submit").addEventListener("click", async () => {
+    const yaml = document.getElementById("txt-source-yaml").value;
+    const reason = document.getElementById("txt-source-reason").value;
+    if (!yaml) { showToast("YAML içeriği gerekli.", "warning"); return; }
+    try {
+      setBusy(true);
+      await apiRequest("/api/source-configs/revisions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content_yaml: yaml, reason: reason, created_by: sessionStorage.getItem("mesa_actor") || "operator" }),
+      });
+      showToast("Config revision oluşturuldu!");
+      document.getElementById("txt-source-yaml").value = "";
+      document.getElementById("txt-source-reason").value = "";
+      loadSources();
+    } catch (e) { console.error(e); }
+    finally { setBusy(false); }
+  });
+
+  // Exports
+  document.getElementById("btn-export-create").addEventListener("click", async () => {
+    const exportType = document.getElementById("sel-export-type").value;
+    try {
+      setBusy(true);
+      await apiRequest("/api/exports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ export_type: exportType }),
+      });
+      showToast("Export oluşturuldu!");
+      loadExports();
+    } catch (e) { console.error(e); }
+    finally { setBusy(false); }
+  });
+
+  // Operations
+  document.getElementById("btn-op-create").addEventListener("click", async () => {
+    const opType = document.getElementById("sel-op-type").value;
+    const scope = document.getElementById("txt-op-scope").value;
+    try {
+      setBusy(true);
+      await apiRequest("/api/operations/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation_type: opType, input: { scope: scope } }),
+      });
+      showToast("İşlem başlatıldı!");
+      loadOperations();
+    } catch (e) { console.error(e); }
+    finally { setBusy(false); }
+  });
+
+  // Audit
+  document.getElementById("btn-audit-filter").addEventListener("click", () => loadAudit());
+}

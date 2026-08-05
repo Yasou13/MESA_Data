@@ -1,11 +1,80 @@
+import json
 import os
 import sqlite3
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
+
+
+def log_audit_event(
+    conn: sqlite3.Connection,
+    *,
+    actor: str,
+    action: str,
+    subject_type: str,
+    subject_id: str,
+    reason: str | None = None,
+    old_sha256: str | None = None,
+    new_sha256: str | None = None,
+    details_json: str = "{}",
+    request_id: str | None = None,
+    event_id: str | None = None,
+) -> str:
+    if not event_id:
+        event_id = f"evt-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        """INSERT INTO audit_events (event_id, actor, action, subject_type, subject_id, old_sha256, new_sha256, reason, details_json, request_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            event_id,
+            actor,
+            action,
+            subject_type,
+            subject_id,
+            old_sha256,
+            new_sha256,
+            reason,
+            details_json,
+            request_id,
+            now,
+        ),
+    )
+    return event_id
+
+
+def audit_event(
+    conn: sqlite3.Connection,
+    actor: str,
+    action: str,
+    subject_type: str,
+    subject_id: str,
+    reason: str | None = None,
+    old_sha256: str | None = None,
+    new_sha256: str | None = None,
+    details: str | dict | None = None,
+    request_id: str | None = None,
+) -> str:
+    if isinstance(details, dict):
+        det_str = json.dumps(details)
+    else:
+        det_str = details or "{}"
+    return log_audit_event(
+        conn,
+        actor=actor,
+        action=action,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        reason=reason,
+        old_sha256=old_sha256,
+        new_sha256=new_sha256,
+        details_json=det_str,
+        request_id=request_id,
+    )
 
 
 def run_doctor_check() -> dict[str, Any]:

@@ -24,11 +24,29 @@
         <button class="nav-btn" data-view="documents">
           <span class="nav-icon">📄</span> Belgeler
         </button>
+        <button class="nav-btn" data-view="explorer">
+          <span class="nav-icon">🔎</span> Veri Gezgini
+        </button>
         <button class="nav-btn" data-view="reviews">
-          <span class="nav-icon">🔍</span> İnceleme
+          <span class="nav-icon">🔍</span> İnceleme Masası
+        </button>
+        <button class="nav-btn" data-view="issues">
+          <span class="nav-icon">⚠️</span> Sorunlar
+        </button>
+        <button class="nav-btn" data-view="sources">
+          <span class="nav-icon">🌐</span> Kaynaklar
         </button>
         <button class="nav-btn" data-view="releases">
-          <span class="nav-icon">📦</span> Release'ler
+          <span class="nav-icon">📦</span> Release Merkezi
+        </button>
+        <button class="nav-btn" data-view="exports">
+          <span class="nav-icon">📤</span> Dışa Aktarma
+        </button>
+        <button class="nav-btn" data-view="operations">
+          <span class="nav-icon">🔄</span> Operasyonlar
+        </button>
+        <button class="nav-btn" data-view="audit">
+          <span class="nav-icon">📋</span> Audit
         </button>
         <button class="nav-btn" data-view="system">
           <span class="nav-icon">⚙️</span> Sistem
@@ -294,7 +312,217 @@
           </div>
         </section>
 
-        <!-- View 6: System -->
+        <!-- View: Explorer -->
+        <section id="view-explorer" class="view-panel hidden">
+          <div class="panel-box">
+            <div class="filter-bar">
+              <input type="text" id="filter-explorer-q" placeholder="Kayıt ara...">
+              <select id="filter-explorer-type">
+                <option value="">Tüm Türler</option>
+                <option value="article">article</option>
+                <option value="legislation">legislation</option>
+                <option value="decision">decision</option>
+                <option value="citation">citation</option>
+              </select>
+              <select id="filter-explorer-approval">
+                <option value="">Tüm Onay</option>
+                <option value="pending">pending</option>
+                <option value="approved">approved</option>
+                <option value="rejected">rejected</option>
+              </select>
+              <select id="filter-explorer-sort">
+                <option value="created_at">Tarih</option>
+                <option value="record_id">Record ID</option>
+                <option value="record_type">Tür</option>
+              </select>
+              <button id="btn-explorer-search" class="btn btn-primary">Ara</button>
+            </div>
+            <div id="explorer-facets" class="facets-bar"></div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th><input type="checkbox" id="chk-explorer-all"></th>
+                    <th>Record ID</th>
+                    <th>Tür</th>
+                    <th>Belge</th>
+                    <th>Kaynak</th>
+                    <th>Onay</th>
+                    <th>Validation</th>
+                    <th>Oluşturulma</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-explorer"></tbody>
+              </table>
+            </div>
+            <div class="pagination-bar">
+              <button id="btn-explorer-prev" class="btn btn-sm">‹ Önceki</button>
+              <span id="lbl-explorer-page">Sayfa 1</span>
+              <button id="btn-explorer-next" class="btn btn-sm">Sonraki ›</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- View: Issues -->
+        <section id="view-issues" class="view-panel hidden">
+          <div class="panel-box">
+            <div class="filter-bar">
+              <select id="filter-issue-status">
+                <option value="open">Açık</option>
+                <option value="resolved">Çözüldü</option>
+                <option value="">Tümü</option>
+              </select>
+              <select id="filter-issue-severity">
+                <option value="">Tüm Önem</option>
+                <option value="blocker">blocker</option>
+                <option value="error">error</option>
+                <option value="warning">warning</option>
+                <option value="info">info</option>
+              </select>
+              <button id="btn-issue-filter" class="btn btn-secondary">Yenile</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Issue ID</th>
+                    <th>Konu Türü</th>
+                    <th>Konu ID</th>
+                    <th>Önem</th>
+                    <th>Kod</th>
+                    <th>Mesaj</th>
+                    <th>Durum</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-issues"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- View: Sources -->
+        <section id="view-sources" class="view-panel hidden">
+          <div class="panel-box">
+            <h3>Kaynak Yapılandırmaları</h3>
+            <div id="sources-list"></div>
+            <hr>
+            <h3>Config Revision Geçmişi</h3>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Revision ID</th>
+                    <th>Durum</th>
+                    <th>Oluşturan</th>
+                    <th>Gerekçe</th>
+                    <th>Oluşturulma</th>
+                    <th>Aksiyonlar</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-source-revs"></tbody>
+              </table>
+            </div>
+            <hr>
+            <h3>Yeni Config Revision</h3>
+            <div class="form-group">
+              <label for="txt-source-yaml">YAML İçeriği</label>
+              <textarea id="txt-source-yaml" rows="6" class="code-input" placeholder="sources:\n  mevzuat:\n    enabled: true"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="txt-source-reason">Gerekçe</label>
+              <input type="text" id="txt-source-reason" placeholder="Yapılandırma güncelleme nedeni">
+            </div>
+            <button id="btn-source-submit" class="btn btn-primary">Revision Oluştur</button>
+          </div>
+        </section>
+
+        <!-- View: Exports -->
+        <section id="view-exports" class="view-panel hidden">
+          <div class="panel-box">
+            <h3>Dışa Aktarma Oluştur</h3>
+            <div class="filter-bar">
+              <select id="sel-export-type">
+                <option value="records_jsonl">records_jsonl (JSONL)</option>
+                <option value="legislation_jsonl">legislation_jsonl</option>
+                <option value="article_jsonl">article_jsonl</option>
+              </select>
+              <button id="btn-export-create" class="btn btn-primary">Dışa Aktar</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Export ID</th>
+                    <th>Tür</th>
+                    <th>Durum</th>
+                    <th>Dosya</th>
+                    <th>Oluşturulma</th>
+                    <th>İndir</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-exports"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- View: Operations -->
+        <section id="view-operations" class="view-panel hidden">
+          <div class="panel-box">
+            <h3>İşlem Oluştur</h3>
+            <div class="filter-bar">
+              <select id="sel-op-type">
+                <option value="revalidate">revalidate</option>
+                <option value="reparse">reparse</option>
+                <option value="rehash">rehash</option>
+              </select>
+              <input type="text" id="txt-op-scope" placeholder="Scope (ör: all)" value="all">
+              <button id="btn-op-create" class="btn btn-primary">Başlat</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Job ID</th>
+                    <th>Tür</th>
+                    <th>Durum</th>
+                    <th>İlerleme</th>
+                    <th>Başlangıç</th>
+                    <th>Bitiş</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-operations"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- View: Audit -->
+        <section id="view-audit" class="view-panel hidden">
+          <div class="panel-box">
+            <h3>Audit Geçmişi</h3>
+            <div class="filter-bar">
+              <input type="text" id="filter-audit-actor" placeholder="Aktör filtresi...">
+              <button id="btn-audit-filter" class="btn btn-secondary">Yenile</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Zaman</th>
+                    <th>Aktör</th>
+                    <th>İşlem</th>
+                    <th>Konu</th>
+                    <th>Detay</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-audit"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- View: System -->
         <section id="view-system" class="view-panel hidden">
           <div class="panel-box">
             <h3>Sistem Teşhisi ve Sağlık Durumu</h3>

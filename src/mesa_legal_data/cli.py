@@ -318,11 +318,11 @@ def review_approve_version(
     note: str | None = typer.Option(None, "--note", help="Approval note"),
 ):
     """Approves all records under a version."""
-    from mesa_legal_data.catalog import approve_version_with_checks, get_connection
+    from mesa_legal_data.catalog import approve_version_streaming, get_connection
 
     conn = get_connection()
     try:
-        res = approve_version_with_checks(conn, version_id, reviewer, note)
+        res = approve_version_streaming(conn, version_id=version_id, reviewer=reviewer, note=note)
         typer.secho(
             f"Successfully APPROVED version {version_id} ({res['approved_records']} records)",
             fg=typer.colors.GREEN,

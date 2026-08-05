@@ -13,6 +13,7 @@ from mesa_legal_data.catalog import (
     get_connection,
     iter_records_for_release,
     list_open_blocking_issues,
+    transaction,
 )
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
@@ -245,41 +246,37 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
                 with open(dest, "rb") as f:
                     file_manifest_entries[rel_schema_path] = hash_stream(f)
 
-        # Query dynamic source_snapshot from database sources table
+        # Query source_snapshot strictly from selected records in spool
+        conn.execute("ATTACH DATABASE ? AS spool", (str(spool_db_path),))
         s_cur = conn.cursor()
         s_cur.execute("""
-            SELECT DISTINCT s.source_id, s.name, s.authority, s.policy_version, s.access_mode
-            FROM sources s
-            JOIN artifacts a ON a.source_id = s.source_id
-            JOIN versions v ON v.artifact_id = a.artifact_id
-            JOIN records r ON r.version_id = v.version_id
-            WHERE r.approval_status = 'approved' AND r.validation_status = 'valid'
+            SELECT
+                a.source_id,
+                COALESCE(s.policy_version, '1.0.0') as policy_version,
+                COUNT(DISTINCT sr.record_id) as record_count,
+                COUNT(DISTINCT a.artifact_id) as artifact_count,
+                MAX(a.retrieved_at) as latest_retrieved_at
+            FROM spool.selected_records sr
+            JOIN records r ON r.record_id = sr.record_id
+            JOIN versions v ON v.version_id = r.version_id
+            JOIN artifacts a ON a.artifact_id = v.artifact_id
+            LEFT JOIN sources s ON s.source_id = a.source_id
+            GROUP BY a.source_id
+            ORDER BY a.source_id ASC
         """)
         source_rows = s_cur.fetchall()
+        conn.execute("DETACH DATABASE spool")
+
         source_snapshot = [
             {
                 "source_id": row[0],
-                "name": row[1],
-                "authority": row[2],
-                "policy_version": row[3],
-                "access_mode": row[4],
+                "policy_version": row[1],
+                "record_count": row[2],
+                "artifact_count": row[3],
+                "latest_retrieved_at": row[4] or datetime.now(UTC).isoformat(),
             }
             for row in source_rows
         ]
-        if not source_snapshot:
-            s_cur.execute(
-                "SELECT source_id, name, authority, policy_version, access_mode FROM sources WHERE enabled = 1"
-            )
-            source_snapshot = [
-                {
-                    "source_id": row[0],
-                    "name": row[1],
-                    "authority": row[2],
-                    "policy_version": row[3],
-                    "access_mode": row[4],
-                }
-                for row in s_cur.fetchall()
-            ]
 
         now_rfc3339 = datetime.now(UTC).isoformat()
         release_meta = {
@@ -319,43 +316,63 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
         # 6. Verify building release package before atomic rename
         verify_release_directory(building_dir, expected_release_id=release_id)
 
-        # 7. Atomic Rename
-        os.replace(building_dir, final_dir)
-
-        # 8. Record release and release_items in catalog DB (batch insert)
-        create_release(
-            conn=conn,
-            release_id=release_id,
-            release_path=str(Path("releases") / release_id),
-            status="verified",
-            schema_version="1.0.0",
-            counts_json=json.dumps(counts_dict),
-            source_snapshot_json=json.dumps(release_meta["source_snapshot"]),
-            manifest_sha256=manifest_sha256,
-        )
-
-        item_cur = spool_conn.cursor()
-        item_cur.execute("SELECT record_id, record_sha256 FROM payload_spool")
-        item_batch = []
-        while True:
-            rows = item_cur.fetchmany(batch_size)
-            if not rows:
-                break
-            for r in rows:
-                item_batch.append((release_id, r[0], r[1]))
-                if len(item_batch) >= batch_size:
-                    conn.executemany(
-                        "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
-                        item_batch,
-                    )
-                    item_batch.clear()
-
-        if item_batch:
-            conn.executemany(
-                "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
-                item_batch,
+        # 7. Record release preparing and release_items in catalog DB in single transaction
+        with transaction(conn):
+            create_release(
+                conn=conn,
+                release_id=release_id,
+                release_path=str(Path("releases") / release_id),
+                status="preparing",
+                schema_version="1.0.0",
+                counts_json=json.dumps(counts_dict),
+                source_snapshot_json=json.dumps(release_meta["source_snapshot"]),
+                manifest_sha256=manifest_sha256,
             )
-            item_batch.clear()
+
+            item_cur = spool_conn.cursor()
+            item_cur.execute("SELECT record_id, record_sha256 FROM payload_spool")
+            item_batch = []
+            while True:
+                rows = item_cur.fetchmany(batch_size)
+                if not rows:
+                    break
+                for r in rows:
+                    item_batch.append((release_id, r[0], r[1]))
+                    if len(item_batch) >= batch_size:
+                        conn.executemany(
+                            "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
+                            item_batch,
+                        )
+                        item_batch.clear()
+
+            if item_batch:
+                conn.executemany(
+                    "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
+                    item_batch,
+                )
+                item_batch.clear()
+
+        # 8. Atomic Rename
+        try:
+            os.replace(building_dir, final_dir)
+        except Exception as exc:
+            with transaction(conn):
+                conn.execute("UPDATE releases SET status = 'failed' WHERE release_id = ?", (release_id,))
+            if building_dir.exists():
+                shutil.rmtree(building_dir, ignore_errors=True)
+            raise ReleaseBuildError(f"Atomic rename failed for release {release_id}: {exc}") from exc
+
+        # 9. Catalog finalize status to verified
+        try:
+            with transaction(conn):
+                conn.execute("UPDATE releases SET status = 'verified' WHERE release_id = ?", (release_id,))
+        except Exception as exc:
+            orphaned_dir = data_root / "releases" / f".orphaned-{release_id}"
+            if final_dir.exists():
+                os.replace(final_dir, orphaned_dir)
+            with transaction(conn):
+                conn.execute("UPDATE releases SET status = 'orphaned' WHERE release_id = ?", (release_id,))
+            raise ReleaseBuildError(f"Finalize status update failed for release {release_id}: {exc}") from exc
 
         spool_conn.close()
         if spool_db_path.exists():
@@ -364,6 +381,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             except OSError:
                 pass
 
+        release_meta["status"] = "verified"
         return release_meta
 
     except Exception as e:

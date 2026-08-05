@@ -19,6 +19,32 @@ release (Değişmez JSONL paketi + manifest.json)
 MESA Staging DB (Atomik, Idempotent Import & Rollback)
 ```
 
+## Workspace (Çalışma Dizini)
+
+MESA Legal Data, tüm verisini `MESA_DATA_DATA_ROOT` ortam değişkeninin gösterdiği dizinde saklar. Varsayılan: `~/.mesa-data/`.
+
+```text
+$DATA_ROOT/
+  raw/                    # Değişmez ham artifact dosyaları
+  canonical/              # Değişmez JSONL canonical kayıtlar
+  releases/               # Değişmez release paketleri (manifest + JSONL)
+  exports/                # Dışa aktarma dosyaları
+  source_configs/         # Kaynak yapılandırma YAML dosyaları
+  backups/                # Catalog yedekleri
+  catalog.sqlite          # Ana veritabanı
+```
+
+## Veri Akışı
+
+```text
+1. Collect  → raw/ dizinine ham dosya + SHA-256 + metadata kaydı
+2. Pipeline → parse → canonical JSONL üretimi → JSON Schema doğrulama
+3. Review   → İnsan onayı (approve/reject) → audit kaydı
+4. Release  → JSONL paketi + manifest.json + SHA-256 doğrulama
+5. Import   → MESA Staging DB'ye atomik aktarım
+6. Export   → Filtrelenmiş JSONL/CSV dışa aktarma
+```
+
 ## Web Yönetim Paneli (Vanilla HTML/CSS/JS + FastAPI)
 
 MESA Legal Data web yönetim paneli, tüm veri toplama, orkestrasyon, inceleme, release ve staging aktarım işlemlerini kullanıcı dostu sade bir HTML arayüz üzerinden gerçekleştirmenizi sağlar.
@@ -94,3 +120,119 @@ uv run mesa-data release import --release-id release-v1.0
 uv run mesa-data release rollback --release-id release-v1.0
 uv run mesa-data provenance RECORD_ID
 ```
+
+---
+
+## Actor & Token Yönetimi
+
+Tüm yazma (POST/PUT/DELETE) istekleri aşağıdaki başlıkları gerektirir:
+
+| Başlık | Açıklama |
+|---|---|
+| `X-MESA-Actor` | İşlemi yapan kişi/servis adı (audit kaydı için zorunlu) |
+| `X-MESA-Requested-With` | `web-admin` değeri (CSRF koruması) |
+| `Authorization` | `Bearer <MESA_DATA_WEB_ADMIN_TOKEN>` (dış ağ erişiminde zorunlu) |
+
+Web panelinde actor değeri `sessionStorage["mesa_actor"]` üzerinden saklanır. CLI'da `--actor` parametresi veya `MESA_ACTOR` ortam değişkeni kullanılır.
+
+---
+
+## Revision Sistemi
+
+Canonical kayıtlar değişmezdir (immutable). Değişiklik gerektiğinde **revision** oluşturulur:
+
+```bash
+# API üzerinden
+POST /api/records/{record_id}/revisions
+{
+  "change_type": "typo_fix",
+  "patch": {"op": "replace", "path": "/text", "value": "Düzeltilmiş metin"},
+  "reason": "Yazım hatası düzeltmesi",
+  "created_by": "yasin"
+}
+
+# Onay
+POST /api/revisions/{revision_id}/approve
+```
+
+Revisionlar `record_revisions` tablosunda saklanır ve audit kaydı oluşturulur. Kaynak yapılandırmaları için de benzer sistem mevcuttur (`/api/source-configs/revisions`).
+
+---
+
+## Exports (Dışa Aktarma)
+
+```bash
+# API üzerinden
+POST /api/exports
+{
+  "export_type": "records_jsonl",
+  "filters": {"record_type": "article", "approval_status": "approved"}
+}
+```
+
+Desteklenen formatlar:
+- `records_jsonl` — Tüm kayıtlar (JSONL)
+- `records_csv` — Tablo formatı (CSV)
+- `legislation_jsonl`, `article_jsonl` — Tür bazlı
+
+Her export `export_packages` tablosunda kaydedilir. SHA-256 doğrulaması, dosya boyutu ve oluşturan aktör bilgisi audit ile birlikte saklanır.
+
+---
+
+## Downloads (İndirmeler)
+
+```text
+GET /api/downloads/{export_id}
+```
+
+İndirmeler güvenlik katmanından geçer:
+- **Exact ID lookup** — Path traversal engeli
+- **Symlink kontrolü** — Gerçek dosya doğrulaması
+- **SHA-256 doğrulaması** — İndirme anında bütünlük kontrolü
+- **Audit kaydı** — Her indirme loglanır
+
+---
+
+## Source Config (Kaynak Yapılandırması)
+
+```bash
+# Yeni config revision oluştur
+POST /api/source-configs/revisions
+{
+  "content_yaml": "sources:\n  mevzuat:\n    enabled: true",
+  "reason": "Mevzuat kaynağı aktifleştirme",
+  "created_by": "yasin"
+}
+
+# Aktifleştir (runtime'a uygula)
+POST /api/source-configs/revisions/{revision_id}/activate
+```
+
+Aktifleştirme, YAML dosyasını `source_configs/active.yaml` yoluna yazar ve audit kaydı oluşturur.
+
+---
+
+## Snapshot & Backup
+
+```bash
+# API üzerinden
+POST /api/system/backup
+
+# CLI
+uv run mesa-data backup
+```
+
+Backup, catalog SQLite veritabanının tutarlı bir kopyasını alır. Restore işlemi `restore_catalog()` fonksiyonu ile yapılır.
+
+Full snapshot, raw dosyalar, canonical kayıtlar, release paketleri ve audit loglarını kapsar.
+
+---
+
+## Limitations (Kısıtlamalar)
+
+- **Tek sunucu mimarisi** — SQLite write lock ile korunur, dağıtık dağıtım desteklenmez.
+- **Senkron pipeline** — Büyük dosyalarda (>100MB PDF) uzun sürebilir.
+- **Tam metin arama yok** — Explorer yalnızca metadata filtresi yapar.
+- **Token tabanlı kimlik doğrulama** — OAuth/OIDC entegrasyonu henüz mevcut değil.
+- **Rollback sınırı** — Yalnızca en son import edilen release geri alınabilir.
+

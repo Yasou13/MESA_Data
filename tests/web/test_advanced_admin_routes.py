@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from mesa_legal_data.catalog import (
     get_connection,
     get_db_path,
+    hash_file,
     insert_artifact,
     insert_record,
     insert_version,
@@ -40,6 +41,7 @@ def test_advanced_web_routes_end_to_end(client, tmp_path):
     can_file.parent.mkdir(parents=True, exist_ok=True)
     can_file.write_text('{"record_id": "rec-1"}\n', encoding="utf-8")
 
+    raw_hash = hash_file(raw_file)
     insert_artifact(
         conn,
         "art-1",
@@ -52,7 +54,7 @@ def test_advanced_web_routes_end_to_end(client, tmp_path):
         "text/html",
         "text/html",
         raw_file.stat().st_size,
-        "hashraw",
+        raw_hash,
         "raw/payload.html",
         None,
         None,

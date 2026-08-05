@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mesa_legal_data.audit import audit_event, log_audit_event
 from mesa_legal_data.config import load_settings
 
 
@@ -662,6 +663,28 @@ def resolve_issue(
         )
 
 
+def get_release(conn: sqlite3.Connection, release_id: str) -> dict[str, Any] | None:
+    c = conn.cursor()
+    c.execute(
+        "SELECT release_id, release_path, status, schema_version, created_at, published_at, manifest_sha256, counts_json, source_snapshot_json FROM releases WHERE release_id = ?",
+        (release_id,),
+    )
+    row = c.fetchone()
+    if not row:
+        return None
+    return {
+        "release_id": row[0],
+        "release_path": row[1],
+        "status": row[2],
+        "schema_version": row[3],
+        "created_at": row[4],
+        "published_at": row[5],
+        "manifest_sha256": row[6],
+        "counts": json.loads(row[7]) if row[7] else {},
+        "source_snapshot": json.loads(row[8]) if row[8] else [],
+    }
+
+
 def add_record_review(
     conn: sqlite3.Connection,
     review_id: str,
@@ -693,7 +716,7 @@ def approve_record_with_checks(
 
     blockers = list_open_blocking_issues(conn, subject_id=record_id)
     if blockers:
-        raise CatalogError(f"Cannot approve record {record_id}: open blocker issues exist: {blockers}")
+        raise BlockingValidationIssueExists(f"Cannot approve record {record_id}: open blocker issues exist: {blockers}")
 
     settings = load_settings()
     c_path = settings.data_root_path / rec["canonical_path"]
@@ -724,39 +747,7 @@ def approve_record_with_checks(
 def approve_version_with_checks(
     conn: sqlite3.Connection, version_id: str, reviewer: str, note: str | None = None
 ) -> dict[str, Any]:
-    ver = get_version(conn, version_id)
-    if not ver:
-        raise CatalogError(f"Version {version_id} not found")
-
-    cursor = conn.cursor()
-    cursor.execute("SELECT record_id FROM records WHERE version_id = ?", (version_id,))
-    record_ids = []
-    while True:
-        batch = cursor.fetchmany(1000)
-        if not batch:
-            break
-        record_ids.extend([r[0] for r in batch])
-
-    approved_count = 0
-    for r_id in record_ids:
-        approve_record_with_checks(conn, r_id, reviewer, note)
-        approved_count += 1
-
-    with transaction(conn):
-        conn.execute(
-            "UPDATE versions SET approval_status = 'approved' WHERE version_id = ?",
-            (version_id,),
-        )
-        conn.execute(
-            "UPDATE documents SET lifecycle_status = 'approved' WHERE document_id = ?",
-            (ver["document_id"],),
-        )
-
-    return {
-        "status": "approved",
-        "version_id": version_id,
-        "approved_records": approved_count,
-    }
+    return approve_version_streaming(conn, version_id=version_id, reviewer=reviewer, note=note)
 
 
 def reject_record_with_checks(
@@ -903,15 +894,22 @@ def approve_version_streaming(
     spool_db_path = data_root / f".approve_spool-{uuid.uuid4().hex[:8]}.sqlite"
     spool_conn = sqlite3.connect(spool_db_path)
     spool_conn.executescript("""
-        CREATE TABLE version_records (
-            record_id TEXT NOT NULL,
-            canonical_path TEXT NOT NULL,
-            canonical_line INTEGER NOT NULL,
-            record_sha256 TEXT NOT NULL,
-            PRIMARY KEY (canonical_path, canonical_line)
-        );
-    """)
-
+            CREATE TABLE version_records (
+                record_id TEXT NOT NULL,
+                canonical_path TEXT NOT NULL,
+                canonical_line INTEGER NOT NULL,
+                record_sha256 TEXT NOT NULL,
+                PRIMARY KEY (canonical_path, canonical_line)
+            );
+            CREATE TABLE approved_spool (
+                record_id TEXT PRIMARY KEY,
+                record_sha256 TEXT NOT NULL,
+                reviewer TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                note TEXT,
+                reviewed_at TEXT NOT NULL
+            );
+        """)
     try:
         cur = conn.cursor()
         cur.execute(
@@ -948,7 +946,7 @@ def approve_version_streaming(
             spool_conn.close()
             if spool_db_path.exists():
                 spool_db_path.unlink()
-            return {"version_id": version_id, "approved_records": 0, "approval_status": "approved"}
+            return {"status": "approved", "version_id": version_id, "approved_records": 0, "approval_status": "approved"}
 
         # Get distinct canonical paths
         p_cur = spool_conn.cursor()
@@ -960,8 +958,8 @@ def approve_version_streaming(
                 break
             c_paths.extend([r[0] for r in rows])
 
-        approved_record_ids = []
-        review_entries = []
+        approved_count = 0
+        approved_batch = []
         now_iso = datetime.now(UTC).isoformat()
 
         # O(n) Single Sequential Pass over Canonical Files
@@ -988,8 +986,14 @@ def approve_version_streaming(
                                 f"Record SHA256 mismatch for {r_id}: expected {expected_hash}, got {calc_hash}"
                             )
 
-                        approved_record_ids.append(r_id)
-                        review_entries.append((r_id, expected_hash, reviewer, "approved", note, now_iso))
+                        approved_batch.append((r_id, expected_hash, reviewer, "approved", note, now_iso))
+                        approved_count += 1
+                        if len(approved_batch) >= batch_size:
+                            spool_conn.executemany(
+                                "INSERT INTO approved_spool (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                approved_batch,
+                            )
+                            approved_batch.clear()
 
                         target = line_cur.fetchone()
 
@@ -999,27 +1003,30 @@ def approve_version_streaming(
                 if target:
                     raise CatalogError(f"Canonical line {target[0]} out of bounds in {abs_c_path}")
 
-        spool_conn.close()
-        if spool_db_path.exists():
-            spool_db_path.unlink()
+        if approved_batch:
+            spool_conn.executemany(
+                "INSERT INTO approved_spool (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                approved_batch,
+            )
+            approved_batch.clear()
+        spool_conn.commit()
 
-        # Perform atomic batch approval in single transaction
+        # Perform atomic batch approval & audit in a SINGLE transaction
         with transaction(conn):
-            # Insert record_reviews in batches
-            for i in range(0, len(review_entries), batch_size):
-                chunk = review_entries[i : i + batch_size]
+            app_cur = spool_conn.cursor()
+            app_cur.execute("SELECT record_id, record_sha256, reviewer, decision, note, reviewed_at FROM approved_spool")
+            while True:
+                rows = app_cur.fetchmany(batch_size)
+                if not rows:
+                    break
                 conn.executemany(
                     "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    chunk,
+                    rows,
                 )
-
-            # Update records status in batches
-            id_tuples = [(r_id,) for r_id in approved_record_ids]
-            for i in range(0, len(id_tuples), batch_size):
-                chunk = id_tuples[i : i + batch_size]
+                id_tuples = [(r[0],) for r in rows]
                 conn.executemany(
                     "UPDATE records SET approval_status = 'approved' WHERE record_id = ?",
-                    chunk,
+                    id_tuples,
                 )
 
             conn.execute(
@@ -1031,17 +1038,24 @@ def approve_version_streaming(
                 (now_iso, ver["document_id"]),
             )
 
-        log_audit_event(
-            conn,
-            actor=reviewer,
-            action="version_approve",
-            subject_type="version",
-            subject_id=version_id,
-            reason=note,
-            details_json=json.dumps({"approved_records": len(approved_record_ids)}),
-        )
+            log_audit_event(
+                conn,
+                actor=reviewer,
+                action="version_approve",
+                subject_type="version",
+                subject_id=version_id,
+                reason=note,
+                details_json=json.dumps({"approved_records": approved_count}),
+            )
 
-        return {"version_id": version_id, "approved_records": len(approved_record_ids), "approval_status": "approved"}
+        spool_conn.close()
+        if spool_db_path.exists():
+            try:
+                spool_db_path.unlink()
+            except OSError:
+                pass
+
+        return {"status": "approved", "version_id": version_id, "approved_records": approved_count, "approval_status": "approved"}
 
     except Exception:
         spool_conn.close()
@@ -1085,44 +1099,6 @@ def upsert_source(
 
 
 # --- AUDIT EVENTS ---
-
-
-def log_audit_event(
-    conn: sqlite3.Connection,
-    *,
-    actor: str,
-    action: str,
-    subject_type: str,
-    subject_id: str,
-    reason: str | None = None,
-    old_sha256: str | None = None,
-    new_sha256: str | None = None,
-    details_json: str = "{}",
-    request_id: str | None = None,
-    event_id: str | None = None,
-) -> str:
-    if not event_id:
-        event_id = f"evt-{uuid.uuid4().hex[:12]}"
-    now = datetime.now(UTC).isoformat()
-    with transaction(conn):
-        conn.execute(
-            """INSERT INTO audit_events (event_id, actor, action, subject_type, subject_id, old_sha256, new_sha256, reason, details_json, request_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                event_id,
-                actor,
-                action,
-                subject_type,
-                subject_id,
-                old_sha256,
-                new_sha256,
-                reason,
-                details_json,
-                request_id,
-                now,
-            ),
-        )
-    return event_id
 
 
 def list_audit_events(
@@ -1315,6 +1291,96 @@ def get_record_revision(conn: sqlite3.Connection, revision_id: str) -> dict[str,
     }
 
 
+def list_record_revisions(
+    conn: sqlite3.Connection,
+    record_id: str | None = None,
+) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    if record_id:
+        cursor.execute(
+            "SELECT revision_id, original_record_id, original_record_sha256, revised_record_id, revised_record_sha256, version_id, change_type, patch_json, reason, created_by, created_at, status FROM record_revisions WHERE original_record_id = ? ORDER BY created_at DESC",
+            (record_id,),
+        )
+    else:
+        cursor.execute(
+            "SELECT revision_id, original_record_id, original_record_sha256, revised_record_id, revised_record_sha256, version_id, change_type, patch_json, reason, created_by, created_at, status FROM record_revisions ORDER BY created_at DESC"
+        )
+    rows = cursor.fetchall()
+    results = []
+    for r in rows:
+        results.append(
+            {
+                "revision_id": r[0],
+                "original_record_id": r[1],
+                "original_record_sha256": r[2],
+                "revised_record_id": r[3],
+                "revised_record_sha256": r[4],
+                "version_id": r[5],
+                "change_type": r[6],
+                "patch_json": r[7],
+                "reason": r[8],
+                "created_by": r[9],
+                "created_at": r[10],
+                "status": r[11],
+            }
+        )
+    return results
+
+
+def approve_record_revision(
+    conn: sqlite3.Connection,
+    revision_id: str,
+    reviewer: str = "reviewer",
+    note: str | None = None,
+) -> dict[str, Any]:
+    rev = get_record_revision(conn, revision_id)
+    if not rev:
+        raise CatalogError(f"Record revision {revision_id} not found")
+
+    with transaction(conn):
+        conn.execute("UPDATE record_revisions SET status = 'approved' WHERE revision_id = ?", (revision_id,))
+        conn.execute(
+            "UPDATE records SET approval_status = 'approved', validation_status = 'valid' WHERE record_id = ?",
+            (rev["revised_record_id"] or rev["original_record_id"],),
+        )
+        log_audit_event(
+            conn,
+            actor=reviewer,
+            action="record_revision_approve",
+            subject_type="revision",
+            subject_id=revision_id,
+            reason=note or rev.get("reason"),
+            old_sha256=rev.get("original_record_sha256"),
+            new_sha256=rev.get("revised_record_sha256"),
+        )
+    rev["status"] = "approved"
+    return rev
+
+
+def reject_record_revision(
+    conn: sqlite3.Connection,
+    revision_id: str,
+    reviewer: str = "reviewer",
+    reason: str | None = None,
+) -> dict[str, Any]:
+    rev = get_record_revision(conn, revision_id)
+    if not rev:
+        raise CatalogError(f"Record revision {revision_id} not found")
+
+    with transaction(conn):
+        conn.execute("UPDATE record_revisions SET status = 'rejected' WHERE revision_id = ?", (revision_id,))
+        log_audit_event(
+            conn,
+            actor=reviewer,
+            action="record_revision_reject",
+            subject_type="revision",
+            subject_id=revision_id,
+            reason=reason or rev.get("reason"),
+        )
+    rev["status"] = "rejected"
+    return rev
+
+
 def update_record_revision_status(conn: sqlite3.Connection, revision_id: str, status: str):
     with transaction(conn):
         conn.execute("UPDATE record_revisions SET status = ? WHERE revision_id = ?", (status, revision_id))
@@ -1405,6 +1471,30 @@ def list_source_config_revisions(conn: sqlite3.Connection) -> list[dict[str, Any
 def update_source_config_revision_status(conn: sqlite3.Connection, revision_id: str, status: str):
     with transaction(conn):
         conn.execute("UPDATE source_config_revisions SET status = ? WHERE revision_id = ?", (status, revision_id))
+
+
+def activate_source_config_revision(
+    conn: sqlite3.Connection,
+    revision_id: str,
+    actor: str = "operator",
+) -> dict[str, Any]:
+    cfg = get_source_config_revision(conn, revision_id)
+    if not cfg:
+        raise CatalogError(f"Source config revision {revision_id} not found")
+
+    with transaction(conn):
+        conn.execute("UPDATE source_config_revisions SET status = 'superseded' WHERE status = 'active'")
+        conn.execute("UPDATE source_config_revisions SET status = 'active' WHERE revision_id = ?", (revision_id,))
+        log_audit_event(
+            conn,
+            actor=actor,
+            action="source_config_activate",
+            subject_type="source_config_revision",
+            subject_id=revision_id,
+            new_sha256=cfg["config_sha256"],
+        )
+    cfg["status"] = "active"
+    return cfg
 
 
 # --- OPERATION JOBS ---

@@ -91,8 +91,8 @@ def validate_url_host(url: str):
 
     check_literal_ip_safety(norm_ascii)
 
-    if parsed.port and parsed.port not in (80, 443):
-        raise SSRFError(f"Non-standard port {parsed.port} is forbidden")
+    if parsed.port and parsed.port != 443:
+        raise SSRFError(f"Non-standard port {parsed.port} is forbidden: only HTTPS port 443 or default is allowed")
 
     try:
         addr_info = socket.getaddrinfo(norm_ascii, None)
@@ -170,6 +170,8 @@ def validate_source_request(
         host_norm = parsed_url.hostname.lower().rstrip(".").encode("idna").decode("ascii")
     except Exception as e:
         raise SourcePolicyError(f"Invalid IDNA hostname '{parsed_url.hostname}': {e}") from e
+
+    check_literal_ip_safety(host_norm)
 
     parsed_base = urlparse(source_info.base_url)
     if not parsed_base.hostname:
@@ -258,23 +260,36 @@ def fetch_url_stream(
     url: str,
     source_id: str,
     document_family: str,
-    max_bytes: int = 50 * 1024 * 1024,
-    timeout_seconds: float = 30.0,
+    max_bytes: int | None = None,
+    timeout_seconds: float | None = None,
     sources_yaml_path: Path | None = None,
 ) -> tuple[int, dict[str, str], Generator[bytes, None, None]]:
     """
-    Safely fetches a URL with mandatory source policy checks, SSRF checks, timeout, and streaming size limits.
+    Safely fetches a URL with mandatory source policy checks, SSRF checks, policy timeout, and streaming size limits.
     Enforces follow_redirects=False and validates every redirect step against explicit source policy and IP safety.
     """
+    policy = validate_source_request(
+        source_id=source_id,
+        document_family=document_family,
+        url=url,
+        is_redirect=False,
+        sources_yaml_path=sources_yaml_path,
+    )
+
+    eff_max_bytes = max_bytes if max_bytes is not None else policy.max_download_bytes
+    eff_timeout = timeout_seconds if timeout_seconds is not None else policy.timeout_seconds
+    eff_ua = policy.user_agent
+    retries = policy.retries
+
     current_url = url
     visited: set[str] = set()
     MAX_REDIRECTS = 3
 
     client = httpx.Client(
         follow_redirects=False,
-        timeout=httpx.Timeout(timeout_seconds),
+        timeout=httpx.Timeout(eff_timeout),
         headers={
-            "User-Agent": "MESA-Legal-Data/0.1 (+operator_contact)",
+            "User-Agent": eff_ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.8",
         },
     )
@@ -290,11 +305,11 @@ def fetch_url_stream(
             if parsed_curr.scheme != "https":
                 raise SSRFError(f"URL scheme must be HTTPS, got: {parsed_curr.scheme}")
 
-            # 2. Literal / Loopback IP check (SSRFError raised immediately without DNS)
+            # 2. Literal / Loopback IP check
             if parsed_curr.hostname:
                 check_literal_ip_safety(parsed_curr.hostname.lower().rstrip("."))
 
-            # 3. Source policy domain & permission check (SourcePolicyError raised before DNS for domain mismatch)
+            # 3. Source policy domain & permission check
             is_red = redirect_count > 0
             validate_source_request(
                 source_id=source_id,
@@ -307,8 +322,19 @@ def fetch_url_stream(
             # 4. Pre-request DNS resolution & IP safety check
             validate_url_host(current_url)
 
-            req = client.build_request("GET", current_url)
-            resp = client.send(req, stream=True)
+            resp = None
+            for attempt in range(retries + 1):
+                try:
+                    req = client.build_request("GET", current_url)
+                    resp = client.send(req, stream=True)
+                    break
+                except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                    if attempt < retries:
+                        continue
+                    raise URLFetchError(f"HTTP connection failed after {retries} retries: {exc}") from exc
+
+            if resp is None:
+                raise URLFetchError("HTTP request failed")
 
             if resp.status_code in (301, 302, 303, 307, 308):
                 if redirect_count >= MAX_REDIRECTS:
@@ -335,8 +361,8 @@ def fetch_url_stream(
                 try:
                     for chunk in resp.iter_bytes(chunk_size=8192):
                         downloaded += len(chunk)
-                        if downloaded > max_bytes:
-                            raise SizeLimitExceededError(f"Download size exceeded max limit of {max_bytes} bytes")
+                        if downloaded > eff_max_bytes:
+                            raise SizeLimitExceededError(f"Download size exceeded max limit of {eff_max_bytes} bytes")
                         yield chunk
                 finally:
                     resp.close()

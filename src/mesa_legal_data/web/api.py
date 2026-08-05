@@ -1,3 +1,4 @@
+import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
@@ -6,18 +7,22 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
-from mesa_legal_data.audit import backup_catalog, run_doctor_check
+from mesa_legal_data.audit import backup_catalog, log_audit_event, run_doctor_check
 from mesa_legal_data.catalog import (
     approve_record_with_checks,
-    approve_version_with_checks,
+    approve_version_streaming,
+    get_artifact,
     get_connection,
     get_db_path,
     get_document,
+    get_export_package,
     get_record,
+    get_release,
     list_open_blocking_issues,
     reject_record_with_checks,
 )
 from mesa_legal_data.config import load_settings, load_sources
+from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.release import build_release, verify_release
 from mesa_legal_data.release.importer import (
@@ -245,52 +250,344 @@ def list_documents(
     )
 
 
-@router.get("/documents/{document_id:path}/download/raw")
-def download_raw(document_id: str):
+def extract_actor(request: Request) -> str:
+    actor = request.headers.get("X-MESA-Actor") or request.headers.get("X-Actor")
+    if not actor:
+        actor = request.query_params.get("actor") or "web-user"
+    return actor.strip()
+
+
+def validate_file_download(
+    data_root: Path,
+    rel_or_abs_path: str | Path,
+    expected_sha256: str | None = None,
+) -> Path:
+    target_path = Path(rel_or_abs_path)
+    if not target_path.is_absolute():
+        target_path = data_root / target_path
+
+    # Check symlink on target before resolve
+    if target_path.is_symlink():
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "SYMLINK_REJECTED", "message": "Symlink file access is forbidden"},
+        )
+
+    # Check symlink or path resolution
+    try:
+        resolved_path = target_path.resolve()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"code": "PATH_INVALID", "message": str(e)})
+
+    # Data root boundary check
+    resolved_root = data_root.resolve()
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PATH_TRAVERSAL_DENIED", "message": "Access outside data root is forbidden"},
+        )
+
+    # Symlink check on requested target and resolved path
+    if target_path.is_symlink() or resolved_path.is_symlink():
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "SYMLINK_REJECTED", "message": "Symlink file access is forbidden"},
+        )
+
+    # Check parent components for symlinks
+    curr = target_path
+    while curr != data_root and curr != curr.parent:
+        if curr.is_symlink():
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "SYMLINK_REJECTED", "message": "Symlink path component is forbidden"},
+            )
+        curr = curr.parent
+
+    # File existence check
+    if not resolved_path.exists() or not resolved_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "FILE_NOT_FOUND", "message": f"Requested file missing on disk: {target_path.name}"},
+        )
+
+    # SHA-256 verification before response streaming
+    if expected_sha256:
+        with open(resolved_path, "rb") as f:
+            actual_sha = hash_stream(f)
+        if actual_sha.lower() != expected_sha256.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "HASH_MISMATCH",
+                    "message": f"SHA-256 mismatch for file: expected {expected_sha256}, got {actual_sha}",
+                },
+            )
+
+    return resolved_path
+
+
+@router.get("/artifacts/{artifact_id}/download")
+def download_artifact_endpoint(artifact_id: str, request: Request):
     from fastapi.responses import FileResponse
 
+    actor = extract_actor(request)
+    conn = get_connection()
+    art = get_artifact(conn, artifact_id)
+    if not art:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Artifact {artifact_id} not found"})
+
+    data_root = load_settings().data_root_path
+    safe_path = validate_file_download(data_root, art["raw_path"], expected_sha256=art.get("sha256"))
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_artifact",
+        subject_type="artifact",
+        subject_id=artifact_id,
+        new_sha256=art.get("sha256"),
+    )
+    conn.close()
+
+    media_type = art.get("detected_content_type") or "application/octet-stream"
+    safe_filename = Path(art["raw_path"]).name
+    return FileResponse(
+        path=str(safe_path),
+        media_type=media_type,
+        filename=safe_filename,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
+
+@router.get("/artifacts/{artifact_id}/metadata/download")
+def download_artifact_metadata_endpoint(artifact_id: str, request: Request):
+    from fastapi.responses import Response
+
+    actor = extract_actor(request)
+    conn = get_connection()
+    art = get_artifact(conn, artifact_id)
+    if not art:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Artifact {artifact_id} not found"})
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_artifact_metadata",
+        subject_type="artifact",
+        subject_id=artifact_id,
+    )
+    conn.close()
+
+    content = json.dumps(art, indent=2, ensure_ascii=False)
+    safe_filename = f"artifact_{artifact_id}_metadata.json"
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
+
+@router.get("/records/{record_id}/download")
+def download_record_endpoint(record_id: str, request: Request, format: str = Query("json")):
+    from fastapi.responses import Response
+
+    actor = extract_actor(request)
+    conn = get_connection()
+    rec = get_record(conn, record_id)
+    if not rec:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Record {record_id} not found"})
+
+    data_root = load_settings().data_root_path
+    safe_path = validate_file_download(data_root, rec["canonical_path"])
+
+    target_line = None
+    with open(safe_path, "r", encoding="utf-8") as f:
+        for idx, line in enumerate(f, start=1):
+            if idx == rec["canonical_line"]:
+                target_line = line
+                break
+
+    if not target_line:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "LINE_NOT_FOUND", "message": "Canonical line missing"})
+
+    calc_hash = hashlib.sha256(target_line.encode("utf-8")).hexdigest()
+    if rec.get("record_sha256") and calc_hash.lower() != rec["record_sha256"].lower():
+        conn.close()
+        raise HTTPException(status_code=400, detail={"code": "HASH_MISMATCH", "message": "Record SHA-256 hash mismatch"})
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_record",
+        subject_type="record",
+        subject_id=record_id,
+        new_sha256=rec.get("record_sha256"),
+    )
+    conn.close()
+
+    rec_obj = json.loads(target_line)
+    if format == "text":
+        out_content = rec_obj.get("text") or rec_obj.get("title") or target_line
+        media_type = "text/plain"
+        ext = "txt"
+    else:
+        out_content = json.dumps(rec_obj, indent=2, ensure_ascii=False)
+        media_type = "application/json"
+        ext = "json"
+
+    safe_filename = f"record_{record_id}.{ext}"
+    return Response(
+        content=out_content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
+
+@router.get("/provenance/{record_id}/download")
+def download_provenance_endpoint(record_id: str, request: Request):
+    from fastapi.responses import Response
+
+    actor = extract_actor(request)
+    conn = get_connection()
+    prov = get_record_provenance(record_id)
+    if not prov:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Provenance for record {record_id} not found"})
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_provenance",
+        subject_type="record",
+        subject_id=record_id,
+    )
+    conn.close()
+
+    content = json.dumps(prov, indent=2, ensure_ascii=False)
+    safe_filename = f"provenance_{record_id}.json"
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
+
+@router.get("/releases/{release_id:path}/download")
+def download_release_endpoint(release_id: str, request: Request):
+    from fastapi.responses import FileResponse
+
+    actor = extract_actor(request)
+    conn = get_connection()
+    rel = get_release(conn, release_id)
+    if not rel:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Release {release_id} not found"})
+
+    data_root = load_settings().data_root_path
+    rel_manifest = Path(rel["release_path"]) / "manifest.json"
+    safe_manifest = validate_file_download(data_root, rel_manifest, expected_sha256=rel.get("manifest_sha256"))
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_release",
+        subject_type="release",
+        subject_id=release_id,
+        new_sha256=rel.get("manifest_sha256"),
+    )
+    conn.close()
+
+    safe_filename = f"{Path(release_id).name}_manifest.json"
+    return FileResponse(
+        path=str(safe_manifest),
+        media_type="application/json",
+        filename=safe_filename,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
+
+@router.get("/documents/{document_id:path}/download/raw")
+def download_raw(document_id: str, request: Request):
+    from fastapi.responses import FileResponse
+
+    actor = extract_actor(request)
     conn = get_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT raw_path, detected_content_type FROM artifacts WHERE document_id = ? ORDER BY retrieved_at DESC LIMIT 1",
+        "SELECT artifact_id, raw_path, detected_content_type, sha256 FROM artifacts WHERE document_id = ? ORDER BY retrieved_at DESC LIMIT 1",
         (document_id,),
     )
     row = c.fetchone()
     if not row:
-        all_docs = [r[0] for r in c.execute("SELECT document_id FROM artifacts").fetchall()]
         conn.close()
-        error_response(
-            "NOT_FOUND",
-            f"Raw artifact for document '{document_id}' not found. Found docs in artifacts: {all_docs}",
-            status_code=404,
-        )
-    raw_rel, media_type = row
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Raw artifact for document '{document_id}' not found"})
+    art_id, raw_rel, media_type, sha = row
+
+    data_root = load_settings().data_root_path
+    safe_path = validate_file_download(data_root, raw_rel, expected_sha256=sha)
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_raw_document",
+        subject_type="document",
+        subject_id=document_id,
+        new_sha256=sha,
+    )
     conn.close()
-    abs_p = load_settings().data_root_path / raw_rel
-    if not abs_p.exists():
-        error_response("FILE_NOT_FOUND", f"Raw artifact file missing on disk: {raw_rel}", status_code=404)
-    return FileResponse(path=str(abs_p), media_type=media_type, filename=abs_p.name)
+
+    safe_filename = Path(raw_rel).name
+    return FileResponse(
+        path=str(safe_path),
+        media_type=media_type or "application/octet-stream",
+        filename=safe_filename,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
 
 
 @router.get("/documents/{document_id:path}/download/canonical")
-def download_canonical(document_id: str):
+def download_canonical(document_id: str, request: Request):
     from fastapi.responses import FileResponse
 
+    actor = extract_actor(request)
     conn = get_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT canonical_path FROM versions WHERE document_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT version_id, canonical_path FROM versions WHERE document_id = ? ORDER BY created_at DESC LIMIT 1",
         (document_id,),
     )
     row = c.fetchone()
-    conn.close()
     if not row:
-        error_response("NOT_FOUND", f"Canonical version for document {document_id} not found", status_code=404)
-    rel_p = row[0]
-    abs_p = load_settings().data_root_path / rel_p
-    if not abs_p.exists():
-        error_response("FILE_NOT_FOUND", f"Canonical file missing on disk: {rel_p}", status_code=404)
-    return FileResponse(path=str(abs_p), media_type="application/jsonlines", filename=abs_p.name)
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Canonical version for document {document_id} not found"})
+    ver_id, rel_p = row
+
+    data_root = load_settings().data_root_path
+    safe_path = validate_file_download(data_root, rel_p)
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_canonical_document",
+        subject_type="document",
+        subject_id=document_id,
+    )
+    conn.close()
+
+    safe_filename = Path(rel_p).name
+    return FileResponse(
+        path=str(safe_path),
+        media_type="application/jsonlines",
+        filename=safe_filename,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
 
 
 @router.get("/documents/{document_id:path}")
@@ -602,7 +899,7 @@ async def approve_version(version_id: str, req: ReviewRequest):
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
-            res = approve_version_with_checks(conn, version_id, req.reviewer, req.note)
+            res = approve_version_streaming(conn, version_id=version_id, reviewer=req.reviewer, note=req.note)
             return ok_response(res)
         except Exception as e:
             error_response("VERSION_APPROVE_FAILED", str(e), status_code=400)
@@ -791,6 +1088,7 @@ def run_doctor():
 
 
 @router.post("/system/backup")
+@router.post("/admin/backup")
 async def run_backup():
     async with write_lock.acquire_write():
         try:
@@ -802,6 +1100,16 @@ async def run_backup():
             return ok_response({"backup_path": rel_b_path})
         except Exception as e:
             error_response("BACKUP_FAILED", str(e), status_code=400)
+
+
+@router.get("/revisions")
+def list_revisions_endpoint(record_id: Optional[str] = Query(None)):
+    from mesa_legal_data.catalog import list_record_revisions
+
+    conn = get_connection()
+    revs = list_record_revisions(conn, record_id=record_id)
+    conn.close()
+    return ok_response(revs)
 
 
 @router.get("/revisions/{revision_id}")
@@ -817,14 +1125,32 @@ def get_revision_endpoint(revision_id: str):
 
 
 @router.post("/revisions/{revision_id}/approve")
-async def approve_revision_endpoint(revision_id: str):
-    from mesa_legal_data.catalog import update_record_revision_status
+async def approve_revision_endpoint(revision_id: str, request: Request):
+    from mesa_legal_data.catalog import approve_record_revision
+
+    actor = extract_actor(request)
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            res = approve_record_revision(conn, revision_id, reviewer=actor)
+            return ok_response(res)
+        finally:
+            conn.close()
+
+
+@router.post("/revisions/{revision_id}/reject")
+async def reject_revision_endpoint(revision_id: str, request: Request):
+    from mesa_legal_data.catalog import reject_record_revision
+
+    actor = extract_actor(request)
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    reason = body.get("reason", "Rejected by reviewer")
 
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
-            update_record_revision_status(conn, revision_id, "approved")
-            return ok_response({"revision_id": revision_id, "status": "approved"})
+            res = reject_record_revision(conn, revision_id, reviewer=actor, reason=reason)
+            return ok_response(res)
         finally:
             conn.close()
 
@@ -867,14 +1193,15 @@ async def create_source_config_revision_endpoint(request: Request):
 
 
 @router.post("/source-configs/revisions/{revision_id}/activate")
-async def activate_source_config_revision_endpoint(revision_id: str):
-    from mesa_legal_data.catalog import update_source_config_revision_status
+async def activate_source_config_revision_endpoint(revision_id: str, request: Request):
+    from mesa_legal_data.catalog import activate_source_config_revision
 
+    actor = extract_actor(request)
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
-            update_source_config_revision_status(conn, revision_id, "active")
-            return ok_response({"revision_id": revision_id, "status": "active"})
+            res = activate_source_config_revision(conn, revision_id, actor=actor)
+            return ok_response(res)
         finally:
             conn.close()
 
@@ -884,37 +1211,25 @@ async def activate_source_config_revision_endpoint(revision_id: str):
 
 @router.post("/exports")
 async def create_export_endpoint(request: Request):
-    import hashlib
+    from mesa_legal_data.exports import generate_export_package
 
-    from mesa_legal_data.catalog import create_export_package
-
+    actor = extract_actor(request)
     body = await request.json()
     export_type = body.get("export_type", "records_jsonl")
+    filters = body.get("filters", {})
     export_id = f"exp-{uuid.uuid4().hex[:12]}"
-    rel_path = f"exports/{export_id}.jsonl"
-    abs_path = load_settings().data_root_path / rel_path
-    abs_path.parent.mkdir(parents=True, exist_ok=True)
-    abs_path.write_text("{}\n", encoding="utf-8")
-    hash_val = hashlib.sha256(b"{}\n").hexdigest()
 
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
-            create_export_package(
+            res = generate_export_package(
                 conn,
                 export_id=export_id,
                 export_type=export_type,
-                relative_path=rel_path,
-                sha256=hash_val,
-                byte_size=abs_path.stat().st_size,
-                record_count=1,
-                filters_json=json.dumps(body.get("filters", {})),
-                created_by=body.get("created_by", "operator"),
-                status="ready",
+                filters=filters,
+                actor=actor,
             )
-            return ok_response(
-                {"export_id": export_id, "status": "ready", "download_url": f"/api/exports/{export_id}/download"}
-            )
+            return ok_response(res)
         finally:
             conn.close()
 
@@ -932,20 +1247,37 @@ def get_export_endpoint(export_id: str):
 
 
 @router.get("/exports/{export_id}/download")
-def download_export_endpoint(export_id: str):
+def download_export_endpoint(export_id: str, request: Request):
     from fastapi.responses import FileResponse
-
     from mesa_legal_data.catalog import get_export_package
 
+    actor = extract_actor(request)
     conn = get_connection()
     exp = get_export_package(conn, export_id)
-    conn.close()
     if not exp:
-        error_response("NOT_FOUND", f"Export {export_id} not found", status_code=404)
-    abs_p = load_settings().data_root_path / exp["relative_path"]
-    if not abs_p.exists():
-        error_response("FILE_NOT_FOUND", f"Export package file missing: {exp['relative_path']}", status_code=404)
-    return FileResponse(path=str(abs_p), media_type="application/jsonlines", filename=abs_p.name)
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Export {export_id} not found"})
+
+    data_root = load_settings().data_root_path
+    safe_path = validate_file_download(data_root, exp["relative_path"], expected_sha256=exp.get("sha256"))
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_export",
+        subject_type="export",
+        subject_id=export_id,
+        new_sha256=exp.get("sha256"),
+    )
+    conn.close()
+
+    safe_filename = Path(exp["relative_path"]).name
+    return FileResponse(
+        path=str(safe_path),
+        media_type="application/octet-stream",
+        filename=safe_filename,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
 
 
 # --- OPERATIONS JOBS ---
@@ -953,20 +1285,37 @@ def download_export_endpoint(export_id: str):
 
 @router.post("/operations/jobs")
 async def create_operation_job_endpoint(request: Request):
-    from mesa_legal_data.catalog import create_operation_job
+    from mesa_legal_data.operations import submit_operation
 
+    actor = extract_actor(request)
     body = await request.json()
+    op_type = body.get("operation_type", "bulk_review")
+    input_dict = body.get("input", {})
+
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
-            op_id = create_operation_job(
+            op_id = submit_operation(
                 conn,
-                operation_type=body.get("operation_type", "bulk_review"),
-                requested_by=body.get("requested_by", "operator"),
-                input_json=json.dumps(body.get("input", {})),
-                progress_total=body.get("progress_total", 100),
+                operation_type=op_type,
+                requested_by=actor,
+                input_dict=input_dict,
             )
-            return ok_response({"operation_id": op_id, "status": "queued"})
+            return ok_response({"operation_id": op_id, "status": "submitted"})
+        finally:
+            conn.close()
+
+
+@router.post("/operations/jobs/{operation_id}/cancel")
+async def cancel_operation_job_endpoint(operation_id: str, request: Request):
+    from mesa_legal_data.operations import cancel_operation
+
+    actor = extract_actor(request)
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            cancel_operation(conn, operation_id, actor=actor)
+            return ok_response({"operation_id": operation_id, "status": "cancelled"})
         finally:
             conn.close()
 
@@ -1024,34 +1373,238 @@ def list_audit_events_endpoint(
 # --- RELEASE COMPARISON ---
 
 
+@router.get("/releases/diff")
+def release_diff_endpoint(
+    from_release: Optional[str] = Query(None, alias="from"),
+    to_release: Optional[str] = Query(None, alias="to"),
+    rel1: Optional[str] = Query(None),
+    rel2: Optional[str] = Query(None),
+):
+    r1_id = from_release or rel1
+    r2_id = to_release or rel2
+    if not r1_id or not r2_id:
+        raise HTTPException(status_code=400, detail={"code": "MISSING_PARAM", "message": "Both from/rel1 and to/rel2 parameters are required"})
+
+    from mesa_legal_data.catalog import get_release
+
+    conn = get_connection()
+    rel1_obj = get_release(conn, r1_id)
+    rel2_obj = get_release(conn, r2_id)
+    conn.close()
+
+    if not rel1_obj or not rel2_obj:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Release {r1_id} or {r2_id} not found"})
+
+    data_root = load_settings().data_root_path
+    m1_path = data_root / rel1_obj["release_path"] / "manifest.json"
+    m2_path = data_root / rel2_obj["release_path"] / "manifest.json"
+
+    m1_records = {}
+    m2_records = {}
+
+    if m1_path.exists():
+        with open(m1_path, "r", encoding="utf-8") as f:
+            m1_data = json.load(f)
+            m1_records = {r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256") for r in m1_data.get("records", [])}
+
+    if m2_path.exists():
+        with open(m2_path, "r", encoding="utf-8") as f:
+            m2_data = json.load(f)
+            m2_records = {r.get("record_id") or r.get("id"): r.get("sha256") or r.get("record_sha256") for r in m2_data.get("records", [])}
+
+    added = [rid for rid in m2_records if rid not in m1_records]
+    removed = [rid for rid in m1_records if rid not in m2_records]
+    modified = [rid for rid in m2_records if rid in m1_records and m2_records[rid] != m1_records[rid]]
+    unchanged = [rid for rid in m2_records if rid in m1_records and m2_records[rid] == m1_records[rid]]
+
+    return ok_response(
+        {
+            "from_release_id": r1_id,
+            "to_release_id": r2_id,
+            "counts": {
+                "added": len(added),
+                "removed": len(removed),
+                "modified": len(modified),
+                "unchanged": len(unchanged),
+            },
+            "added_records": added,
+            "removed_records": removed,
+            "modified_records": modified,
+        }
+    )
+
+
 @router.get("/releases/compare")
 def compare_releases_endpoint(
     rel1: str = Query(..., description="First release ID"),
     rel2: str = Query(..., description="Second release ID"),
 ):
+    return release_diff_endpoint(rel1=rel1, rel2=rel2)
+
+
+@router.get("/releases/{release_id:path}/package")
+def release_package_endpoint(release_id: str, request: Request):
+    import tarfile
+    from fastapi.responses import FileResponse
+    from mesa_legal_data.catalog import get_release
+
+    actor = extract_actor(request)
     conn = get_connection()
-    c = conn.cursor()
-    c.execute(
-        "SELECT release_id, status, counts_json, manifest_sha256 FROM releases WHERE release_id IN (?, ?)", (rel1, rel2)
+    rel = get_release(conn, release_id)
+    if not rel:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": f"Release {release_id} not found"})
+
+    data_root = load_settings().data_root_path
+    rel_dir = data_root / rel["release_path"]
+    if not rel_dir.exists():
+        conn.close()
+        raise HTTPException(status_code=404, detail={"code": "RELEASE_DIR_NOT_FOUND", "message": "Release directory missing"})
+
+    pkg_tar = data_root / "exports" / f"release_package_{Path(release_id).name}.tar.gz"
+    pkg_tar.parent.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(pkg_tar, "w:gz") as tar:
+        tar.add(rel_dir, arcname=Path(release_id).name)
+
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="download_release_package",
+        subject_type="release",
+        subject_id=release_id,
     )
-    rows = {
-        r[0]: {"status": r[1], "counts": json.loads(r[2]) if r[2] else {}, "manifest_sha256": r[3]}
-        for r in c.fetchall()
-    }
     conn.close()
 
-    r1_info = rows.get(rel1)
-    r2_info = rows.get(rel2)
+    safe_filename = pkg_tar.name
+    return FileResponse(
+        path=str(pkg_tar),
+        media_type="application/gzip",
+        filename=safe_filename,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
 
-    if not r1_info or not r2_info:
-        error_response("NOT_FOUND", f"One or both releases ({rel1}, {rel2}) not found", status_code=404)
 
-    diff = {
-        "rel1": {"release_id": rel1, **r1_info},
-        "rel2": {"release_id": rel2, **r2_info},
-        "count_deltas": {
-            k: r2_info["counts"].get(k, 0) - r1_info["counts"].get(k, 0)
-            for k in set(r1_info["counts"].keys()) | set(r2_info["counts"].keys())
-        },
-    }
-    return ok_response(diff)
+# --- DATA EXPLORER API ---
+
+
+@router.get("/explorer/search")
+def explorer_search_endpoint(
+    q: Optional[str] = Query(None),
+    record_type: Optional[str] = Query(None),
+    source_id: Optional[str] = Query(None),
+    approval_status: Optional[str] = Query(None),
+    validation_status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    conn = get_connection()
+    c = conn.cursor()
+
+    where_clauses = ["1=1"]
+    params: list[Any] = []
+
+    if q:
+        where_clauses.append("(r.record_id LIKE ? OR r.record_type LIKE ? OR d.title LIKE ?)")
+        term = f"%{q}%"
+        params.extend([term, term, term])
+
+    if record_type:
+        where_clauses.append("r.record_type = ?")
+        params.append(record_type)
+
+    if source_id:
+        where_clauses.append("a.source_id = ?")
+        params.append(source_id)
+
+    if approval_status:
+        where_clauses.append("r.approval_status = ?")
+        params.append(approval_status)
+
+    if validation_status:
+        where_clauses.append("r.validation_status = ?")
+        params.append(validation_status)
+
+    where_str = " AND ".join(where_clauses)
+
+    count_sql = f"""
+        SELECT COUNT(*)
+        FROM records r
+        JOIN versions v ON r.version_id = v.version_id
+        JOIN artifacts a ON v.artifact_id = a.artifact_id
+        JOIN documents d ON v.document_id = d.document_id
+        WHERE {where_str}
+    """
+    c.execute(count_sql, params)
+    total = c.fetchone()[0]
+
+    offset = (page - 1) * page_size
+    data_sql = f"""
+        SELECT r.record_id, r.record_type, r.version_id, r.approval_status, r.validation_status, r.canonical_path, r.canonical_line, r.record_sha256, d.document_id, d.title, a.source_id, r.created_at
+        FROM records r
+        JOIN versions v ON r.version_id = v.version_id
+        JOIN artifacts a ON v.artifact_id = a.artifact_id
+        JOIN documents d ON v.document_id = d.document_id
+        WHERE {where_str}
+        ORDER BY r.created_at DESC
+        LIMIT ? OFFSET ?
+    """
+    c.execute(data_sql, params + [page_size, offset])
+    rows = c.fetchall()
+    conn.close()
+
+    items = [
+        {
+            "record_id": row[0],
+            "record_type": row[1],
+            "version_id": row[2],
+            "approval_status": row[3],
+            "validation_status": row[4],
+            "canonical_path": row[5],
+            "canonical_line": row[6],
+            "record_sha256": row[7],
+            "document_id": row[8],
+            "title": row[9],
+            "source_id": row[10],
+            "created_at": row[11],
+        }
+        for row in rows
+    ]
+
+    return ok_response(
+        {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+    )
+
+
+@router.get("/explorer/facets")
+def explorer_facets_endpoint():
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute("SELECT record_type, COUNT(*) FROM records GROUP BY record_type")
+    record_types = {r[0]: r[1] for r in c.fetchall()}
+
+    c.execute("SELECT a.source_id, COUNT(*) FROM records r JOIN versions v ON r.version_id = v.version_id JOIN artifacts a ON v.artifact_id = a.artifact_id GROUP BY a.source_id")
+    sources = {r[0]: r[1] for r in c.fetchall()}
+
+    c.execute("SELECT approval_status, COUNT(*) FROM records GROUP BY approval_status")
+    approval_statuses = {r[0]: r[1] for r in c.fetchall()}
+
+    c.execute("SELECT validation_status, COUNT(*) FROM records GROUP BY validation_status")
+    validation_statuses = {r[0]: r[1] for r in c.fetchall()}
+
+    conn.close()
+
+    return ok_response(
+        {
+            "record_types": record_types,
+            "sources": sources,
+            "approval_statuses": approval_statuses,
+            "validation_statuses": validation_statuses,
+        }
+    )
