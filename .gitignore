@@ -27,3 +27,4 @@ tmp/
 # Environment and sensitive data
 .env
 .env.local
+.agents/
