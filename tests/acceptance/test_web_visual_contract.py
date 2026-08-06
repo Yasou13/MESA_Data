@@ -22,6 +22,18 @@ def test_index_html_semantics_and_theme():
     assert 'id="main-content"' in html
     assert 'tabindex="-1"' in html
     assert 'aria-label="Ana navigasyon"' in html
+    assert 'id="app-sidebar"' in html
+    assert 'id="sidebar-overlay"' in html
+
+    # Mobile menu Accessibility contract
+    assert 'id="btn-mobile-menu"' in html
+    assert 'aria-controls="app-sidebar"' in html
+    assert 'aria-expanded="false"' in html
+
+    # API Status initial state contract
+    assert 'id="api-status"' in html
+    assert "status-checking" in html
+    assert "Durum kontrol ediliyor…" in html
 
     # Theme scripts & tokens
     assert "mesa_theme" in html
@@ -50,9 +62,39 @@ def test_css_tokens_and_dark_theme():
     assert ":focus-visible" in css
     assert "prefers-reduced-motion" in css
 
+    # Mobile drawer & overlay CSS contract
+    assert ".sidebar-overlay" in css
+    assert ".sidebar-overlay.open" in css
+    assert "body.drawer-open" in css
+
+    # Status indicator state CSS contract
+    assert "status-online" in css
+    assert "status-offline" in css
+    assert "status-checking" in css
+    assert ".status-dot" in css
+
+    # Mobile responsiveness & min-width safety contract
+    assert "@media (max-width: 640px)" in css or "@media (max-width:1024px)" in css
+    assert "min-width: 0" in css
+    assert ".table-responsive" in css
+    assert "overflow-x: auto" in css
+
 
 def test_static_js_files_exist_and_served():
     for js_file in ["app.js", "theme.js", "ui.js"]:
         response = client.get(f"/static/{js_file}")
         assert response.status_code == 200, f"Failed to fetch /static/{js_file}"
         assert len(response.text) > 50
+
+    app_js = client.get("/static/app.js").text
+
+    # JS contract assertions
+    assert "refreshApiStatus" in app_js
+    assert "setApiStatus" in app_js
+    assert "aria-expanded" in app_js
+    assert "drawer-open" in app_js
+    assert "closeMobileSidebar" in app_js
+    assert "Escape" in app_js
+    assert "Durum kontrol ediliyor…" in app_js
+    assert "API erişilebilir" in app_js
+    assert "API erişilemiyor" in app_js

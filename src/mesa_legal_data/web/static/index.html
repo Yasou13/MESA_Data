@@ -86,7 +86,10 @@
         </button>
       </nav>
       <div class="sidebar-footer">
-        <span id="api-status-text" class="status-indicator online">API Erişilebilir</span>
+        <div id="api-status" class="status-indicator api-status status-checking" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="api-status-text" class="status-text">Durum kontrol ediliyor…</span>
+        </div>
         <small id="app-version">Sürüm v1.0.0</small>
       </div>
     </aside>
@@ -95,7 +98,7 @@
     <main id="main-content" class="main-content" tabindex="-1">
       <header class="top-header">
         <div class="header-left">
-          <button id="btn-mobile-menu" class="mobile-menu-btn" aria-label="Navigasyon menüsünü aç/kapat">
+          <button id="btn-mobile-menu" class="mobile-menu-btn" type="button" aria-label="Ana menüyü aç" aria-controls="app-sidebar" aria-expanded="false">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
           </button>
           <div class="header-title-group">
@@ -109,9 +112,9 @@
             <option value="light">Açık Tema</option>
             <option value="dark">Koyu Tema (Siyah)</option>
           </select>
-          <button id="btn-token" class="btn btn-secondary">
+          <button id="btn-token" class="btn btn-secondary admin-access-btn" type="button" aria-label="Yönetici erişimini ayarla">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.778-7.778zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
-            Yönetici Erişimi
+            <span class="admin-access-label">Yönetici Erişimi</span>
           </button>
           <span id="busy-spinner" class="spinner hidden" role="status">İşleniyor...</span>
         </div>

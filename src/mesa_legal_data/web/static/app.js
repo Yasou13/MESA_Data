@@ -131,6 +131,9 @@ async function apiRequest(endpoint, options = {}) {
     }
 
     if (!response.ok || !result.ok) {
+      if (response.status >= 500) {
+        setApiStatus("offline");
+      }
       const msg = result.error?.message || `API Hatası: ${response.status}`;
       showToast(msg, "danger");
       throw new Error(msg);
@@ -138,6 +141,9 @@ async function apiRequest(endpoint, options = {}) {
 
     return result.data;
   } catch (err) {
+    if (err.name === "TypeError" || err.message.includes("Failed to fetch") || err.message.includes("NetworkError")) {
+      setApiStatus("offline");
+    }
     if (!err.message.includes("API Hatası")) {
       console.error(err);
     }
@@ -202,11 +208,111 @@ function switchView(viewName) {
   if (viewName === "system") loadSystem();
 }
 
+// --- API Status & Mobile Drawer Manager ---
+function setApiStatus(status) {
+  const el = document.getElementById("api-status");
+  const textEl = document.getElementById("api-status-text");
+  if (!el && !textEl) return;
+
+  const targetEl = el || textEl;
+  targetEl.classList.remove("status-checking", "status-online", "status-offline", "online", "offline");
+  targetEl.classList.add(`status-${status}`);
+
+  if (status === "checking") {
+    if (textEl) textEl.textContent = "Durum kontrol ediliyor…";
+  } else if (status === "online") {
+    targetEl.classList.add("online");
+    if (textEl) textEl.textContent = "API erişilebilir";
+  } else if (status === "offline") {
+    targetEl.classList.add("offline");
+    if (textEl) textEl.textContent = "API erişilemiyor";
+  }
+}
+
+async function refreshApiStatus() {
+  setApiStatus("checking");
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch("/api/health", {
+      method: "GET",
+      headers: { "Accept": "application/json" },
+      signal: controller.signal,
+      cache: "no-store",
+    });
+
+    window.clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      setApiStatus("offline");
+      return;
+    }
+
+    const result = await response.json();
+    if (result && result.ok !== false && result.status !== "error") {
+      setApiStatus("online");
+    } else {
+      setApiStatus("offline");
+    }
+  } catch (err) {
+    setApiStatus("offline");
+  }
+}
+
+window.refreshApiStatus = refreshApiStatus;
+window.setApiStatus = setApiStatus;
+
+function openMobileSidebar() {
+  const sidebar = document.getElementById("app-sidebar");
+  const overlay = document.getElementById("sidebar-overlay");
+  const btn = document.getElementById("btn-mobile-menu");
+  if (!sidebar || !overlay || !btn) return;
+
+  const openModal = document.querySelector(".modal-backdrop:not(.hidden)");
+  if (openModal) return;
+
+  btn.setAttribute("aria-expanded", "true");
+  btn.setAttribute("aria-label", "Ana menüyü kapat");
+  sidebar.classList.add("open");
+  overlay.classList.add("open");
+  document.body.classList.add("drawer-open");
+
+  const firstNav = sidebar.querySelector(".nav-btn.active") || sidebar.querySelector(".nav-btn");
+  if (firstNav) {
+    firstNav.focus();
+  }
+}
+
 function closeMobileSidebar() {
   const sidebar = document.getElementById("app-sidebar");
   const overlay = document.getElementById("sidebar-overlay");
+  const btn = document.getElementById("btn-mobile-menu");
+
+  const wasOpen = sidebar ? sidebar.classList.contains("open") : false;
+
   if (sidebar) sidebar.classList.remove("open");
   if (overlay) overlay.classList.remove("open");
+  document.body.classList.remove("drawer-open");
+
+  if (btn) {
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-label", "Ana menüyü aç");
+  }
+
+  if (wasOpen && sidebar && btn && sidebar.contains(document.activeElement)) {
+    btn.focus();
+  }
+}
+
+function toggleMobileSidebar() {
+  const sidebar = document.getElementById("app-sidebar");
+  if (sidebar && sidebar.classList.contains("open")) {
+    closeMobileSidebar();
+  } else {
+    openMobileSidebar();
+  }
 }
 
 // --- Dashboard Handler ---
@@ -918,10 +1024,9 @@ function setupModals() {
   const btnMobile = document.getElementById("btn-mobile-menu");
   const overlay = document.getElementById("sidebar-overlay");
   if (btnMobile) {
-    btnMobile.addEventListener("click", () => {
-      const sidebar = document.getElementById("app-sidebar");
-      if (sidebar) sidebar.classList.toggle("open");
-      if (overlay) overlay.classList.toggle("open");
+    btnMobile.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMobileSidebar();
     });
   }
   if (overlay) {
@@ -937,12 +1042,41 @@ function setupModals() {
     });
   }
 
-  // Escape key closes modals
+  // Keyboard navigation & accessibility (Escape and Tab focus trap)
   document.addEventListener("keydown", (e) => {
+    const sidebar = document.getElementById("app-sidebar");
+    const isSidebarOpen = sidebar && sidebar.classList.contains("open");
+
     if (e.key === "Escape") {
-      document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => {
-        closeModal(m.id);
-      });
+      const openModals = document.querySelectorAll(".modal-backdrop:not(.hidden)");
+      if (openModals.length > 0) {
+        openModals.forEach((m) => closeModal(m.id));
+      } else if (isSidebarOpen) {
+        closeMobileSidebar();
+      }
+    }
+
+    if (e.key === "Tab" && isSidebarOpen) {
+      const focusables = sidebar.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusables.length > 0) {
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
+    }
+  });
+
+  // Automatically close mobile sidebar on desktop resize
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 1024) {
       closeMobileSidebar();
     }
   });
@@ -950,6 +1084,11 @@ function setupModals() {
 
 // --- App Initialization ---
 document.addEventListener("DOMContentLoaded", () => {
+  refreshApiStatus();
+  window.addEventListener("online", refreshApiStatus);
+  window.addEventListener("offline", () => setApiStatus("offline"));
+  setInterval(refreshApiStatus, 60000);
+
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.view));
   });
