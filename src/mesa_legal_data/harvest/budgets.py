@@ -25,7 +25,20 @@ def get_total_raw_bytes(db_path: Path | None = None) -> int:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT COALESCE(SUM(raw_bytes), 0) FROM harvest_items WHERE status IN ('downloaded', 'processing', 'needs_review', 'completed')"
+            "SELECT COALESCE(SUM(raw_bytes), 0) FROM harvest_items WHERE artifact_id IS NOT NULL AND raw_bytes > 0 AND status != 'duplicate'"
+        )
+        return cursor.fetchone()[0]
+    finally:
+        conn.close()
+
+
+def get_source_total_raw_bytes(source_id: str, db_path: Path | None = None) -> int:
+    conn = get_harvest_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COALESCE(SUM(raw_bytes), 0) FROM harvest_items WHERE source_id = ? AND artifact_id IS NOT NULL AND raw_bytes > 0 AND status != 'duplicate'",
+            (source_id,),
         )
         return cursor.fetchone()[0]
     finally:
@@ -65,9 +78,47 @@ def get_daily_budget_usage(
         conn.close()
 
 
-def record_daily_budget(
+def record_download_budget(
     source_id: str,
     raw_bytes: int,
+    duplicate: bool = False,
+    budget_date: str | None = None,
+    db_path: Path | None = None,
+) -> None:
+    if budget_date is None:
+        budget_date = datetime.now(UTC).strftime("%Y-%m-%d")
+
+    conn = get_harvest_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        doc_inc = 0 if duplicate else (1 if raw_bytes > 0 else 0)
+        byte_inc = 0 if duplicate else raw_bytes
+
+        cursor.execute(
+            """
+            INSERT INTO daily_budgets (source_id, budget_date, requests_used, documents_downloaded, raw_bytes_downloaded, pipeline_success, pipeline_failed)
+            VALUES (?, ?, 1, ?, ?, 0, 0)
+            ON CONFLICT(source_id, budget_date) DO UPDATE SET
+                requests_used = requests_used + 1,
+                documents_downloaded = documents_downloaded + ?,
+                raw_bytes_downloaded = raw_bytes_downloaded + ?
+            """,
+            (
+                source_id,
+                budget_date,
+                doc_inc,
+                byte_inc,
+                doc_inc,
+                byte_inc,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_pipeline_budget(
+    source_id: str,
     success: bool,
     budget_date: str | None = None,
     db_path: Path | None = None,
@@ -80,28 +131,20 @@ def record_daily_budget(
         cursor = conn.cursor()
         succ_inc = 1 if success else 0
         fail_inc = 0 if success else 1
-        doc_inc = 1 if success else 0
 
         cursor.execute(
             """
             INSERT INTO daily_budgets (source_id, budget_date, requests_used, documents_downloaded, raw_bytes_downloaded, pipeline_success, pipeline_failed)
-            VALUES (?, ?, 1, ?, ?, ?, ?)
+            VALUES (?, ?, 0, 0, 0, ?, ?)
             ON CONFLICT(source_id, budget_date) DO UPDATE SET
-                requests_used = requests_used + 1,
-                documents_downloaded = documents_downloaded + ?,
-                raw_bytes_downloaded = raw_bytes_downloaded + ?,
                 pipeline_success = pipeline_success + ?,
                 pipeline_failed = pipeline_failed + ?
             """,
             (
                 source_id,
                 budget_date,
-                doc_inc,
-                raw_bytes,
                 succ_inc,
                 fail_inc,
-                doc_inc,
-                raw_bytes,
                 succ_inc,
                 fail_inc,
             ),
@@ -109,6 +152,17 @@ def record_daily_budget(
         conn.commit()
     finally:
         conn.close()
+
+
+def record_daily_budget(
+    source_id: str,
+    raw_bytes: int,
+    success: bool,
+    budget_date: str | None = None,
+    db_path: Path | None = None,
+) -> None:
+    record_download_budget(source_id, raw_bytes, duplicate=False, budget_date=budget_date, db_path=db_path)
+    record_pipeline_budget(source_id, success=success, budget_date=budget_date, db_path=db_path)
 
 
 def check_source_error_circuit_breaker(source_id: str, threshold: float = 0.25, db_path: Path | None = None) -> bool:

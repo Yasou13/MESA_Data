@@ -1,11 +1,14 @@
 [Unit]
 Description=MESA Legal Data Harvest Maintenance & Recovery Service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=mesa
 WorkingDirectory=/opt/mesa-legal-data
-ExecStart=/opt/mesa-legal-data/.venv/bin/mesa-data harvest recover
+EnvironmentFile=-/etc/mesa-legal-data.env
+ExecStart=/opt/mesa-legal-data/.venv/bin/mesa-data harvest maintenance
 Nice=10
 NoNewPrivileges=true
 PrivateTmp=true

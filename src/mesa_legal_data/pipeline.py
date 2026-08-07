@@ -208,12 +208,23 @@ def process_artifact_pipeline(
             title = doc_row["title"] if doc_row and doc_row.get("title") else "Mevzuat Metni"
             num = doc_id.split(":")[-1] if doc_id else "0"
 
+            doc_type = None
+            if doc_row and doc_row.get("document_type"):
+                doc_type = str(doc_row["document_type"]).strip()
+            elif doc_id and doc_id.startswith("tr:legislation:"):
+                parts = doc_id.split(":")
+                if len(parts) >= 3 and parts[2]:
+                    doc_type = parts[2]
+
+            if not doc_type:
+                doc_type = "law"
+
             leg_record = {
-                "id": doc_id or "tr:legislation:law:0",
+                "id": doc_id or f"tr:legislation:{doc_type}:0",
                 "record_type": "legislation",
                 "jurisdiction": "TR",
                 "language": "tr",
-                "legislation_type": "law",
+                "legislation_type": doc_type,
                 "number": num,
                 "title": title,
                 "short_title": None,

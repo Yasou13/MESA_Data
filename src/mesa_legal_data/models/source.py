@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DiscoveredItem(BaseModel):
@@ -44,9 +44,10 @@ class FetchedArtifact(BaseModel):
     raw_path: str
     etag: str | None = None
     last_modified: str | None = None
-    transport_status: str
     error_code: str | None = None
-    metadata: dict[str, Any] = {}
+    transport_status: str | int | None = None
+    is_duplicate: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SourceAdapter(ABC):

@@ -38,7 +38,6 @@ sources:
         - "CUMHURBAŞKANI KARARLARI"
         - "YÖNETMELİKLER"
         - "TEBLİĞLER"
-        - "YARGI BÖLÜMÜ"
 
       exclude_sections:
         - "İLÂN BÖLÜMÜ"
@@ -51,7 +50,6 @@ sources:
         - presidential_decision
         - regulation
         - communique
-        - court_decision
 
     budget:
       target_raw_bytes: 5368709120

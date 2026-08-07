@@ -1,3 +1,4 @@
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,13 +8,16 @@ from mesa_legal_data.harvest.budgets import (
     check_free_disk_space,
     check_source_error_circuit_breaker,
     get_daily_budget_usage,
+    get_source_total_raw_bytes,
     get_total_raw_bytes,
-    record_daily_budget,
+    record_download_budget,
+    record_pipeline_budget,
 )
 from mesa_legal_data.harvest.config import HarvestConfig, load_harvest_config
 from mesa_legal_data.harvest.models import ItemStatus
 from mesa_legal_data.harvest.queue import (
     acquire_lease_batch,
+    increment_item_attempts,
     record_attempt,
     recover_expired_leases,
     update_item_status,
@@ -84,10 +88,29 @@ def run_harvest_batch(
     retry_wait_count = 0
     duplicate_count = 0
 
-    for item in items:
+    start_monotonic = time.monotonic()
+
+    for idx, item in enumerate(items):
         if item.id is None:
             continue
         item_id: int = item.id
+
+        # Check max runtime
+        elapsed = time.monotonic() - start_monotonic
+        if elapsed >= harvest_cfg.runner.max_runtime_seconds:
+            # Requeue remaining leased items to leave no stranded leases
+            for rem in items[idx:]:
+                if rem.id is not None:
+                    update_item_status(rem.id, ItemStatus.QUEUED, db_path=db_path)
+            return {
+                "processed": processed_count,
+                "succeeded": succeeded_count,
+                "failed": failed_count,
+                "retry_wait": retry_wait_count,
+                "duplicate": duplicate_count,
+                "stopped_reason": f"MAX_RUNTIME_REACHED ({harvest_cfg.runner.max_runtime_seconds}s)",
+            }
+
         # Check source circuit breaker
         if check_source_error_circuit_breaker(
             item.source_id, threshold=harvest_cfg.runner.stop_on_error_rate, db_path=db_path
@@ -95,9 +118,14 @@ def run_harvest_batch(
             update_item_status(item_id, ItemStatus.QUEUED, db_path=db_path)
             continue
 
-        # Check source daily budget if source is configured
+        # Check source daily and total budgets if source is configured
         src_cfg = harvest_cfg.sources.get(item.source_id)
         if src_cfg:
+            src_total_raw = get_source_total_raw_bytes(item.source_id, db_path=db_path)
+            if src_total_raw >= src_cfg.budget.target_raw_bytes:
+                update_item_status(item_id, ItemStatus.QUEUED, db_path=db_path)
+                continue
+
             daily_usage = get_daily_budget_usage(item.source_id, db_path=db_path)
             if daily_usage["documents_downloaded"] >= src_cfg.budget.daily_documents:
                 update_item_status(item_id, ItemStatus.QUEUED, db_path=db_path)
@@ -108,14 +136,42 @@ def run_harvest_batch(
 
         processed_count += 1
         start_iso = datetime.now(UTC).isoformat()
-        item_attempts: int = item.attempts if item.attempts is not None else 0
-        current_attempt: int = item_attempts + 1
+        current_attempt: int = increment_item_attempts(item_id, db_path=db_path)
 
         try:
             # Step A: Download / Collect
             update_item_status(item_id, ItemStatus.DOWNLOADING, db_path=db_path)
 
             collect_res = collect_url_item(item, sources_yaml_path=sources_yaml_path)
+
+            if collect_res.duplicate:
+                finish_iso = datetime.now(UTC).isoformat()
+                record_attempt(
+                    item_id=item_id,
+                    attempt_number=current_attempt,
+                    stage="download",
+                    started_at=start_iso,
+                    finished_at=finish_iso,
+                    result="duplicate",
+                    bytes_received=0,
+                    artifact_id=collect_res.artifact_id,
+                    db_path=db_path,
+                )
+                update_item_status(
+                    item_id,
+                    ItemStatus.DUPLICATE,
+                    artifact_id=collect_res.artifact_id,
+                    raw_bytes=collect_res.byte_size,
+                    db_path=db_path,
+                )
+                duplicate_count += 1
+                record_download_budget(
+                    item.source_id,
+                    raw_bytes=0,
+                    duplicate=True,
+                    db_path=db_path,
+                )
+                continue
 
             finish_iso = datetime.now(UTC).isoformat()
             record_attempt(
@@ -138,6 +194,13 @@ def run_harvest_batch(
                 db_path=db_path,
             )
 
+            record_download_budget(
+                item.source_id,
+                raw_bytes=collect_res.byte_size,
+                duplicate=False,
+                db_path=db_path,
+            )
+
             # Step B: Pipeline run
             if harvest_cfg.runner.pipeline_after_download:
                 update_item_status(item_id, ItemStatus.PROCESSING, db_path=db_path)
@@ -146,35 +209,67 @@ def run_harvest_batch(
                 pipe_res = run_pipeline_item(collect_res.artifact_id)
 
                 pipe_finish_iso = datetime.now(UTC).isoformat()
+                pipe_success = pipe_res.status in ("approved", "needs_review", "rejected")
+
                 record_attempt(
                     item_id=item_id,
                     attempt_number=current_attempt,
                     stage="pipeline",
                     started_at=pipe_start_iso,
                     finished_at=pipe_finish_iso,
-                    result="succeeded",
+                    result="succeeded" if pipe_success else "failed",
+                    error_code=None
+                    if pipe_success
+                    else ("PIPELINE_FAILED" if pipe_res.status == "failed" else "UNEXPECTED_PIPELINE_STATUS"),
+                    error_message=None if pipe_success else f"Pipeline status: {pipe_res.status}",
                     artifact_id=collect_res.artifact_id,
                     db_path=db_path,
                 )
 
-                # Set final state based on pipeline output (needs_review or completed)
-                final_status = ItemStatus.NEEDS_REVIEW if pipe_res.status == "needs_review" else ItemStatus.COMPLETED
-                update_item_status(
-                    item_id,
-                    final_status,
-                    version_id=pipe_res.version_id,
+                record_pipeline_budget(
+                    item.source_id,
+                    success=pipe_success,
                     db_path=db_path,
                 )
-            else:
-                update_item_status(item_id, ItemStatus.COMPLETED, db_path=db_path)
 
-            record_daily_budget(
-                item.source_id,
-                collect_res.byte_size,
-                success=True,
-                db_path=db_path,
-            )
-            succeeded_count += 1
+                if pipe_res.status == "approved":
+                    update_item_status(
+                        item_id,
+                        ItemStatus.COMPLETED,
+                        version_id=pipe_res.version_id,
+                        db_path=db_path,
+                    )
+                    succeeded_count += 1
+                elif pipe_res.status in ("needs_review", "rejected"):
+                    update_item_status(
+                        item_id,
+                        ItemStatus.NEEDS_REVIEW,
+                        version_id=pipe_res.version_id,
+                        db_path=db_path,
+                    )
+                    succeeded_count += 1
+                elif pipe_res.status == "failed":
+                    update_item_status(
+                        item_id,
+                        ItemStatus.FAILED,
+                        last_error_code="PIPELINE_FAILED",
+                        last_error_message="Pipeline execution returned failed status",
+                        db_path=db_path,
+                    )
+                    failed_count += 1
+                else:
+                    update_item_status(
+                        item_id,
+                        ItemStatus.FAILED,
+                        last_error_code="UNEXPECTED_PIPELINE_STATUS",
+                        last_error_message=f"Pipeline returned unexpected status: {pipe_res.status}",
+                        db_path=db_path,
+                    )
+                    failed_count += 1
+            else:
+                record_pipeline_budget(item.source_id, success=True, db_path=db_path)
+                update_item_status(item_id, ItemStatus.COMPLETED, db_path=db_path)
+                succeeded_count += 1
 
         except ServiceBridgeError as sbe:
             finish_iso = datetime.now(UTC).isoformat()
@@ -190,7 +285,7 @@ def run_harvest_batch(
                 db_path=db_path,
             )
 
-            record_daily_budget(item.source_id, 0, success=False, db_path=db_path)
+            record_download_budget(item.source_id, 0, duplicate=False, db_path=db_path)
 
             next_retry, should_retry = calculate_next_retry(
                 current_attempt, sbe.code, max_attempts=harvest_cfg.runner.max_attempts

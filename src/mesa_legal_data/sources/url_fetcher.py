@@ -485,3 +485,45 @@ def fetch_url_stream(
             req_state.semaphore.release()
             acquired = False
         raise
+
+
+def fetch_discovery_html(
+    source_id: str,
+    family: str,
+    url: str,
+    sources_yaml_path: Path | None = None,
+) -> str:
+    """
+    Fetches discovery HTML content safely enforcing source policy, allowed hosts,
+    SSRF resolution checks, rate limiting, and size bounds without creating raw storage artifacts.
+    """
+    status_code, headers, stream_gen = fetch_url_stream(
+        url=url,
+        source_id=source_id,
+        document_family=family,
+        sources_yaml_path=sources_yaml_path,
+    )
+
+    if status_code != 200:
+        raise URLFetchError(f"Discovery HTTP request returned status code {status_code}")
+
+    chunks = []
+    total_bytes = 0
+    max_bytes = 10 * 1024 * 1024  # 10 MB limit for discovery HTML page
+
+    for chunk in stream_gen:
+        total_bytes += len(chunk)
+        if total_bytes > max_bytes:
+            raise SizeLimitExceededError(f"Discovery HTML size {total_bytes} exceeds limit {max_bytes}")
+        chunks.append(chunk)
+
+    raw_bytes = b"".join(chunks)
+
+    ct = headers.get("content-type", "").lower()
+    if ct and not ("html" in ct or "text" in ct or "xml" in ct):
+        raise SourcePolicyError(f"Discovery page returned invalid Content-Type: {ct}")
+
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw_bytes.decode("iso-8859-9", errors="ignore")

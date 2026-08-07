@@ -95,6 +95,11 @@ def load_harvest_config(config_path: Path | None = None) -> HarvestConfig:
         stop_on_error_rate=runner_data.get("stop_on_error_rate", 0.25),
     )
 
+    if runner_cfg.worker_count != 1:
+        raise ValueError(
+            f"CONFIG_UNSUPPORTED_WORKER_COUNT: Multi-worker orchestrator is not supported in this MVP. worker_count must be 1, got: {runner_cfg.worker_count}"
+        )
+
     review_cfg = HarvestReviewConfig(
         auto_approve=review_data.get("auto_approve", False),
         weekly_sample_per_source=review_data.get("weekly_sample_per_source", 50),

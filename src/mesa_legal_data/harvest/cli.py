@@ -74,10 +74,16 @@ def harvest_discover(
     source: str = typer.Option("resmi_gazete", "--source", help="Source ID to discover (e.g. resmi_gazete)"),
     config_file: Optional[Path] = typer.Option(None, "--config", help="Path to harvest.yaml"),
 ):
-    """Runs automated discovery for a configured legal source."""
-    from datetime import date
+    """Runs automated discovery for a configured legal source with cursor tracking."""
+    from datetime import date, datetime, timedelta
 
     from mesa_legal_data.harvest.discovery.resmi_gazete import ResmiGazeteDiscoveryAdapter
+    from mesa_legal_data.harvest.discovery_state import (
+        finish_discovery_run,
+        get_discovery_cursor,
+        save_discovery_cursor,
+        start_discovery_run,
+    )
     from mesa_legal_data.harvest.queue import enqueue_discovered_document
     from mesa_legal_data.harvest.selection import evaluate_selection
 
@@ -90,31 +96,133 @@ def harvest_discover(
         typer.secho(f"Source '{source}' is not configured or disabled.", fg=typer.colors.YELLOW)
         return
 
+    run_id = start_discovery_run(source, db_path=db_path)
     adapter = ResmiGazeteDiscoveryAdapter()
-    today = date.today()
-    try:
-        discovered_docs = adapter.discover_date(today)
-        inserted = 0
-        duplicates = 0
-        skipped = 0
-        for doc in discovered_docs:
-            decision = evaluate_selection(doc, src_cfg)
-            _, res = enqueue_discovered_document(doc, adapter.name, decision, db_path=db_path)
-            if res == "inserted":
-                inserted += 1
-            elif res == "duplicate":
-                duplicates += 1
-            else:
-                skipped += 1
 
-        typer.secho(f"=== Discovery Summary ({source}) ===", fg=typer.colors.CYAN, bold=True)
-        typer.echo(f"Discovered: {len(discovered_docs)}")
-        typer.echo(f"Inserted  : {inserted}")
-        typer.echo(f"Duplicates: {duplicates}")
-        typer.echo(f"Skipped   : {skipped}")
+    today = date.today()
+    date_from_str = src_cfg.date_from or "2015-01-01"
+    date_to_str = src_cfg.date_to or today.isoformat()
+
+    date_from = datetime.strptime(date_from_str, "%Y-%m-%d").date()
+    date_to = datetime.strptime(date_to_str, "%Y-%m-%d").date()
+
+    cursor_data = get_discovery_cursor(source, db_path=db_path) or {}
+
+    pages_per_run = src_cfg.budget.discovery_pages_per_run or 50
+    urls_per_run = src_cfg.budget.new_urls_per_run or 1000
+
+    pages_visited = 0
+    links_seen = 0
+    inserted_total = 0
+    duplicates_total = 0
+    skipped_total = 0
+
+    mode = cursor_data.get("mode", "backfill")
+    dates_to_process: list[date] = []
+
+    if mode == "backfill":
+        start_d_str = cursor_data.get("next_date")
+        if start_d_str:
+            curr = datetime.strptime(start_d_str, "%Y-%m-%d").date()
+        else:
+            curr = date_to
+
+        while curr >= date_from and len(dates_to_process) < pages_per_run:
+            dates_to_process.append(curr)
+            curr = curr - timedelta(days=1)
+
+        if not dates_to_process or curr < date_from:
+            mode = "incremental"
+
+    if mode == "incremental":
+        last_str = cursor_data.get("last_successful_date")
+        if last_str:
+            start_inc = datetime.strptime(last_str, "%Y-%m-%d").date() + timedelta(days=1)
+        else:
+            start_inc = today
+
+        curr = start_inc
+        while curr <= today and len(dates_to_process) < pages_per_run:
+            dates_to_process.append(curr)
+            curr = curr + timedelta(days=1)
+
+    error_msg = None
+    run_status = "succeeded"
+
+    try:
+        for target_date in dates_to_process:
+            if pages_visited >= pages_per_run or inserted_total >= urls_per_run:
+                break
+
+            docs = adapter.discover_date(target_date)
+            pages_visited += 1
+            links_seen += len(docs)
+
+            date_inserted = 0
+            date_dup = 0
+            date_skipped = 0
+
+            for doc in docs:
+                decision = evaluate_selection(doc, src_cfg)
+                _, res = enqueue_discovered_document(doc, adapter.name, decision, db_path=db_path)
+                if res == "inserted":
+                    date_inserted += 1
+                elif res == "duplicate":
+                    date_dup += 1
+                else:
+                    date_skipped += 1
+
+            inserted_total += date_inserted
+            duplicates_total += date_dup
+            skipped_total += date_skipped
+
+            if mode == "backfill":
+                next_d = target_date - timedelta(days=1)
+                save_discovery_cursor(
+                    source,
+                    {
+                        "mode": "backfill" if next_d >= date_from else "incremental",
+                        "next_date": next_d.isoformat(),
+                        "last_successful_date": target_date.isoformat(),
+                    },
+                    db_path=db_path,
+                )
+            else:
+                save_discovery_cursor(
+                    source,
+                    {
+                        "mode": "incremental",
+                        "last_successful_date": target_date.isoformat(),
+                    },
+                    db_path=db_path,
+                )
+
     except Exception as e:
+        run_status = "failed"
+        error_msg = str(e)
         typer.secho(f"Discovery failed: {e}", fg=typer.colors.RED)
+    finally:
+        finish_discovery_run(
+            run_id=run_id,
+            status=run_status,
+            pages_visited=pages_visited,
+            links_seen=links_seen,
+            items_inserted=inserted_total,
+            items_duplicate=duplicates_total,
+            items_skipped=skipped_total,
+            error_message=error_msg,
+            db_path=db_path,
+        )
+
+    if run_status == "failed":
         raise typer.Exit(code=1)
+
+    typer.secho(f"=== Discovery Summary ({source}) ===", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"Pages Visited : {pages_visited}")
+    typer.echo(f"Links Seen    : {links_seen}")
+    typer.echo(f"Inserted      : {inserted_total}")
+    typer.echo(f"Duplicates    : {duplicates_total}")
+    typer.echo(f"Skipped       : {skipped_total}")
 
 
 @harvest_app.command("run")
@@ -214,3 +322,26 @@ def harvest_backup(
     except Exception as e:
         typer.secho(f"Error backing up harvest database: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+
+@harvest_app.command("maintenance")
+def harvest_maintenance():
+    """Runs harvest system maintenance: recovers expired leases, backups DB, and checks queue status."""
+    db_path = get_harvest_db_path()
+    if not db_path.exists():
+        typer.secho("Harvest database not found.", fg=typer.colors.YELLOW)
+        return
+
+    typer.secho("=== MESA Harvest Maintenance ===", fg=typer.colors.CYAN, bold=True)
+    recovered = recover_expired_leases(db_path=db_path)
+    typer.echo(f"Expired leases reclaimed: {recovered}")
+
+    try:
+        b_file = backup_harvest_db(db_path=db_path)
+        typer.echo(f"Harvest DB backup created: {b_file}")
+    except Exception as e:
+        typer.secho(f"Backup warning: {e}", fg=typer.colors.YELLOW)
+
+    res = get_harvest_status_summary(db_path=db_path)
+    typer.echo(f"Total Queue Items: {res['total_items']}")
+    typer.secho("Maintenance completed successfully.", fg=typer.colors.GREEN)

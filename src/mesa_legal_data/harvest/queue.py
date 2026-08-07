@@ -309,6 +309,30 @@ def update_item_status(
         conn.close()
 
 
+def get_harvest_item_by_id(item_id: int, db_path: Path | None = None) -> HarvestItem | None:
+    conn = get_harvest_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM harvest_items WHERE id = ?", (item_id,))
+        row = cursor.fetchone()
+        return row_to_harvest_item(row) if row else None
+    finally:
+        conn.close()
+
+
+def increment_item_attempts(item_id: int, db_path: Path | None = None) -> int:
+    conn = get_harvest_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE harvest_items SET attempts = attempts + 1 WHERE id = ?", (item_id,))
+        conn.commit()
+        cursor.execute("SELECT attempts FROM harvest_items WHERE id = ?", (item_id,))
+        row = cursor.fetchone()
+        return row[0] if row else 1
+    finally:
+        conn.close()
+
+
 def record_attempt(
     item_id: int,
     attempt_number: int,
@@ -348,7 +372,6 @@ def record_attempt(
                 artifact_id,
             ),
         )
-        cursor.execute("UPDATE harvest_items SET attempts = attempts + 1 WHERE id = ?", (item_id,))
         conn.commit()
     finally:
         conn.close()

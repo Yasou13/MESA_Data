@@ -1,11 +1,13 @@
 [Unit]
 Description=MESA Legal Data Harvest Discovery Service
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=mesa
 WorkingDirectory=/opt/mesa-legal-data
+EnvironmentFile=-/etc/mesa-legal-data.env
 ExecStart=/opt/mesa-legal-data/.venv/bin/mesa-data harvest discover --source resmi_gazete
 Nice=10
 NoNewPrivileges=true

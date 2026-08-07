@@ -7,6 +7,7 @@ from pathlib import Path
 from mesa_legal_data.catalog import (
     create_run,
     finish_run,
+    get_artifact,
     get_connection,
     insert_artifact,
     upsert_document,
@@ -275,6 +276,37 @@ def import_manual_url(
 
         # 7. Database record
         conn = get_connection()
+        existing = get_artifact(conn, artifact_id)
+        if existing:
+            upsert_document(
+                conn=conn,
+                document_id=document_id,
+                family=family,
+                document_type=document_type,
+                jurisdiction=jurisdiction,
+                title=title,
+                stable_key=doc_key,
+                lifecycle_status="fetched",
+            )
+            conn.close()
+            return FetchedArtifact(
+                artifact_id=artifact_id,
+                document_id=document_id or existing["document_id"],
+                source_id=source_id,
+                source_url=url,
+                retrieved_at=existing["retrieved_at"],
+                fetch_method="manual_url",
+                http_status=status_code,
+                declared_content_type=declared_content_type,
+                detected_content_type=detected_mime,
+                byte_size=existing["byte_size"],
+                sha256=artifact_sha256,
+                raw_path=existing["raw_path"],
+                transport_status=existing.get("transport_status", "verified"),
+                is_duplicate=True,
+                metadata=meta_dict,
+            )
+
         run_id = f"run-{uuid.uuid4().hex[:8]}"
 
         create_run(
