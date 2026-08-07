@@ -85,6 +85,13 @@ def load_harvest_config(config_path: Path | None = None) -> HarvestConfig:
         minimum_free_disk_bytes=target_data.get("minimum_free_disk_bytes", 53687091200),
     )
 
+    if target_cfg.raw_bytes <= 0:
+        raise ValueError(f"CONFIG_INVALID_TARGET_RAW_BYTES: target.raw_bytes must be > 0, got: {target_cfg.raw_bytes}")
+    if target_cfg.minimum_free_disk_bytes <= 0:
+        raise ValueError(
+            f"CONFIG_INVALID_MIN_FREE_DISK: minimum_free_disk_bytes must be > 0, got: {target_cfg.minimum_free_disk_bytes}"
+        )
+
     runner_cfg = HarvestRunnerConfig(
         worker_count=runner_data.get("worker_count", 1),
         batch_size=runner_data.get("batch_size", 25),
@@ -98,6 +105,20 @@ def load_harvest_config(config_path: Path | None = None) -> HarvestConfig:
     if runner_cfg.worker_count != 1:
         raise ValueError(
             f"CONFIG_UNSUPPORTED_WORKER_COUNT: Multi-worker orchestrator is not supported in this MVP. worker_count must be 1, got: {runner_cfg.worker_count}"
+        )
+    if runner_cfg.batch_size < 1:
+        raise ValueError(f"CONFIG_INVALID_BATCH_SIZE: batch_size must be >= 1, got: {runner_cfg.batch_size}")
+    if runner_cfg.lease_seconds <= 0:
+        raise ValueError(f"CONFIG_INVALID_LEASE_SECONDS: lease_seconds must be > 0, got: {runner_cfg.lease_seconds}")
+    if runner_cfg.max_runtime_seconds <= 0:
+        raise ValueError(
+            f"CONFIG_INVALID_MAX_RUNTIME: max_runtime_seconds must be > 0, got: {runner_cfg.max_runtime_seconds}"
+        )
+    if runner_cfg.max_attempts < 1:
+        raise ValueError(f"CONFIG_INVALID_MAX_ATTEMPTS: max_attempts must be >= 1, got: {runner_cfg.max_attempts}")
+    if not (0 < runner_cfg.stop_on_error_rate <= 1.0):
+        raise ValueError(
+            f"CONFIG_INVALID_ERROR_RATE: stop_on_error_rate must be between 0 and 1, got: {runner_cfg.stop_on_error_rate}"
         )
 
     review_cfg = HarvestReviewConfig(
@@ -126,12 +147,30 @@ def load_harvest_config(config_path: Path | None = None) -> HarvestConfig:
             new_urls_per_run=bud_data.get("new_urls_per_run", 1000),
         )
 
+        if bud_cfg.daily_documents < 1:
+            raise ValueError(f"CONFIG_INVALID_DAILY_DOCUMENTS: daily_documents must be >= 1 for {src_id}")
+        if bud_cfg.daily_raw_bytes <= 0:
+            raise ValueError(f"CONFIG_INVALID_DAILY_RAW_BYTES: daily_raw_bytes must be > 0 for {src_id}")
+        if bud_cfg.target_raw_bytes <= 0:
+            raise ValueError(f"CONFIG_INVALID_SOURCE_TARGET_RAW: target_raw_bytes must be > 0 for {src_id}")
+        if bud_cfg.discovery_pages_per_run < 1:
+            raise ValueError(f"CONFIG_INVALID_DISCOVERY_PAGES: discovery_pages_per_run must be >= 1 for {src_id}")
+        if bud_cfg.new_urls_per_run < 1:
+            raise ValueError(f"CONFIG_INVALID_NEW_URLS: new_urls_per_run must be >= 1 for {src_id}")
+
+        date_from_val = dr_data.get("from") if isinstance(dr_data, dict) else None
+        date_to_val = dr_data.get("to") if isinstance(dr_data, dict) else None
+        if date_from_val and date_to_val and date_from_val > date_to_val:
+            raise ValueError(
+                f"CONFIG_INVALID_DATE_RANGE: date_from ({date_from_val}) cannot be after date_to ({date_to_val}) for {src_id}"
+            )
+
         sources_dict[src_id] = HarvestSourceConfig(
             enabled=src_val.get("enabled", True),
             adapter=src_val.get("adapter", src_id),
             source_id=src_id,
-            date_from=dr_data.get("from") if isinstance(dr_data, dict) else None,
-            date_to=dr_data.get("to") if isinstance(dr_data, dict) else None,
+            date_from=date_from_val,
+            date_to=date_to_val,
             selection=sel_cfg,
             budget=bud_cfg,
         )

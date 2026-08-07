@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 
@@ -133,5 +133,5 @@ class PipelineResult:
     artifact_id: str
     version_id: str | None
     status: str
-    record_count: int = 0
-    issue_counts: dict[str, int] = field(default_factory=dict)
+    record_count: int | None = None
+    issue_counts: dict[str, int] | None = None

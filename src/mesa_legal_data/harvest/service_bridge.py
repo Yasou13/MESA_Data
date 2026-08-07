@@ -120,8 +120,8 @@ def run_pipeline_item(artifact_id: str) -> PipelineResult:
             artifact_id=artifact_id,
             version_id=version_id,
             status=final_status,
-            record_count=record_count if record_count is not None else 1,
-            issue_counts={},
+            record_count=record_count,
+            issue_counts=None,
         )
     except Exception as e:
         err_msg = str(e)

@@ -228,56 +228,18 @@ def import_manual_url(
         with open(temp_file, "rb") as f:
             artifact_sha256 = hash_stream(f)
 
-        # 4. Path construction
-        ext = ".html" if "html" in detected_mime else (".pdf" if "pdf" in detected_mime else ".bin")
-        doc_key = stable_key if stable_key else secure_slug(document_id)
-        year = datetime.now(UTC).year
-
-        rel_path = build_raw_path(
-            family=family,
-            source=source_id,
-            year=year,
-            document_key=doc_key,
-            artifact_sha256=artifact_sha256,
-            ext=ext,
-        )
-        full_target_payload = data_root / rel_path
-
-        # 5. Storage (atomic write)
-        with open(temp_file, "rb") as f:
-            atomic_write(f, full_target_payload)
-
-        # 6. Metadata json
-        retrieved_at = datetime.now(UTC).isoformat()
-        byte_size = os.path.getsize(temp_file)
+        # 4. Path construction & Duplicate check
         artifact_id = f"sha256:{artifact_sha256}"
-
-        meta_dict = {
-            "artifact_id": artifact_id,
-            "document_key": doc_key,
-            "source_id": source_id,
-            "source_url": url,
-            "retrieved_at": retrieved_at,
-            "fetch_method": "manual_url",
-            "http_status": status_code,
-            "declared_content_type": declared_content_type,
-            "detected_content_type": detected_mime,
-            "byte_size": byte_size,
-            "sha256": artifact_sha256,
-            "etag": headers.get("etag"),
-            "last_modified": headers.get("last-modified"),
-            "collector_version": "1.0.0",
-            "access_policy_version": policy.policy_version,
-        }
-
-        metadata_path = full_target_payload.parent / "metadata.json"
-        meta_bytes = json.dumps(meta_dict, indent=2).encode("utf-8")
-        atomic_write(io.BytesIO(meta_bytes), metadata_path)
-
-        # 7. Database record
         conn = get_connection()
         existing = get_artifact(conn, artifact_id)
         if existing:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except OSError:
+                    pass
+
+            doc_key = stable_key if stable_key else secure_slug(document_id)
             upsert_document(
                 conn=conn,
                 document_id=document_id,
@@ -304,8 +266,52 @@ def import_manual_url(
                 raw_path=existing["raw_path"],
                 transport_status=existing.get("transport_status", "verified"),
                 is_duplicate=True,
-                metadata=meta_dict,
+                metadata={},
             )
+
+        ext = ".html" if "html" in detected_mime else (".pdf" if "pdf" in detected_mime else ".bin")
+        doc_key = stable_key if stable_key else secure_slug(document_id)
+        year = datetime.now(UTC).year
+
+        rel_path = build_raw_path(
+            family=family,
+            source=source_id,
+            year=year,
+            document_key=doc_key,
+            artifact_sha256=artifact_sha256,
+            ext=ext,
+        )
+        full_target_payload = data_root / rel_path
+
+        # 5. Storage (atomic write)
+        with open(temp_file, "rb") as f:
+            atomic_write(f, full_target_payload)
+
+        # 6. Metadata json
+        retrieved_at = datetime.now(UTC).isoformat()
+        byte_size = os.path.getsize(temp_file)
+
+        meta_dict = {
+            "artifact_id": artifact_id,
+            "document_key": doc_key,
+            "source_id": source_id,
+            "source_url": url,
+            "retrieved_at": retrieved_at,
+            "fetch_method": "manual_url",
+            "http_status": status_code,
+            "declared_content_type": declared_content_type,
+            "detected_content_type": detected_mime,
+            "byte_size": byte_size,
+            "sha256": artifact_sha256,
+            "etag": headers.get("etag"),
+            "last_modified": headers.get("last-modified"),
+            "collector_version": "1.0.0",
+            "access_policy_version": policy.policy_version,
+        }
+
+        metadata_path = full_target_payload.parent / "metadata.json"
+        meta_bytes = json.dumps(meta_dict, indent=2).encode("utf-8")
+        atomic_write(io.BytesIO(meta_bytes), metadata_path)
 
         run_id = f"run-{uuid.uuid4().hex[:8]}"
 
