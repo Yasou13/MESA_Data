@@ -192,15 +192,22 @@ class ResmiGazeteDiscoveryAdapter:
         if page_html is None:
             if self._http_client is not None:
                 resp = self._http_client.get(page_url)
-                if resp.status_code != 200:
+                if resp.status_code == 404:
                     return []
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Resmî Gazete HTTP discovery failed with status code {resp.status_code}")
                 page_html = resp.text
             else:
-                page_html = fetch_discovery_html(
-                    source_id="resmi_gazete",
-                    family="legislation",
-                    url=page_url,
-                    sources_yaml_path=sources_yaml_path,
-                )
+                try:
+                    page_html = fetch_discovery_html(
+                        source_id="resmi_gazete",
+                        family="legislation",
+                        url=page_url,
+                        sources_yaml_path=sources_yaml_path,
+                    )
+                except Exception as e:
+                    if "404" in str(e):
+                        return []
+                    raise
 
         return self.parse_html_fihrist(page_html, target_date, page_url)

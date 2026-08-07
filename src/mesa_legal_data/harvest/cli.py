@@ -131,10 +131,10 @@ def harvest_discover(
             dates_to_process.append(curr)
             curr = curr - timedelta(days=1)
 
-        if not dates_to_process or curr < date_from:
+        if not dates_to_process:
             mode = "incremental"
 
-    if mode == "incremental":
+    if mode == "incremental" and not dates_to_process:
         last_str = cursor_data.get("last_successful_date")
         if last_str:
             start_inc = datetime.strptime(last_str, "%Y-%m-%d").date() + timedelta(days=1)
