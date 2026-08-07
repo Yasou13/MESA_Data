@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -207,6 +208,9 @@ def process_artifact_pipeline(
             leg_parsed = parse_legislation_text(parsed_text)
             title = doc_row["title"] if doc_row and doc_row.get("title") else "Mevzuat Metni"
             num = doc_id.split(":")[-1] if doc_id else "0"
+            num_match = re.search(r"\b(\d{1,8})\s+sayılı\b", title, re.IGNORECASE)
+            if num_match:
+                num = num_match.group(1)
 
             doc_type = None
             if doc_row and doc_row.get("document_type"):
