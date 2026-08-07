@@ -801,3 +801,19 @@ input:focus, select:focus, textarea:focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Harvest Progress Bar */
+.harvest-progress {
+  width: 100%;
+  height: 8px;
+  background-color: var(--color-surface-subtle, #e2e8f0);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.harvest-progress-bar {
+  height: 100%;
+  background-color: var(--color-accent, #2563eb);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}

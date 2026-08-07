@@ -138,6 +138,10 @@ def get_dashboard():
     except Exception:
         pass
 
+    from mesa_legal_data.harvest.reporting import get_harvest_dashboard_summary
+
+    harvest_summary = get_harvest_dashboard_summary()
+
     return ok_response(
         {
             "counts": {
@@ -153,6 +157,7 @@ def get_dashboard():
             },
             "recent_documents": recent_docs,
             "recent_runs": recent_runs,
+            "harvest": harvest_summary,
         }
     )
 

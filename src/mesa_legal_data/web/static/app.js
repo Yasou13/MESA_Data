@@ -321,14 +321,19 @@ async function loadDashboard() {
     setBusy(true);
     const data = await apiRequest("/api/dashboard/stats");
 
-    document.getElementById("stat-docs").textContent = data.documents_count || 0;
-    document.getElementById("stat-artifacts").textContent = data.raw_artifacts_count || 0;
-    document.getElementById("stat-records").textContent = data.canonical_records_count || 0;
-    document.getElementById("stat-pending").textContent = data.pending_reviews_count || 0;
-    document.getElementById("stat-approved").textContent = data.approved_records_count || 0;
-    document.getElementById("stat-issues").textContent = data.open_issues_count || 0;
-    document.getElementById("stat-releases").textContent = data.published_releases_count || 0;
-    document.getElementById("stat-active-release").textContent = data.active_release_id || "YOK";
+    const counts = data.counts || {};
+    document.getElementById("stat-docs").textContent = counts.documents || 0;
+    document.getElementById("stat-artifacts").textContent = counts.artifacts || 0;
+    document.getElementById("stat-records").textContent = counts.records || 0;
+    document.getElementById("stat-pending").textContent = counts.pending_reviews || 0;
+    document.getElementById("stat-approved").textContent = counts.approved_records || 0;
+    document.getElementById("stat-issues").textContent = (counts.open_blockers || 0) + (counts.open_errors || 0);
+    document.getElementById("stat-releases").textContent = counts.published_releases || 0;
+    document.getElementById("stat-active-release").textContent = counts.active_release_id || "YOK";
+
+    if (data.harvest) {
+      renderHarvestSummary(data.harvest);
+    }
 
     // Table: Recent Docs
     const tblDocs = document.getElementById("tbl-recent-docs");
@@ -371,6 +376,81 @@ async function loadDashboard() {
   } finally {
     setBusy(false);
   }
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+function renderHarvestSummary(h) {
+  const panel = document.getElementById("harvest-summary-panel");
+  if (!panel) return;
+
+  if (!h || !h.enabled) {
+    panel.style.display = "none";
+    return;
+  }
+  panel.style.display = "block";
+
+  const badge = document.getElementById("harvest-status-badge");
+  if (h.initialized === false) {
+    if (badge) {
+      badge.className = "badge badge-secondary";
+      badge.textContent = "Başlatılmadı";
+    }
+    document.getElementById("harvest-raw-text").textContent = "0 B / " + formatBytes(h.target_raw_bytes || 32212254720);
+    document.getElementById("harvest-progress-bar").style.width = "0%";
+    document.getElementById("harvest-queued").textContent = "0";
+    document.getElementById("harvest-review").textContent = "0";
+    document.getElementById("harvest-errors").textContent = "0 / 0";
+    document.getElementById("harvest-meta-source").textContent = "resmi_gazete";
+    document.getElementById("harvest-meta-mode").textContent = "BACKFILL";
+    document.getElementById("harvest-meta-status").textContent = "Yok";
+    document.getElementById("harvest-meta-cursor").textContent = "-";
+    return;
+  }
+
+  if (h.status === "unavailable") {
+    if (badge) {
+      badge.className = "badge badge-warning";
+      badge.textContent = "Erişilemiyor";
+    }
+    return;
+  }
+
+  const discStatus = (h.last_discovery_status || "none").toLowerCase();
+  if (badge) {
+    if (discStatus === "succeeded") {
+      badge.className = "badge badge-success";
+      badge.textContent = "Aktif (Başarılı)";
+    } else if (discStatus === "failed") {
+      badge.className = "badge badge-danger";
+      badge.textContent = "Hata";
+    } else {
+      badge.className = "badge badge-info";
+      badge.textContent = "Hazır";
+    }
+  }
+
+  const rawFormatted = formatBytes(h.raw_bytes || 0);
+  const targetFormatted = formatBytes(h.target_raw_bytes || 32212254720);
+  const pct = h.progress_percent !== undefined ? h.progress_percent : 0;
+
+  document.getElementById("harvest-raw-text").textContent = `${rawFormatted} / ${targetFormatted} (%${pct})`;
+  document.getElementById("harvest-progress-bar").style.width = `${Math.min(pct, 100)}%`;
+
+  document.getElementById("harvest-queued").textContent = h.queued || 0;
+  document.getElementById("harvest-review").textContent = h.needs_review || 0;
+  document.getElementById("harvest-errors").textContent = `${h.failed || 0} / ${h.retry_wait || 0}`;
+
+  document.getElementById("harvest-meta-source").textContent = h.source || "resmi_gazete";
+  document.getElementById("harvest-meta-mode").textContent = (h.cursor_mode || "backfill").toUpperCase();
+  document.getElementById("harvest-meta-status").textContent = h.last_discovery_status || "yok";
+  document.getElementById("harvest-meta-cursor").textContent = h.cursor_date || "-";
 }
 
 // --- Add Data Form Handlers ---

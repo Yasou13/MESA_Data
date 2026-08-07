@@ -163,6 +163,48 @@
             </div>
           </div>
 
+          <!-- Harvest Read-Only Summary Section -->
+          <div id="harvest-summary-panel" class="panel-box" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <h3 style="margin: 0;">Otomatik Veri Toplama (Harvest)</h3>
+              <span id="harvest-status-badge" class="badge badge-info">Yükleniyor...</span>
+            </div>
+            
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
+              <div class="stat-card">
+                <span class="stat-label">Toplanan Ham Veri</span>
+                <span class="stat-val text-sm" id="harvest-raw-text">0 B / 30 GB</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Kuyrukta Bekleyen</span>
+                <span class="stat-val" id="harvest-queued">0</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">İnceleme Bekleyen</span>
+                <span class="stat-val" id="harvest-review">0</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Hata / Retry Wait</span>
+                <span class="stat-val" id="harvest-errors">0 / 0</span>
+              </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div style="margin-bottom: 16px;">
+              <div class="harvest-progress">
+                <div id="harvest-progress-bar" class="harvest-progress-bar" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Meta details row -->
+            <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--text-secondary);">
+              <div><strong>Kaynak:</strong> <span id="harvest-meta-source">resmi_gazete</span></div>
+              <div><strong>Mod:</strong> <span id="harvest-meta-mode">BACKFILL</span></div>
+              <div><strong>Son Discovery:</strong> <span id="harvest-meta-status">-</span></div>
+              <div><strong>Cursor Tarihi:</strong> <span id="harvest-meta-cursor">-</span></div>
+            </div>
+          </div>
+
           <div class="dashboard-sections">
             <div class="panel-box">
               <h3>Son Güncellenen Belgeler</h3>
