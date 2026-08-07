@@ -1041,6 +1041,13 @@ uv run mesa-data release import --release-id release-v1.0
 | Provenance sorgusu | `uv run mesa-data provenance RECORD_ID` | Kaydın veri kökeni zincirini gösterir |
 | Yedekleme | `uv run mesa-data backup` | Catalog veritabanını yedekler |
 | Geri yükleme | `uv run mesa-data restore --backup-file ...` | Yedekten catalog'u geri yükler |
+| Harvest Başlatma | `uv run mesa-data harvest init` | Harvest veritabanını ve şemalarını hazırlar |
+| Harvest Config Kontrol | `uv run mesa-data harvest config-check` | `harvest.yaml` ayarlarını ve guardrail limitlerini kontrol eder |
+| Harvest Keşif | `uv run mesa-data harvest discover --source resmi_gazete` | Resmî kaynakta belge keşfi çalıştırır |
+| Harvest Durumu | `uv run mesa-data harvest status` | Kuyruk sayaçlarını ve toplanan ham veri hacmini raporlar |
+| Harvest İşleyici | `uv run mesa-data harvest run --once --limit 25` | Kuyruktaki belgeleri indirip pipeline'a gönderir |
+| Harvest Hata İnceleme | `uv run mesa-data harvest failures` | Başarısız/retry bekleyen belgeleri gösterir |
+| Harvest Bakım | `uv run mesa-data harvest maintenance` | Süresi dolmuş kilitleri temizler ve Harvest DB yedekler |
 | Web paneli başlatma | `uv run mesa-data web --host 127.0.0.1 --port 8765` | Web yönetim panelini başlatır |
 
 ---

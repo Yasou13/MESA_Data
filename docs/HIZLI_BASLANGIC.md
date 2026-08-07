@@ -108,6 +108,29 @@ uv run mesa-data release import --release-id release-v1.0
 
 ---
 
+## 9. Opsiyonel: Otomatik Veri Toplama (Harvest)
+
+Otomatik veri toplama kullanacaksanız timer açmadan önce manuel küçük bir batch çalıştırın:
+
+```bash
+# Harvest veritabanını başlatın
+uv run mesa-data harvest init
+
+# Yapılandırmayı kontrol edin
+uv run mesa-data harvest config-check
+
+# Resmî Gazete keşfi çalıştırın
+uv run mesa-data harvest discover --source resmi_gazete
+
+# Kuyruk durumunu inceleyin
+uv run mesa-data harvest status
+
+# İlk küçük batch'i çalıştırın
+uv run mesa-data harvest run --once --limit 10
+```
+
+---
+
 ## Sonraki adımlar
 
 - Detaylı kullanım için: `docs/KULLANIM_KILAVUZU.md`

@@ -31,6 +31,18 @@ Bu belge, MESA Legal Data kullanımı sırasında karşılaşabileceğiniz hata 
 | `SCHEMA_VALIDATION_FAILED` | Canonical kayıt şema doğrulamasından geçemedi | Kaynak dosyanın yapısını kontrol edin |
 | Parsed text is empty | Ayrıştırma sonucu boş metin | Dosyanın metin içerdiğini doğrulayın (taranmış PDF'ler OCR gerektirebilir) |
 
+## Otomatik Veri Toplama (Harvest) Hataları
+
+| Hata | Sebep | Çözüm |
+|---|---|---|
+| Harvest DB bulunamadı | `harvest.sqlite` oluşturulmamış | `uv run mesa-data harvest init` çalıştırın |
+| `retry_wait` | Geçici kaynak veya HTTP hatası | Backoff süresi dolunca runner otomatik yeniden dener |
+| `failed` | Kalıcı pipeline hatası veya max attempt aşıldı | `uv run mesa-data harvest failures` ile hata kodunu inceleyin |
+| `LOW_DISK_SPACE` | Serbest disk alanı güvenlik eşiğinin altında | Disk alanı açmadan runner'ı başlatmayın |
+| `TARGET_REACHED` | Global veya kaynak ham veri hedefi doldu | Normal durdurma durumudur; hedefi artırabilir veya mevcudu işleyebilirsiniz |
+| `DISCOVERY_STRUCTURE_CHANGED` | Resmî kaynak sayfası beklenen formatta değil | Kaynak sayfasının yapısını kontrol edin; fail-closed kuralı gereği cursor ilerlemez |
+| `NO_PUBLICATION` | O tarihte yayımlanmış resmî gazete/sayı yok | Normal durumdur; sistem o günü tamamlandı sayıp sonraki tarihe geçer |
+
 ## İnceleme Hataları
 
 | Hata | Sebep | Çözüm |

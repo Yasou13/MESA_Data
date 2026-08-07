@@ -4,8 +4,12 @@ MESA Legal Data, MESA hukuk ekosistemi için mevzuat, içtihat ve hukuki atıf v
 
 ## Katmanlı Mimari
 ```text
-Resmî Kaynak / Yerel Dosya
-        ↓
+Resmî Kaynak
+   ├─ Manuel URL / Yerel Dosya
+   └─ Harvest Discovery → Queue
+              ↓
+        Güvenli Collect
+              ↓
 raw (Değişmez ham artifact + SHA-256 + metadata)
         ↓
 parse & canonical (Değişmez JSONL parçaları)
@@ -31,19 +35,43 @@ $DATA_ROOT/
   exports/                # Dışa aktarma dosyaları
   source_configs/         # Kaynak yapılandırma YAML dosyaları
   backups/                # Catalog yedekleri
-  catalog.sqlite          # Ana veritabanı
+  harvest/                # Harvest veritabanı ve yedekleri
+    harvest.sqlite
+    backups/
+  catalog.sqlite          # Ana catalog veritabanı
 ```
 
 ## Veri Akışı
 
 ```text
-1. Collect  → raw/ dizinine ham dosya + SHA-256 + metadata kaydı
+1. Collect  → raw/ dizinine ham dosya + SHA-256 + metadata kaydı (Manuel veya Harvest Queue)
 2. Pipeline → parse → canonical JSONL üretimi → JSON Schema doğrulama
 3. Review   → İnsan onayı (approve/reject) → audit kaydı
 4. Release  → JSONL paketi + manifest.json + SHA-256 doğrulama
 5. Import   → MESA Staging DB'ye atomik aktarım
 6. Export   → Filtrelenmiş JSONL/CSV dışa aktarma
 ```
+
+## Otomatik Veri Toplama (Harvest)
+
+MESA Legal Data, tanımlı resmî kaynakların belge bağlantılarını kontrollü biçimde keşfeden, kalıcı kuyruğa alan ve mevcut güvenli collect/pipeline akışıyla besleyen Harvest katmanına sahiptir. Harvest, ana catalog veritabanından bağımsız ayrı bir `harvest.sqlite` veritabanı üzerinde çalışır.
+
+### Harvest CLI Komutları
+```bash
+uv run mesa-data harvest init
+uv run mesa-data harvest config-check
+uv run mesa-data harvest discover --source resmi_gazete
+uv run mesa-data harvest status
+uv run mesa-data harvest run --once --limit 25
+uv run mesa-data harvest failures
+uv run mesa-data harvest maintenance
+uv run mesa-data harvest import-manifest --file manifest.csv
+```
+
+### Güvenlik & Politika
+- Discovery yalnızca tanımlı resmî kaynaklarda (`sources.yaml` ve `harvest.yaml`) çalışır (pilot kaynak: Resmî Gazete mevzuat verisi).
+- İndirmeler core source policy, allowed hosts, SSRF, MIME, size ve rate-limit denetimlerinden geçer.
+- Otomatik review, publish veya import yapılmaz; insan onayı süreci aynen korunur.
 
 ## Web Yönetim Paneli (Vanilla HTML/CSS/JS + FastAPI)
 
@@ -61,7 +89,7 @@ Tarayıcınızda `http://127.0.0.1:8765` adresini açınız.
 - Tüm yazma isteklerinde (`POST`/`PUT`/`DELETE`) `X-MESA-Requested-With: web-admin` başlığı zorunlu tutulmaktadır.
 
 ### Panel Ekranları
-1. **📊 Genel Bakış (Dashboard):** Gerçek veritabanı sayaçları, son 10 belge, son işlemler ve aktif MESA release durumu.
+1. **📊 Genel Bakış (Dashboard):** Core sayaçları + Otomatik Veri Toplama (Harvest) salt okunur özeti + aktif MESA release durumu.
 2. **➕ Veri Ekle:** Yerel dosya (PDF/HTML) veya izinli HTTPS URL üzerinden ham veri aktarımı (`raw`).
 3. **📄 Belgeler:** Tüm belgelerin listelenmesi, filtrelenmesi, artifact detayları ve tek tıkla pipeline orkestrasyonu.
 4. **🔍 Veri Gezgini:** Documents, artifacts, versions, records, issues, releases listeleme ve filtreleme.
