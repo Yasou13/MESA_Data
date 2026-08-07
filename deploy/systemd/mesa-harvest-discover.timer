@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for MESA Legal Data Harvest Discovery
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

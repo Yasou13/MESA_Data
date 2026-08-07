@@ -1,0 +1,9 @@
+[Unit]
+Description=Timer for MESA Legal Data Harvest Maintenance
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

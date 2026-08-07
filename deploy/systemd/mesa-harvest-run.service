@@ -1,0 +1,12 @@
+[Unit]
+Description=MESA Legal Data Harvest Runner Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=mesa
+WorkingDirectory=/opt/mesa-legal-data
+ExecStart=/opt/mesa-legal-data/.venv/bin/mesa-data harvest run --once
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true

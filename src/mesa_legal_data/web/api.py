@@ -79,6 +79,7 @@ def health_check():
 
 # 8.2 Dashboard
 @router.get("/dashboard")
+@router.get("/dashboard/stats")
 def get_dashboard():
     conn = get_connection()
     c = conn.cursor()
@@ -158,6 +159,7 @@ def get_dashboard():
 
 # 8.3 Public Config
 @router.get("/config/public")
+@router.get("/sources")
 def get_public_config():
     settings = load_settings()
     sources_yaml_path = Path(__file__).parent.parent.parent.parent / "config" / "sources.yaml"
@@ -650,6 +652,7 @@ def get_document_detail(document_id: str):
 
 # 8.5 Artifacts
 @router.post("/artifacts/upload")
+@router.post("/manual/upload-file")
 async def upload_artifact(
     file: UploadFile = File(...),
     source_id: str = Form(...),
@@ -693,6 +696,7 @@ async def upload_artifact(
 
 
 @router.post("/artifacts/from-url")
+@router.post("/manual/import-url")
 def import_from_url(req: UrlImportRequest):
     try:
         art = import_manual_url(
@@ -719,10 +723,35 @@ async def process_artifact(artifact_id: str):
             error_response("PIPELINE_FAILED", f"Pipeline failed: {e}", status_code=400)
 
 
+@router.post("/documents/{document_id:path}/pipeline")
+async def process_document_pipeline(document_id: str):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute(
+            "SELECT artifact_id FROM artifacts WHERE document_id = ? ORDER BY retrieved_at DESC LIMIT 1",
+            (document_id,),
+        )
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            error_response("ARTIFACT_NOT_FOUND", f"No artifact found for document {document_id}", status_code=404)
+        artifact_id = row[0]
+        try:
+            pipeline_status = process_artifact_pipeline(artifact_id=artifact_id)
+            return ok_response(
+                {"document_id": document_id, "artifact_id": artifact_id, "pipeline_status": pipeline_status}
+            )
+        except Exception as e:
+            error_response("PIPELINE_FAILED", f"Pipeline failed: {e}", status_code=400)
+
+
 # 8.6 Records
 @router.get("/records")
+@router.get("/reviews/records")
 def list_records(
     approval_status: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     record_type: Optional[str] = Query(None),
     document_id: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
@@ -731,11 +760,12 @@ def list_records(
     conn = get_connection()
     c = conn.cursor()
 
+    target_status = approval_status or status
     where_clauses = []
     params = []
-    if approval_status:
+    if target_status:
         where_clauses.append("r.approval_status = ?")
-        params.append(approval_status)
+        params.append(target_status)
     if record_type:
         where_clauses.append("r.record_type = ?")
         params.append(record_type)
@@ -780,6 +810,7 @@ def list_records(
 
 
 @router.get("/records/{record_id:path}")
+@router.get("/reviews/records/{record_id:path}")
 def get_record_detail(record_id: str):
     conn = get_connection()
     rec = get_record(conn, record_id)
@@ -810,6 +841,7 @@ def get_record_detail(record_id: str):
 
 # 8.7 Review
 @router.post("/records/{record_id:path}/approve")
+@router.post("/reviews/records/{record_id:path}/approve")
 async def approve_record(record_id: str, req: ReviewRequest):
     async with write_lock.acquire_write():
         conn = get_connection()
@@ -823,6 +855,7 @@ async def approve_record(record_id: str, req: ReviewRequest):
 
 
 @router.post("/records/{record_id:path}/reject")
+@router.post("/reviews/records/{record_id:path}/reject")
 async def reject_record(record_id: str, req: ReviewRequest):
     async with write_lock.acquire_write():
         conn = get_connection()
@@ -922,6 +955,7 @@ def list_releases():
 
 
 @router.post("/releases")
+@router.post("/releases/build")
 async def create_release_endpoint(req: ReleaseCreateRequest):
     async with write_lock.acquire_write():
         try:
@@ -969,7 +1003,9 @@ async def publish_release_endpoint(release_id: str):
             conn.close()
 
 
-@router.post("/releases/{release_id}/import")
+@router.post("/releases/{release_id:path}/import")
+@router.post("/releases/{release_id:path}/import-to-mesa")
+@router.post("/releases/{release_id:path}/import-to-staging")
 async def import_release_endpoint(release_id: str):
     async with write_lock.acquire_write():
         try:
@@ -1260,17 +1296,31 @@ def release_package_endpoint(release_id: str, request: Request):
 
 
 @router.get("/explorer/search")
+@router.get("/explorer/records")
 def explorer_search_endpoint(
     q: Optional[str] = Query(None),
     record_type: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
     source_id: Optional[str] = Query(None),
     approval_status: Optional[str] = Query(None),
+    approval: Optional[str] = Query(None),
     validation_status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    limit: Optional[int] = Query(None),
+    offset: Optional[int] = Query(None),
+    sort: Optional[str] = Query(None),
 ):
     conn = get_connection()
     c = conn.cursor()
+
+    effective_record_type = record_type or type
+    effective_approval = approval_status or approval
+    effective_page_size = limit if (limit is not None and limit > 0) else page_size
+    if offset is not None and effective_page_size > 0:
+        effective_page = (offset // effective_page_size) + 1
+    else:
+        effective_page = page
 
     where_clauses = ["1=1"]
     params: list[Any] = []
@@ -1280,17 +1330,17 @@ def explorer_search_endpoint(
         term = f"%{q}%"
         params.extend([term, term, term])
 
-    if record_type:
+    if effective_record_type:
         where_clauses.append("r.record_type = ?")
-        params.append(record_type)
+        params.append(effective_record_type)
 
     if source_id:
         where_clauses.append("a.source_id = ?")
         params.append(source_id)
 
-    if approval_status:
+    if effective_approval:
         where_clauses.append("r.approval_status = ?")
-        params.append(approval_status)
+        params.append(effective_approval)
 
     if validation_status:
         where_clauses.append("r.validation_status = ?")
@@ -1309,7 +1359,7 @@ def explorer_search_endpoint(
     c.execute(count_sql, params)
     total = c.fetchone()[0]
 
-    offset = (page - 1) * page_size
+    offset = (effective_page - 1) * effective_page_size
     data_sql = f"""
         SELECT r.record_id, r.record_type, r.version_id, r.approval_status, r.validation_status, r.canonical_path, r.canonical_line, r.record_sha256, d.document_id, d.title, a.source_id, r.created_at
         FROM records r

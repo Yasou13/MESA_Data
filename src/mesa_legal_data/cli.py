@@ -5,10 +5,12 @@ from pathlib import Path
 import typer
 
 from mesa_legal_data.config import load_settings
+from mesa_legal_data.harvest.cli import harvest_app
 
 app = typer.Typer(help="MESA Legal Data CLI")
 collect_app = typer.Typer(help="Collect legal data artifacts from sources.")
 app.add_typer(collect_app, name="collect")
+app.add_typer(harvest_app, name="harvest")
 
 
 @app.command()

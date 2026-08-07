@@ -1,0 +1,61 @@
+version: "1.0.0"
+
+harvest:
+  enabled: true
+
+  target:
+    raw_bytes: 32212254720
+    stop_when_target_reached: true
+    minimum_free_disk_bytes: 53687091200
+
+  runner:
+    worker_count: 1
+    batch_size: 25
+    lease_seconds: 1800
+    max_runtime_seconds: 1200
+    max_attempts: 5
+    pipeline_after_download: true
+    stop_on_error_rate: 0.25
+
+  review:
+    auto_approve: false
+    weekly_sample_per_source: 50
+
+sources:
+  resmi_gazete:
+    enabled: true
+    adapter: resmi_gazete
+    source_id: resmi_gazete
+
+    date_range:
+      from: "2015-01-01"
+      to: null
+
+    selection:
+      include_sections:
+        - "KANUNLAR"
+        - "CUMHURBAŞKANLIĞI KARARNAMELERİ"
+        - "CUMHURBAŞKANI KARARLARI"
+        - "YÖNETMELİKLER"
+        - "TEBLİĞLER"
+        - "YARGI BÖLÜMÜ"
+
+      exclude_sections:
+        - "İLÂN BÖLÜMÜ"
+        - "ARTIRMA, EKSİLTME VE İHALE İLÂNLARI"
+        - "ÇEŞİTLİ İLÂNLAR"
+
+      allowed_document_types:
+        - law
+        - presidential_decree
+        - presidential_decision
+        - regulation
+        - communique
+        - court_decision
+
+    budget:
+      target_raw_bytes: 5368709120
+      daily_raw_bytes: 536870912
+      daily_documents: 1000
+      discovery_pages_per_run: 50
+      new_urls_per_run: 1000

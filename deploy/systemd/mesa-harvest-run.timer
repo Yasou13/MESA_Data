@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for MESA Legal Data Harvest Runner
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target
