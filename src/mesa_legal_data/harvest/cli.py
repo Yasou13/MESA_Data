@@ -43,7 +43,8 @@ INVALID_CONTACT_PLACEHOLDERS = (
 def harvest_config_check(config_file: Optional[Path] = typer.Option(None, "--config", help="Path to harvest.yaml")):
     """Checks harvest.yaml and source policy configuration validity."""
     try:
-        import yaml
+        import yaml  # type: ignore[import-untyped]
+
         cfg = load_harvest_config(config_file)
 
         # Check sources.yaml for access_mode and operator contact validation

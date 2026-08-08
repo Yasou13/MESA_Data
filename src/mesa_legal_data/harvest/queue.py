@@ -191,6 +191,7 @@ def _check_artifact_committed(artifact_id: str | None) -> bool:
         return False
     try:
         from mesa_legal_data.catalog import get_artifact, get_connection
+
         conn = get_connection()
         try:
             art = get_artifact(conn, artifact_id)
@@ -201,7 +202,9 @@ def _check_artifact_committed(artifact_id: str | None) -> bool:
         return False
 
 
-def _check_canonical_committed(artifact_id: str | None, db_path: Path | None = None) -> tuple[bool, str | None, str | None]:
+def _check_canonical_committed(
+    artifact_id: str | None, db_path: Path | None = None
+) -> tuple[bool, str | None, str | None]:
     if not artifact_id:
         return False, None, None
 
@@ -225,6 +228,7 @@ def _check_canonical_committed(artifact_id: str | None, db_path: Path | None = N
     # Check catalog.sqlite
     try:
         from mesa_legal_data.catalog import get_artifact, get_connection, get_document, get_version
+
         conn = get_connection()
         try:
             art = get_artifact(conn, artifact_id)

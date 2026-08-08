@@ -1,5 +1,5 @@
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from mesa_legal_data.config import load_settings
@@ -165,8 +165,6 @@ def record_daily_budget(
     record_pipeline_budget(source_id, success=success, budget_date=budget_date, db_path=db_path)
 
 
-from datetime import UTC, datetime, timedelta
-
 _SOURCE_PAUSE_UNTIL: dict[str, datetime] = {}
 _SOURCE_IS_PROBING: set[str] = set()
 
@@ -194,27 +192,30 @@ def check_source_circuit_breaker(
             _SOURCE_IS_PROBING.add(source_id)
             return False, True
 
-    conn = get_harvest_connection(db_path)
     try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT status FROM harvest_items
-            WHERE source_id = ? AND status IN ('completed', 'needs_review', 'failed', 'blocked')
-            ORDER BY updated_at DESC LIMIT 100
-            """,
-            (source_id,),
-        )
-        rows = cursor.fetchall()
-        if len(rows) < 10:
-            return False, False
+        conn = get_harvest_connection(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT status FROM harvest_items
+                WHERE source_id = ? AND status IN ('completed', 'needs_review', 'failed', 'blocked')
+                ORDER BY updated_at DESC LIMIT 100
+                """,
+                (source_id,),
+            )
+            rows = cursor.fetchall()
+            if len(rows) < 10:
+                return False, False
 
-        fails = sum(1 for r in rows if r["status"] in ("failed", "blocked"))
-        if (fails / len(rows)) >= threshold:
-            _SOURCE_PAUSE_UNTIL[source_id] = now + timedelta(seconds=cooldown_seconds)
-            return True, False
-    finally:
-        conn.close()
+            fails = sum(1 for r in rows if r["status"] in ("failed", "blocked"))
+            if (fails / len(rows)) >= threshold:
+                _SOURCE_PAUSE_UNTIL[source_id] = now + timedelta(seconds=cooldown_seconds)
+                return True, False
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
     return False, False
 
@@ -222,10 +223,11 @@ def check_source_circuit_breaker(
 def record_circuit_breaker_result(source_id: str, success: bool, cooldown_seconds: int = 1800) -> None:
     if source_id in _SOURCE_IS_PROBING:
         _SOURCE_IS_PROBING.remove(source_id)
-        if success:
-            _SOURCE_PAUSE_UNTIL.pop(source_id, None)
-        else:
-            _SOURCE_PAUSE_UNTIL[source_id] = datetime.now(UTC) + timedelta(seconds=cooldown_seconds)
+
+    if success:
+        _SOURCE_PAUSE_UNTIL.pop(source_id, None)
+    else:
+        _SOURCE_PAUSE_UNTIL[source_id] = datetime.now(UTC) + timedelta(seconds=cooldown_seconds)
 
 
 def reset_circuit_breaker(source_id: str) -> None:

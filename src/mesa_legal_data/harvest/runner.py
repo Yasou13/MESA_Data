@@ -228,6 +228,8 @@ def run_harvest_batch(
                 update_item_status(item_id, ItemStatus.PROCESSING, db_path=db_path)
                 pipe_start_iso = datetime.now(UTC).isoformat()
 
+                if not artifact_id:
+                    raise ValueError(f"No artifact_id available for item {item_id}")
                 pipe_res = run_pipeline_item(artifact_id)
 
                 pipe_finish_iso = datetime.now(UTC).isoformat()
