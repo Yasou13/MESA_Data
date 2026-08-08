@@ -165,10 +165,35 @@ def record_daily_budget(
     record_pipeline_budget(source_id, success=success, budget_date=budget_date, db_path=db_path)
 
 
-def check_source_error_circuit_breaker(source_id: str, threshold: float = 0.25, db_path: Path | None = None) -> bool:
+from datetime import UTC, datetime, timedelta
+
+_SOURCE_PAUSE_UNTIL: dict[str, datetime] = {}
+_SOURCE_IS_PROBING: set[str] = set()
+
+
+def check_source_circuit_breaker(
+    source_id: str,
+    threshold: float = 0.25,
+    cooldown_seconds: int = 1800,
+    db_path: Path | None = None,
+) -> tuple[bool, bool]:
     """
-    Returns True if error rate in last 100 finished items for this source exceeds threshold (circuit breaker triggered).
+    Checks source circuit breaker with temporary cooldown pause and single probe mode.
+    Returns (is_paused, is_probe).
     """
+    now = datetime.now(UTC)
+
+    if source_id in _SOURCE_IS_PROBING:
+        return False, True
+
+    pause_until = _SOURCE_PAUSE_UNTIL.get(source_id)
+    if pause_until:
+        if now < pause_until:
+            return True, False
+        else:
+            _SOURCE_IS_PROBING.add(source_id)
+            return False, True
+
     conn = get_harvest_connection(db_path)
     try:
         cursor = conn.cursor()
@@ -182,9 +207,32 @@ def check_source_error_circuit_breaker(source_id: str, threshold: float = 0.25, 
         )
         rows = cursor.fetchall()
         if len(rows) < 10:
-            return False
+            return False, False
 
         fails = sum(1 for r in rows if r["status"] in ("failed", "blocked"))
-        return (fails / len(rows)) >= threshold
+        if (fails / len(rows)) >= threshold:
+            _SOURCE_PAUSE_UNTIL[source_id] = now + timedelta(seconds=cooldown_seconds)
+            return True, False
     finally:
         conn.close()
+
+    return False, False
+
+
+def record_circuit_breaker_result(source_id: str, success: bool, cooldown_seconds: int = 1800) -> None:
+    if source_id in _SOURCE_IS_PROBING:
+        _SOURCE_IS_PROBING.remove(source_id)
+        if success:
+            _SOURCE_PAUSE_UNTIL.pop(source_id, None)
+        else:
+            _SOURCE_PAUSE_UNTIL[source_id] = datetime.now(UTC) + timedelta(seconds=cooldown_seconds)
+
+
+def reset_circuit_breaker(source_id: str) -> None:
+    _SOURCE_PAUSE_UNTIL.pop(source_id, None)
+    _SOURCE_IS_PROBING.discard(source_id)
+
+
+def check_source_error_circuit_breaker(source_id: str, threshold: float = 0.25, db_path: Path | None = None) -> bool:
+    is_paused, _ = check_source_circuit_breaker(source_id, threshold=threshold, db_path=db_path)
+    return is_paused

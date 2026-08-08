@@ -123,8 +123,17 @@ def run_harvest_batch(
         if src_cfg:
             src_total_raw = get_source_total_raw_bytes(item.source_id, db_path=db_path)
             if src_total_raw >= src_cfg.budget.target_raw_bytes:
-                update_item_status(item_id, ItemStatus.QUEUED, db_path=db_path)
-                continue
+                for rem in items[idx:]:
+                    if rem.id is not None:
+                        update_item_status(rem.id, ItemStatus.QUEUED, db_path=db_path)
+                return {
+                    "processed": processed_count,
+                    "succeeded": succeeded_count,
+                    "failed": failed_count,
+                    "retry_wait": retry_wait_count,
+                    "duplicate": duplicate_count,
+                    "stopped_reason": f"SOURCE_TARGET_REACHED ({item.source_id})",
+                }
 
             daily_usage = get_daily_budget_usage(item.source_id, db_path=db_path)
             if daily_usage["documents_downloaded"] >= src_cfg.budget.daily_documents:
