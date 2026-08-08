@@ -5,13 +5,13 @@ sources:
     name: "T.C. Resmî Gazete"
     authority: "T.C. Cumhurbaşkanlığı"
     base_url: "https://www.resmigazete.gov.tr/"
-    access_mode: "manual"
+    access_mode: "approved_web"
     enabled: true
     families: ["legislation"]
     source_role: "original_publication"
     policy_version: "1.0.0"
     http:
-      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      user_agent: "MESA-Legal-Data/1.0 (+https://github.com/mesa-legal-data)"
       concurrency: 1
       min_interval_seconds: 5
       timeout_seconds: 30
@@ -35,7 +35,7 @@ sources:
     source_role: "consolidated_text"
     policy_version: "1.0.0"
     http:
-      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      user_agent: "MESA-Legal-Data/1.0 (+https://github.com/mesa-legal-data)"
       concurrency: 1
       min_interval_seconds: 5
       timeout_seconds: 30
@@ -60,7 +60,7 @@ sources:
     policy_version: "1.0.0"
     editorial_note_required: true
     http:
-      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      user_agent: "MESA-Legal-Data/1.0 (+https://github.com/mesa-legal-data)"
       concurrency: 1
       min_interval_seconds: 10
       timeout_seconds: 30
@@ -81,7 +81,7 @@ sources:
     source_role: "official_case_law"
     policy_version: "1.0.0"
     http:
-      user_agent: "MESA-Legal-Data/1.0 (+operator-contact)"
+      user_agent: "MESA-Legal-Data/1.0 (+https://github.com/mesa-legal-data)"
       concurrency: 1
       min_interval_seconds: 15
       timeout_seconds: 30

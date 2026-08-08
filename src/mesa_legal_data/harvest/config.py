@@ -102,6 +102,10 @@ def load_harvest_config(config_path: Path | None = None) -> HarvestConfig:
         stop_on_error_rate=runner_data.get("stop_on_error_rate", 0.25),
     )
 
+    if not runner_cfg.pipeline_after_download:
+        raise ValueError(
+            "CONFIG_UNSUPPORTED_PIPELINE_AFTER_DOWNLOAD: pipeline_after_download=false is not supported for MVP; must be set to true"
+        )
     if runner_cfg.worker_count != 1:
         raise ValueError(
             f"CONFIG_UNSUPPORTED_WORKER_COUNT: Multi-worker orchestrator is not supported in this MVP. worker_count must be 1, got: {runner_cfg.worker_count}"

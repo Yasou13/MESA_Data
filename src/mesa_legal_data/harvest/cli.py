@@ -29,11 +29,46 @@ def harvest_init(custom_data_root: Optional[Path] = typer.Option(None, "--data-r
     typer.secho(f"Harvest database initialized successfully at {db_path}", fg=typer.colors.GREEN)
 
 
+INVALID_CONTACT_PLACEHOLDERS = (
+    "operator-contact",
+    "test@example.com",
+    "placeholder",
+    "contact-email",
+    "example.com",
+    "example.org",
+)
+
+
 @harvest_app.command("config-check")
 def harvest_config_check(config_file: Optional[Path] = typer.Option(None, "--config", help="Path to harvest.yaml")):
-    """Checks harvest.yaml configuration validity."""
+    """Checks harvest.yaml and source policy configuration validity."""
     try:
+        import yaml
         cfg = load_harvest_config(config_file)
+
+        # Check sources.yaml for access_mode and operator contact validation
+        sources_yaml = Path("config/sources.yaml")
+        if sources_yaml.exists():
+            with open(sources_yaml, "r", encoding="utf-8") as f:
+                s_data = yaml.safe_load(f) or {}
+            src_configs = s_data.get("sources", {})
+
+            for s_id, s_cfg in cfg.sources.items():
+                if not s_cfg.enabled:
+                    continue
+                s_meta = src_configs.get(s_id, {})
+                mode = s_meta.get("access_mode", "manual")
+                if mode == "manual":
+                    raise ValueError(
+                        f"CONFIG_INVALID_ACCESS_MODE: Source '{s_id}' configured for automated harvesting cannot have access_mode 'manual'; must be approved_web or licensed_api."
+                    )
+                ua = s_meta.get("http", {}).get("user_agent", "")
+                for ph in INVALID_CONTACT_PLACEHOLDERS:
+                    if ph in ua.lower():
+                        raise ValueError(
+                            f"CONFIG_INVALID_OPERATOR_CONTACT: Source '{s_id}' User-Agent contains invalid placeholder contact '{ph}': {ua}"
+                        )
+
         typer.secho("=== Harvest Config Check ===", fg=typer.colors.CYAN, bold=True)
         typer.echo(f"Harvest Enabled   : {cfg.enabled}")
         typer.echo(f"Target Raw Bytes  : {cfg.target.raw_bytes} ({cfg.target.raw_bytes / 1024**3:.2f} GB)")

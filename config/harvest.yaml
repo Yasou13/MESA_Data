@@ -4,7 +4,7 @@ harvest:
   enabled: true
 
   target:
-    raw_bytes: 32212254720
+    raw_bytes: 5368709120
     stop_when_target_reached: true
     minimum_free_disk_bytes: 53687091200
 
