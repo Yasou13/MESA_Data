@@ -185,6 +185,13 @@ def process_artifact_pipeline(
     canonical_records: list[dict[str, Any]] = []
     version_id = build_legislation_version_id(doc_id or "tr:legislation:unknown", now_iso[:10], expected_sha)
 
+    meta_dict: dict[str, Any] = {}
+    if art_row and art_row.get("metadata_json"):
+        try:
+            meta_dict = json.loads(art_row["metadata_json"])
+        except Exception:
+            pass
+
     source_obj = {
         "source_id": art_row["source_id"],
         "source_url": art_row["source_url"],
@@ -223,6 +230,15 @@ def process_artifact_pipeline(
             if not doc_type:
                 doc_type = "law"
 
+            v_kind = "consolidated_snapshot"
+            if art_row.get("source_id") == "resmi_gazete" or meta_dict.get("source_role") == "original_publication":
+                v_kind = "original_publication"
+
+            pub_info = None
+            pub_d = meta_dict.get("publication_date")
+            if pub_d:
+                pub_info = {"date": str(pub_d)}
+
             leg_record = {
                 "id": doc_id or f"tr:legislation:{doc_type}:0",
                 "record_type": "legislation",
@@ -232,11 +248,11 @@ def process_artifact_pipeline(
                 "number": num,
                 "title": title,
                 "short_title": None,
-                "publication": None,
+                "publication": pub_info,
                 "status": "active",
                 "version": {
                     "version_id": version_id,
-                    "version_kind": "consolidated_snapshot",
+                    "version_kind": v_kind,
                     "snapshot_date": now_iso[:10],
                     "effective_from": None,
                     "effective_to": None,
@@ -289,13 +305,14 @@ def process_artifact_pipeline(
                 cit_record = {
                     "id": c_id,
                     "record_type": "citation",
-                    "source_record_id": leg_record["id"],
+                    "source_legislation_id": leg_record["id"],
+                    "source_article_id": None,
                     "target_legislation_id": c.target_legislation_id,
                     "target_article_id": c.target_article_id,
+                    "citation_type": c.citation_type,
                     "raw_text": c.raw_text,
-                    "source_span": {"char_start": c.char_start, "char_end": c.char_end},
-                    "extraction_method": "deterministic_regex",
-                    "validation_status": "validated",
+                    "char_start": c.char_start,
+                    "char_end": c.char_end,
                     "schema_version": "1.0.0",
                     "created_at": now_iso,
                     "source": source_obj,
@@ -309,7 +326,7 @@ def process_artifact_pipeline(
             # Decision family
             dec_parsed = parse_decision_text(parsed_text)
             dec_id = build_decision_id(
-                dec_parsed.court or "YARGITAY",
+                dec_parsed.court or "unknown",
                 dec_parsed.chamber,
                 dec_parsed.esas_no,
                 dec_parsed.karar_no,
@@ -320,7 +337,7 @@ def process_artifact_pipeline(
                 "record_type": "decision",
                 "jurisdiction": "TR",
                 "language": "tr",
-                "court": dec_parsed.court or "YARGITAY",
+                "court": dec_parsed.court,
                 "chamber": dec_parsed.chamber,
                 "esas_no": dec_parsed.esas_no,
                 "karar_no": dec_parsed.karar_no,
