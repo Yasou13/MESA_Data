@@ -139,12 +139,53 @@ def run_harvest_batch(
         current_attempt: int = increment_item_attempts(item_id, db_path=db_path)
 
         try:
-            # Step A: Download / Collect
-            update_item_status(item_id, ItemStatus.DOWNLOADING, db_path=db_path)
+            from mesa_legal_data.harvest.queue import _check_artifact_committed, _check_canonical_committed
 
-            collect_res = collect_url_item(item, sources_yaml_path=sources_yaml_path)
+            artifact_id: str | None = item.artifact_id
+            skip_download = False
 
-            if collect_res.duplicate:
+            if artifact_id and _check_artifact_committed(artifact_id):
+                skip_download = True
+
+            if not skip_download:
+                # Step A: Download / Collect
+                update_item_status(item_id, ItemStatus.DOWNLOADING, db_path=db_path)
+
+                collect_res = collect_url_item(item, sources_yaml_path=sources_yaml_path)
+                artifact_id = collect_res.artifact_id
+
+                if collect_res.duplicate:
+                    has_canon, canon_st, _ = _check_canonical_committed(artifact_id, db_path=db_path)
+                    if has_canon:
+                        finish_iso = datetime.now(UTC).isoformat()
+                        record_attempt(
+                            item_id=item_id,
+                            attempt_number=current_attempt,
+                            stage="download",
+                            started_at=start_iso,
+                            finished_at=finish_iso,
+                            result="duplicate",
+                            bytes_received=0,
+                            artifact_id=artifact_id,
+                            db_path=db_path,
+                        )
+                        update_item_status(
+                            item_id,
+                            ItemStatus.DUPLICATE,
+                            artifact_id=artifact_id,
+                            raw_bytes=collect_res.byte_size,
+                            db_path=db_path,
+                        )
+                        duplicate_count += 1
+                        record_download_budget(
+                            item.source_id,
+                            raw_bytes=0,
+                            duplicate=True,
+                            db_path=db_path,
+                        )
+                        continue
+                    # Duplicate raw artifact but missing canonical processing -> continue to pipeline
+
                 finish_iso = datetime.now(UTC).isoformat()
                 record_attempt(
                     item_id=item_id,
@@ -152,61 +193,33 @@ def run_harvest_batch(
                     stage="download",
                     started_at=start_iso,
                     finished_at=finish_iso,
-                    result="duplicate",
-                    bytes_received=0,
-                    artifact_id=collect_res.artifact_id,
+                    result="succeeded",
+                    bytes_received=collect_res.byte_size,
+                    artifact_id=artifact_id,
                     db_path=db_path,
                 )
+
                 update_item_status(
                     item_id,
-                    ItemStatus.DUPLICATE,
-                    artifact_id=collect_res.artifact_id,
+                    ItemStatus.DOWNLOADED,
+                    artifact_id=artifact_id,
                     raw_bytes=collect_res.byte_size,
                     db_path=db_path,
                 )
-                duplicate_count += 1
+
                 record_download_budget(
                     item.source_id,
-                    raw_bytes=0,
-                    duplicate=True,
+                    raw_bytes=collect_res.byte_size,
+                    duplicate=False,
                     db_path=db_path,
                 )
-                continue
-
-            finish_iso = datetime.now(UTC).isoformat()
-            record_attempt(
-                item_id=item_id,
-                attempt_number=current_attempt,
-                stage="download",
-                started_at=start_iso,
-                finished_at=finish_iso,
-                result="succeeded",
-                bytes_received=collect_res.byte_size,
-                artifact_id=collect_res.artifact_id,
-                db_path=db_path,
-            )
-
-            update_item_status(
-                item_id,
-                ItemStatus.DOWNLOADED,
-                artifact_id=collect_res.artifact_id,
-                raw_bytes=collect_res.byte_size,
-                db_path=db_path,
-            )
-
-            record_download_budget(
-                item.source_id,
-                raw_bytes=collect_res.byte_size,
-                duplicate=False,
-                db_path=db_path,
-            )
 
             # Step B: Pipeline run
             if harvest_cfg.runner.pipeline_after_download:
                 update_item_status(item_id, ItemStatus.PROCESSING, db_path=db_path)
                 pipe_start_iso = datetime.now(UTC).isoformat()
 
-                pipe_res = run_pipeline_item(collect_res.artifact_id)
+                pipe_res = run_pipeline_item(artifact_id)
 
                 pipe_finish_iso = datetime.now(UTC).isoformat()
                 pipe_success = pipe_res.status in ("approved", "needs_review", "rejected")

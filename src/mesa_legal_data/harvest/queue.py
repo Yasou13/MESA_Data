@@ -146,7 +146,7 @@ def acquire_lease_batch(
         cursor.execute(
             """
             SELECT * FROM harvest_items
-            WHERE status IN ('queued', 'retry_wait')
+            WHERE status IN ('queued', 'retry_wait', 'downloaded')
               AND (next_retry_at IS NULL OR next_retry_at <= ?)
               AND (lease_expires_at IS NULL OR lease_expires_at < ?)
             ORDER BY priority DESC, discovered_at ASC
@@ -186,28 +186,137 @@ def acquire_lease_batch(
         conn.close()
 
 
+def _check_artifact_committed(artifact_id: str | None) -> bool:
+    if not artifact_id:
+        return False
+    try:
+        from mesa_legal_data.catalog import get_artifact, get_connection
+        conn = get_connection()
+        try:
+            art = get_artifact(conn, artifact_id)
+            return art is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _check_canonical_committed(artifact_id: str | None, db_path: Path | None = None) -> tuple[bool, str | None, str | None]:
+    if not artifact_id:
+        return False, None, None
+
+    # Check harvest.sqlite queue status first
+    try:
+        conn_h = get_harvest_connection(db_path)
+        try:
+            cursor = conn_h.cursor()
+            cursor.execute(
+                "SELECT status, version_id FROM harvest_items WHERE artifact_id = ? AND status IN ('completed', 'needs_review', 'duplicate')",
+                (artifact_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return True, row["status"], row["version_id"]
+        finally:
+            conn_h.close()
+    except Exception:
+        pass
+
+    # Check catalog.sqlite
+    try:
+        from mesa_legal_data.catalog import get_artifact, get_connection, get_document, get_version
+        conn = get_connection()
+        try:
+            art = get_artifact(conn, artifact_id)
+            if art and art.get("document_id"):
+                doc = get_document(conn, art["document_id"])
+                if doc and doc.get("current_version_id"):
+                    ver_id = doc["current_version_id"]
+                    ver = get_version(conn, ver_id)
+                    if ver:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT approval_status FROM records WHERE version_id = ?", (ver_id,))
+                        row = cursor.fetchone()
+                        status = row[0] if row else "approved"
+                        return True, status, ver_id
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return False, None, None
+
+
 def recover_expired_leases(db_path: Path | None = None) -> int:
     """
-    Reclaims leased items whose lease has expired back to 'queued'.
+    Stage-aware crash recovery:
+    - leased (expired): -> queued
+    - downloading (expired/stranded):
+        committed artifact exists -> downloaded
+        no committed artifact    -> queued
+    - downloaded (expired/stranded): -> remain downloaded (unleased so runner processes it)
+    - processing (expired/stranded):
+        canonical result committed -> restore terminal/review state (completed / needs_review)
+        no canonical result        -> downloaded (unleased so pipeline reruns)
     """
     conn = get_harvest_connection(db_path)
     now_iso = datetime.now(UTC).isoformat()
+    count = 0
     try:
         conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         cursor.execute(
             """
-            UPDATE harvest_items
-            SET status = 'queued',
-                lease_owner = NULL,
-                lease_started_at = NULL,
-                lease_expires_at = NULL,
-                updated_at = ?
-            WHERE status = 'leased' AND lease_expires_at < ?
+            SELECT * FROM harvest_items
+            WHERE status IN ('leased', 'downloading', 'downloaded', 'processing')
+              AND (lease_expires_at IS NULL OR lease_expires_at < ?)
             """,
-            (now_iso, now_iso),
+            (now_iso,),
         )
-        count = cursor.rowcount
+        rows = cursor.fetchall()
+        for r in rows:
+            item = row_to_harvest_item(r)
+            st = item.status
+            new_st = "queued"
+            new_art_id = item.artifact_id
+            new_ver_id = item.version_id
+
+            if st == "leased":
+                new_st = "queued"
+            elif st == "downloading":
+                if item.artifact_id and _check_artifact_committed(item.artifact_id):
+                    new_st = "downloaded"
+                else:
+                    new_st = "queued"
+            elif st == "downloaded":
+                new_st = "downloaded"
+            elif st == "processing":
+                has_canon, canon_st, ver_id = _check_canonical_committed(item.artifact_id)
+                if has_canon:
+                    if canon_st == "approved":
+                        new_st = "completed"
+                    elif canon_st in ("needs_review", "rejected"):
+                        new_st = "needs_review"
+                    else:
+                        new_st = "completed"
+                    new_ver_id = ver_id or item.version_id
+                else:
+                    new_st = "downloaded"
+
+            cursor.execute(
+                """
+                UPDATE harvest_items
+                SET status = ?,
+                    artifact_id = ?,
+                    version_id = ?,
+                    lease_owner = NULL,
+                    lease_started_at = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (new_st, new_art_id, new_ver_id, now_iso, item.id),
+            )
+            count += 1
         conn.commit()
         return count
     finally:
