@@ -153,12 +153,17 @@ def harvest_discover(
     skipped_total = 0
 
     mode = cursor_data.get("mode", "backfill")
+    backfill_next_str = cursor_data.get("backfill_next_date") or cursor_data.get("next_date")
+    hwm_str = cursor_data.get("incremental_high_water_mark") or cursor_data.get("last_successful_date")
+
+    if not hwm_str:
+        hwm_str = date_to.isoformat()
+
     dates_to_process: list[date] = []
 
     if mode == "backfill":
-        start_d_str = cursor_data.get("next_date")
-        if start_d_str:
-            curr = datetime.strptime(start_d_str, "%Y-%m-%d").date()
+        if backfill_next_str:
+            curr = datetime.strptime(backfill_next_str, "%Y-%m-%d").date()
         else:
             curr = date_to
 
@@ -166,15 +171,17 @@ def harvest_discover(
             dates_to_process.append(curr)
             curr = curr - timedelta(days=1)
 
-        if not dates_to_process:
+        if not dates_to_process or (
+            backfill_next_str and datetime.strptime(backfill_next_str, "%Y-%m-%d").date() < date_from
+        ):
             mode = "incremental"
 
     if mode == "incremental" and not dates_to_process:
-        last_str = cursor_data.get("last_successful_date")
-        if last_str:
-            start_inc = datetime.strptime(last_str, "%Y-%m-%d").date() + timedelta(days=1)
-        else:
-            start_inc = today
+        try:
+            hwm_date = datetime.strptime(hwm_str, "%Y-%m-%d").date()
+        except ValueError:
+            hwm_date = today
+        start_inc = hwm_date + timedelta(days=1)
 
         curr = start_inc
         while curr <= today and len(dates_to_process) < pages_per_run:
@@ -213,21 +220,30 @@ def harvest_discover(
 
             if mode == "backfill":
                 next_d = target_date - timedelta(days=1)
+                is_still_backfill = next_d >= date_from
                 save_discovery_cursor(
                     source,
                     {
-                        "mode": "backfill" if next_d >= date_from else "incremental",
-                        "next_date": next_d.isoformat(),
+                        "mode": "backfill" if is_still_backfill else "incremental",
+                        "backfill_next_date": next_d.isoformat() if is_still_backfill else None,
+                        "next_date": next_d.isoformat() if is_still_backfill else None,
+                        "incremental_high_water_mark": hwm_str,
                         "last_successful_date": target_date.isoformat(),
                     },
                     db_path=db_path,
                 )
             else:
+                target_str = target_date.isoformat()
+                if target_str > hwm_str:
+                    hwm_str = target_str
                 save_discovery_cursor(
                     source,
                     {
                         "mode": "incremental",
-                        "last_successful_date": target_date.isoformat(),
+                        "backfill_next_date": None,
+                        "next_date": None,
+                        "incremental_high_water_mark": hwm_str,
+                        "last_successful_date": hwm_str,
                     },
                     db_path=db_path,
                 )
