@@ -1,10 +1,10 @@
 import os
-import sys
 import tempfile
-import httpx
-import respx
+from datetime import date
 from pathlib import Path
-from datetime import UTC, datetime, date
+
+import respx
+
 
 def run_pilot():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -24,20 +24,35 @@ def run_pilot():
         print(f"=== Starting Bounded Resmî Gazete Pilot in {data_root} ===")
 
         # 1. Initialize catalog & harvest DB
-        from mesa_legal_data.catalog import migrate as migrate_catalog, get_connection as get_cat_conn, approve_version_with_checks
+        import mesa_legal_data.harvest.runner as harvest_runner
+        from mesa_legal_data.catalog import (
+            approve_version_with_checks,
+        )
+        from mesa_legal_data.catalog import (
+            get_connection as get_cat_conn,
+        )
+        from mesa_legal_data.catalog import (
+            migrate as migrate_catalog,
+        )
+        from mesa_legal_data.harvest.config import load_harvest_config
         from mesa_legal_data.harvest.migrations import apply_harvest_migrations
         from mesa_legal_data.harvest.models import DiscoveredDocument, SelectionDecision
-        from mesa_legal_data.harvest.queue import enqueue_discovered_document, get_harvest_item_by_id, reconcile_harvest_review_status
+        from mesa_legal_data.harvest.queue import (
+            enqueue_discovered_document,
+            get_harvest_item_by_id,
+            reconcile_harvest_review_status,
+        )
         from mesa_legal_data.harvest.runner import run_harvest_batch
         from mesa_legal_data.pipeline import process_artifact_pipeline
         from mesa_legal_data.release.builder import build_release
+        from mesa_legal_data.release.importer import get_record_provenance, import_release_to_staging, rollback_release
         from mesa_legal_data.release.verifier import verify_release
-        from mesa_legal_data.release.importer import import_release_to_staging, get_record_provenance, rollback_release
-        from mesa_legal_data.harvest.config import load_harvest_config
-        import mesa_legal_data.harvest.runner as harvest_runner
 
         # Bypass disk check in test environment
-        harvest_runner.check_free_disk_space = lambda minimum_free_bytes=0, custom_data_root=None: (True, 100_000_000_000)
+        harvest_runner.check_free_disk_space = lambda minimum_free_bytes=0, custom_data_root=None: (
+            True,
+            100_000_000_000,
+        )
 
         migrate_catalog(None, catalog_db)
         apply_harvest_migrations(harvest_db)
@@ -71,8 +86,7 @@ def run_pilot():
         # Mock respx for outgoing fetch
         with respx.mock(assert_all_called=False) as mock_respx:
             mock_respx.route().respond(
-                status_code=200,
-                html="<html><body><h1>T.C. Resmî Gazete</h1><p>Kanun No: 9999</p></body></html>"
+                status_code=200, html="<html><body><h1>T.C. Resmî Gazete</h1><p>Kanun No: 9999</p></body></html>"
             )
 
             # 3. Run harvest batch
@@ -147,6 +161,7 @@ def run_pilot():
         print(f"✓ Rollback executed: status={roll_res['status']}")
 
         print("\n=== RESMÎ GAZETE PILOT COMPLETED SUCCESSFULLY ===")
+
 
 if __name__ == "__main__":
     run_pilot()
