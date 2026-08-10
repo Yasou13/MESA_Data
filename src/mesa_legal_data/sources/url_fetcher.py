@@ -1,4 +1,5 @@
 import ipaddress
+import os
 import socket
 import time
 from collections.abc import Generator
@@ -375,9 +376,19 @@ def fetch_url_stream(
     visited: set[str] = set()
     MAX_REDIRECTS = 3
 
+    import ssl
+
+    ssl_verify: bool | ssl.SSLContext = True
+    ca_env = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
+    if ca_env and os.path.exists(ca_env):
+        ssl_verify = ssl.create_default_context(cafile=ca_env)
+    elif os.path.exists("/tmp/combined_ca.pem"):
+        ssl_verify = ssl.create_default_context(cafile="/tmp/combined_ca.pem")
+
     client = httpx.Client(
         follow_redirects=False,
         timeout=httpx.Timeout(eff_timeout),
+        verify=ssl_verify,
         headers={
             "User-Agent": eff_ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.8",

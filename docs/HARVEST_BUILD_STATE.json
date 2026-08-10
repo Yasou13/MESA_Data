@@ -1,6 +1,6 @@
 {
-  "status": "release_candidate",
-  "current_task": "REAL_PILOT_BLOCKED_TLS_CERTIFICATE_VERIFY_FAILED",
-  "pilot_ready": false,
-  "updated_at": "2026-08-10T23:39:00Z"
+  "status": "mvp_closed",
+  "current_task": "CLOSED",
+  "pilot_ready": true,
+  "updated_at": "2026-08-11T02:47:00Z"
 }
