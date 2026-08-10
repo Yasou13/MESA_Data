@@ -279,8 +279,8 @@ def test_idle_harvest_run_returns_clean_zero_result(tmp_path):
     }
 
 
-# 10. FAILED operator retry works deliberately
-# 11. BLOCKED cannot be casually retried
+# 10. FAILED & RETRY_WAIT operator retry works deliberately
+# 11. Other states (COMPLETED, DUPLICATE, NEEDS_REVIEW, BLOCKED, CANCELLED, PROCESSING, DOWNLOADING, LEASED, DISCOVERED, QUEUED) are REJECTED
 def test_operator_retry_semantics(tmp_path):
     db_path = tmp_path / "harvest.sqlite"
     from mesa_legal_data.harvest.migrations import apply_harvest_migrations
@@ -289,26 +289,49 @@ def test_operator_retry_semantics(tmp_path):
 
     conn = sqlite3.connect(db_path)
     now = datetime.now(UTC).isoformat()
-    conn.execute(
-        """
-        INSERT INTO harvest_items (
-            id, queue_id, source_id, adapter_name, canonical_key, normalized_url, original_url,
-            document_id, family, document_type, title, discovery_page_url, priority, status, last_error_code, discovered_at, updated_at
-        ) VALUES
-        (1, 'q1', 's1', 'a1', 'c1', 'u1', 'u1', 'd1', 'f1', 'law', 't1', 'http://u1', 100, 'failed', 'ERR', ?, ?),
-        (2, 'q2', 's1', 'a1', 'c2', 'u2', 'u2', 'd2', 'f1', 'law', 't2', 'http://u2', 100, 'blocked', 'POLICY', ?, ?)
-        """,
-        (now, now, now, now),
-    )
+
+    statuses_to_test = [
+        ("failed", True),
+        ("retry_wait", True),
+        ("completed", False),
+        ("duplicate", False),
+        ("needs_review", False),
+        ("blocked", False),
+        ("cancelled", False),
+        ("processing", False),
+        ("downloading", False),
+        ("leased", False),
+        ("discovered", False),
+        ("queued", False),
+    ]
+
+    for idx, (st, should_pass) in enumerate(statuses_to_test, start=1):
+        conn.execute(
+            """
+            INSERT INTO harvest_items (
+                id, queue_id, source_id, adapter_name, canonical_key, normalized_url, original_url,
+                document_id, family, document_type, title, discovery_page_url, priority, status, last_error_code, discovered_at, updated_at
+            ) VALUES (?, ?, 's1', 'a1', ?, ?, ?, ?, 'f1', 'law', 't1', 'http://u1', 100, ?, 'ERR', ?, ?)
+            """,
+            (idx, f"q{idx}", f"c{idx}", f"http://u{idx}", f"http://u{idx}", f"d{idx}", st, now, now),
+        )
     conn.commit()
     conn.close()
 
-    item1 = operator_retry_item(1, db_path=db_path)
-    assert item1.status == "queued"
-    assert item1.last_error_code is None
-
-    with pytest.raises(ValueError, match="BLOCKED"):
-        operator_retry_item(2, db_path=db_path)
+    for idx, (st, should_pass) in enumerate(statuses_to_test, start=1):
+        if should_pass:
+            item = operator_retry_item(idx, db_path=db_path)
+            assert item.status == "queued"
+            assert item.last_error_code is None
+            assert item.lease_owner is None
+        else:
+            item_before = get_harvest_item_by_id(idx, db_path=db_path)
+            with pytest.raises(ValueError, match="cannot be retried"):
+                operator_retry_item(idx, db_path=db_path)
+            # Verify rejected attempts leave database state unchanged!
+            item_after = get_harvest_item_by_id(idx, db_path=db_path)
+            assert item_before.status == item_after.status
+            assert item_before.updated_at == item_after.updated_at
 
 
 # 12. circuit-breaker probe success resets breaker
@@ -338,19 +361,28 @@ def test_circuit_breaker_probe_semantics(tmp_path):
     assert is_paused is True
 
 
-# 14. per-run request cap is actually global to the run
+# 14. per-run request cap is actually global to the run and resets between runs
 def test_per_run_request_cap_is_global_to_run():
+    # Run A: max_requests_per_run = 2
     reset_run_budget("resmi_gazete")
     b1 = get_run_budget("resmi_gazete", max_requests=2)
-    b1.consume()
+    b1.consume()  # doc A uses 1
     assert b1.used_requests == 1
 
     b2 = get_run_budget("resmi_gazete", max_requests=2)
-    b2.consume()
+    b2.consume()  # doc B uses 1 (same run shares budget)
     assert b2.used_requests == 2
 
+    # doc C would exceed budget in same run
     with pytest.raises(SourceRequestBudgetExceeded):
         b2.consume()
+
+    # Run A ends -> Run B starts: budget resets fresh
+    reset_run_budget("resmi_gazete")
+    b3 = get_run_budget("resmi_gazete", max_requests=2)
+    assert b3.used_requests == 0
+    b3.consume()  # request #1 allowed in run B
+    assert b3.used_requests == 1
 
 
 # 15. downloaded_at remains true download timestamp

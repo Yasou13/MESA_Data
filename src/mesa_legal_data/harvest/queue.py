@@ -466,13 +466,19 @@ def update_item_status(
 def operator_retry_item(item_id: int, db_path: Path | None = None) -> HarvestItem:
     """
     Operator action to retry a failed or retry_wait item.
-    BLOCKED items cannot be retried automatically by operator.
+    Only FAILED and RETRY_WAIT items may be retried by operator.
+    All other states (COMPLETED, DUPLICATE, NEEDS_REVIEW, BLOCKED, CANCELLED,
+    DOWNLOADING, PROCESSING, LEASED, DISCOVERED, QUEUED) are explicitly rejected.
     """
     item = get_harvest_item_by_id(item_id, db_path=db_path)
     if not item:
         raise ValueError(f"Harvest item {item_id} not found")
-    if item.status == ItemStatus.BLOCKED.value:
-        raise ValueError(f"Harvest item {item_id} is BLOCKED by security policy and cannot be retried by operator")
+    allowed_statuses = (ItemStatus.FAILED.value, ItemStatus.RETRY_WAIT.value)
+    if item.status not in allowed_statuses:
+        raise ValueError(
+            f"Harvest item {item_id} is in status '{item.status}' and cannot be retried by operator. "
+            f"Operator retry is only permitted for items in status FAILED or RETRY_WAIT."
+        )
 
     conn = get_harvest_connection(db_path)
     now_iso = datetime.now(UTC).isoformat()

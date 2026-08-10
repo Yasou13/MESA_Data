@@ -1,8 +1,8 @@
 {
-  "status": "mvp_closed",
-  "scope": "feature_freeze",
-  "pilot_ready": true,
-  "current_task": "MVP_CLOSED_AND_FREEZE_READY",
+  "status": "release_candidate",
+  "scope": "final_mvp_closure",
+  "pilot_ready": false,
+  "current_task": "REAL_PILOT_BLOCKED_TLS_CERTIFICATE_VERIFY_FAILED",
   "completed": [
     "FREEZE-001",
     "FREEZE-002",
@@ -32,11 +32,13 @@
     "MVP-CLOSURE-001",
     "MVP-CLOSURE-002",
     "MVP-CLOSURE-003",
-    "MVP-CLOSURE-004"
+    "MVP-CLOSURE-004",
+    "BLOCKER-2-OPERATOR-RETRY-RESTRICTED",
+    "BLOCKER-3-RUN-SCOPED-REQUEST-BUDGET"
   ],
   "last_test_command": "uv run pytest -q",
   "last_test_result": "passed (203 passed)",
   "polish_status": "completed",
   "polish_current_task": "CLOSED",
-  "updated_at": "2026-08-10T23:09:00Z"
+  "updated_at": "2026-08-10T23:39:00Z"
 }

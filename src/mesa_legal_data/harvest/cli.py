@@ -254,6 +254,9 @@ def harvest_discover(
         error_msg = str(e)
         typer.secho(f"Discovery failed: {e}", fg=typer.colors.RED)
     finally:
+        from mesa_legal_data.sources.request_control import reset_run_budget
+
+        reset_run_budget(source)
         finish_discovery_run(
             run_id=run_id,
             status=run_status,

@@ -1,140 +1,103 @@
 # MESA Legal Data — Final MVP Closure Report
 
-**Date:** 2026-08-10  
-**Status:** MVP Closed & Freeze Ready (`pilot_ready: true`)  
-**Repository Root:** `/storage/data-law/mesa-legal-data`  
+**Date:** 2026-08-11  
+**Git Revision:** `9896c7d2bf334ae3cea723788ce02dc4d2e584db` (and pending closure commit)  
+**Environment:** Linux (Python 3.13.12, `uv` managed)  
+**MVP Decision:** **NO-GO**  
+**Freeze Ready:** **NO** (`pilot_ready: false`)  
 
 ---
 
 ## 1. Executive Summary
 
-This report documents the final MVP closure audit, repair, verification, and freeze preparation for the **MESA Legal Data** repository. Every known P0 and P1 correctness, crash recovery, security, and state machine defect has been resolved. The platform has been verified with a comprehensive 20-scenario regression test gate and a bounded real-world **Resmî Gazete** pilot execution operating end-to-end in an isolated environment.
+This report documents the last engineering pass before permanent MVP freeze of the **MESA Legal Data** repository.
+
+The two code blockers (Blocker 2 — Operator Retry Restrictions and Blocker 3 — Run-Scoped Request Budgeting) have been fully repaired and proven with comprehensive regression tests. All 203 unit, integration, and security tests pass cleanly, and static verification (Ruff, Mypy, pip-audit) is 100% green.
+
+However, in accordance with the strict **REAL NETWORK FAILURE RULE**, because the genuine outbound HTTP connection to `https://www.resmigazete.gov.tr` during the un-mocked pilot failed due to remote TLS certificate verification failure (`[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1032)`), success was NOT faked. The repository decision is **NO-GO** and `pilot_ready` remains `false` until the external TLS CA certificate issue is resolved.
 
 ---
 
-## 2. Closure Verdict & Operational Readiness
+## 2. Status of Blockers
 
-- **Closure Verdict:** **CLOSED & FREEZE READY**
-- **Harvest Pilot Readiness:** `pilot_ready: true`
-- **Quality Gate:** 100% Pass (203/203 unit, integration, security, scale, and acceptance tests)
-- **Code Quality:** `uv run ruff format --check .` (Passed), `uv run ruff check .` (Passed), `uv run mypy src` (Passed), `uv run pip-audit` (Passed, 0 vulnerabilities)
+### Blocker 1 — Real Resmî Gazete Pilot
+- **Status:** **BLOCKED BY EXTERNAL TLS DEPENDENCY**
+- **Changes:** Removed all `respx.mock` and HTTP mocking from `scripts/run_resmi_gazete_pilot.py`. The pilot uses actual production code paths (`ResmiGazeteDiscoveryAdapter`, `url_fetcher`, `enqueue_discovered_document`, `run_harvest_batch`, `process_artifact_pipeline`, `approve_version_with_checks`, `build_release`, `verify_release`, `import_release_to_staging`, `get_record_provenance`, `rollback_release`).
+- **Real Network Result:** Fails on real outbound HTTP request to `https://www.resmigazete.gov.tr`:
+  ```text
+  httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1032)
+  ```
+- **Rule Applied:** REAL NETWORK FAILURE RULE enforced. Success was NOT mocked or faked. `pilot_ready` set to `false`.
 
----
+### Blocker 2 — Operator Retry Restrictions
+- **Status:** **PASS**
+- **Changes:** Updated `operator_retry_item(item_id)` in `src/mesa_legal_data/harvest/queue.py` to enforce strict status preconditions. Operator retry is allowed **only** for `FAILED` and `RETRY_WAIT` items. Attempts to retry items in `COMPLETED`, `DUPLICATE`, `NEEDS_REVIEW`, `BLOCKED`, `CANCELLED`, `DOWNLOADING`, `PROCESSING`, `LEASED`, `DISCOVERED`, or `QUEUED` raise a domain `ValueError` and leave database state unchanged.
+- **Tests:** Expanded `test_operator_retry_semantics` in `tests/unit/test_final_closure_gate.py` to test all 12 status transitions and verify immutability of rejected items.
 
-## 3. Summary of P0 Repairs
-
-1. **Harvest Crash Recovery (`LEASED` -> `PROCESSING`, `LEASED` -> `RETRY_WAIT`):**
-   - Expanded `VALID_STATUS_TRANSITIONS` for `LEASED` to allow valid worker transitions (`PROCESSING`, `DOWNLOADED`, `RETRY_WAIT`, `FAILED`, `BLOCKED`, `COMPLETED`, `NEEDS_REVIEW`, `DUPLICATE`, `QUEUED`).
-   - Fixed `collect_res` variable scoping when `skip_download=True` so resumed pipeline execution never raises `UnboundLocalError`.
-   - Made lease recovery idempotent and stage-aware.
-
-2. **Recovery Bypassing Human Review Prevention:**
-   - Authoritatively mapped document/version and record approval states (`approved`, `needs_review`, `rejected`, `pending`) in `_check_canonical_committed`.
-   - Guaranteed that items with pending or unreviewed records transition to `NEEDS_REVIEW` (never `COMPLETED` automatically).
-
-3. **Release Trust Anchor:**
-   - Enhanced `verify_release(release_id)` in `src/mesa_legal_data/release/verifier.py` to resolve release records in `catalog.sqlite` and assert that the streaming SHA256 of `manifest.json` matches `catalog.manifest_sha256`.
-   - Rejects tampered releases even when internal file hashes are rewritten to be coherent.
-
-4. **Unmanifested File & Symlink Guard:**
-   - Enforced strict directory traversal in `verify_release_directory` to reject unmanifested regular files and symlinks.
-   - Updated `importer.py` to derive importable JSONL lists strictly from `manifest.json` keys rather than arbitrary directory file enumeration.
+### Blocker 3 — Run-Scoped Request Budget
+- **Status:** **PASS**
+- **Changes:** Refactored `run_harvest_batch()` in `src/mesa_legal_data/harvest/runner.py` and `harvest_discover` in `src/mesa_legal_data/harvest/cli.py` to call `reset_run_budget()` at entry and in an exception-safe `finally:` block. Budgets now strictly belong to a single logical run and do not leak across separate process executions.
+- **Tests:** Expanded `test_per_run_request_cap_is_global_to_run` in `tests/unit/test_final_closure_gate.py` proving multi-document budget sharing within a run and fresh budget reset between runs.
 
 ---
 
-## 4. Summary of P1 Repairs
+## 3. Verification Evidence
 
-1. **Unified Harvest Runner Result Contract:**
-   - Standardized all early returns in `run_harvest_batch()` to include `processed`, `succeeded`, `failed`, `retry_wait`, `duplicate`, and `stopped_reason`.
+### Static & Dynamic Quality Gate Results
 
-2. **Explicit Operator Retry Semantics:**
-   - Implemented `operator_retry_item(item_id)` in `src/mesa_legal_data/harvest/queue.py` and wired it to `mesa-data harvest retry --item-id <id>`.
-   - Clears stale error codes, messages, and next retry timestamps while explicitly rejecting `BLOCKED` items.
+- **Ruff Format Check:**
+  ```bash
+  $ uv run ruff format --check .
+  169 files already formatted
+  ```
 
-3. **Circuit Breaker Probing Integration:**
-   - Integrated `check_source_circuit_breaker` probe mode and `record_circuit_breaker_result` into `runner.py`.
+- **Ruff Lint Check:**
+  ```bash
+  $ uv run ruff check .
+  All checks passed!
+  ```
 
-4. **Run-Scoped Request Budgeting:**
-   - Added `get_run_budget` and `reset_run_budget` in `request_control.py` to enforce per-run global request caps across fetches.
+- **Mypy Type Check:**
+  ```bash
+  $ uv run mypy src
+  Success: no issues found in 65 source files
+  ```
 
-5. **Harvest Metadata Semantics:**
-   - Updated `update_item_status` to record `downloaded_at` only on initial transition to `DOWNLOADED` (preserving true download time).
-   - Clears transient error fields (`last_error_code`, `last_error_message`, `next_retry_at`) upon successful status transitions.
+- **Pytest Suite:**
+  ```text
+  203 passed, 1 warning in 147.38s (0:02:27)
+  ```
 
-6. **HTTP User-Agent Contact Enforcement:**
-   - Appended `operator_contact` to outgoing User-Agent headers in `url_fetcher.py` and enforced rejection of placeholder emails in production environments.
-
-7. **Staging Import / Catalog Audit Crash Consistency:**
-   - Added missing catalog `mesa_import` audit reconciliation during idempotent `already_imported` re-imports in `importer.py`.
-
-8. **Harvest NEEDS_REVIEW Reconciliation:**
-   - Added `reconcile_harvest_review_status` in `queue.py` (called automatically from `catalog.approve_version`) to transition `NEEDS_REVIEW` Harvest items to `COMPLETED` when pending record reviews reach zero.
-
-9. **Release ID Traversal Safety:**
-   - Created `validate_release_id` in `release/security.py` and enforced strict regex `^[a-zA-Z0-9_.-]{1,64}$` and traversal checks across build, verify, publish, import, and rollback operations.
-
-10. **Entrypoint Alias Alignment:**
-    - Corrected `pyproject.toml` console script entrypoint `mesa-legal-data` to point to `mesa_legal_data.cli:app`.
-
----
-
-## 5. Verification Evidence
-
-All quality gate commands were executed and verified clean:
-
-```bash
-$ uv sync --frozen
-Audited 75 packages in 0.98ms
-
-$ uv run ruff format --check .
-167 files already formatted
-
-$ uv run ruff check .
-All checks passed!
-
-$ uv run mypy src
-Success: no issues found in 65 source files
-
-$ uv run pytest -q
-203 passed, 1 warning in 146.26s (0:02:26)
-
-$ uv run pip-audit
-No known vulnerabilities found
-```
+- **Security Audit:**
+  ```bash
+  $ uv run pip-audit
+  No known vulnerabilities found
+  ```
 
 ---
 
-## 6. Bounded Resmî Gazete Pilot Evidence
+## 4. Previous P0 / MVP Regression Checks
 
-A bounded end-to-end pilot was executed via `scripts/run_resmi_gazete_pilot.py` in an isolated temporary directory:
-
-```text
-=== Starting Bounded Resmî Gazete Pilot in /tmp/tmpbdlob_fq/data ===
-✓ Initialized catalog and harvest databases.
-✓ Enqueued document item_id=1 (result=inserted).
-✓ Harvest batch completed: {'processed': 1, 'succeeded': 1, 'failed': 0, 'retry_wait': 0, 'duplicate': 0, 'stopped_reason': None}
-✓ Harvest item status: needs_review, artifact_id: sha256:b1de60389c4f27e1303d7cdbba50f05060054d460989e61cdae0eae39f5bdad0
-✓ Pipeline status: needs_review
-✓ Version approval result: {'status': 'approved', 'version_id': 'tr:legislation:rg:20260801-1:version:2026-08-10:b1de6038', 'approved_records': 1, 'approval_status': 'approved'}
-✓ Harvest review status reconciled: True, status=completed
-✓ Built release: rel-rg-pilot-001, counts={'legislation_count': 1, 'article_count': 0, 'decision_count': 0, 'citation_count': 0}
-✓ Verified release trust anchor: True
-✓ Release imported into staging DB: status=imported
-✓ Re-imported release (idempotency check): status=already_imported
-✓ Record provenance verified for tr:legislation:rg:20260801-1: release=rel-rg-pilot-001
-✓ Rollback executed: status=rolled_back
-
-=== RESMÎ GAZETE PILOT COMPLETED SUCCESSFULLY ===
-```
+All 14 MVP regression gate scenarios pass in `tests/unit/test_final_closure_gate.py`:
+1. `test_crash_after_artifact_commit_resumes_without_redownload` [PASS]
+2. `test_resumed_exceptions_cannot_cause_secondary_invalid_transitions` [PASS]
+3. `test_processing_crash_cannot_bypass_needs_review` [PASS]
+4. `test_coherent_manifest_rewrite_rejected_by_catalog_trust_anchor` [PASS]
+5. `test_unmanifested_jsonl_rejected` [PASS]
+6. `test_idle_harvest_run_returns_clean_zero_result` [PASS]
+7. `test_operator_retry_semantics` [PASS]
+8. `test_circuit_breaker_probe_semantics` [PASS]
+9. `test_per_run_request_cap_is_global_to_run` [PASS]
+10. `test_timestamp_and_error_state_clearing_semantics` [PASS]
+11. `test_operator_contact_reaches_user_agent` [PASS]
+12. `test_post_staging_pre_audit_crash_reconciles_on_rerun` [PASS]
+13. `test_review_completion_reconciles_harvest_needs_review` [PASS]
+14. `test_unsafe_release_ids_rejected` [PASS]
 
 ---
 
-## 7. Recommended Freeze Command Flow
+## 5. Freeze Decision & Next Steps
 
-To freeze the repository immediately after closure, execute:
-
-```bash
-git add .
-git commit -m "chore(freeze): final MVP closure and release trust anchor audit complete"
-git tag -a v0.1.0-mvp-frozen -m "MESA Legal Data v0.1.0 MVP Feature Freeze"
-```
+- **MVP Decision:** **NO-GO**
+- **Freeze Ready:** **NO**
+- **Blocker to Resolve:** Install the Turkish government root/intermediate TLS CA certificate bundle into the host/environment certificate store so `httpx` can successfully verify `https://www.resmigazete.gov.tr`. Once TLS connection succeeds on the host environment, execute `scripts/run_resmi_gazete_pilot.py` to achieve `GO` status.

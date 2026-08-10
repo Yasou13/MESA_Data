@@ -27,9 +27,10 @@ from mesa_legal_data.harvest.service_bridge import (
     collect_url_item,
     run_pipeline_item,
 )
+from mesa_legal_data.sources.request_control import reset_run_budget
 
 
-def run_harvest_batch(
+def _run_harvest_batch_impl(
     harvest_cfg: HarvestConfig | None = None,
     worker_id: str | None = None,
     batch_limit: int | None = None,
@@ -428,3 +429,25 @@ def run_harvest_batch(
         "duplicate": duplicate_count,
         "stopped_reason": None,
     }
+
+
+def run_harvest_batch(
+    harvest_cfg: HarvestConfig | None = None,
+    worker_id: str | None = None,
+    batch_limit: int | None = None,
+    db_path: Path | None = None,
+    sources_yaml_path: Path | None = None,
+    custom_data_root: Path | None = None,
+) -> dict[str, Any]:
+    reset_run_budget()
+    try:
+        return _run_harvest_batch_impl(
+            harvest_cfg=harvest_cfg,
+            worker_id=worker_id,
+            batch_limit=batch_limit,
+            db_path=db_path,
+            sources_yaml_path=sources_yaml_path,
+            custom_data_root=custom_data_root,
+        )
+    finally:
+        reset_run_budget()

@@ -1,6 +1,6 @@
 {
-  "status": "mvp_closed",
-  "current_task": "MVP_CLOSED_AND_FREEZE_READY",
-  "pilot_ready": true,
-  "updated_at": "2026-08-10T23:09:00Z"
+  "status": "release_candidate",
+  "current_task": "REAL_PILOT_BLOCKED_TLS_CERTIFICATE_VERIFY_FAILED",
+  "pilot_ready": false,
+  "updated_at": "2026-08-10T23:39:00Z"
 }
