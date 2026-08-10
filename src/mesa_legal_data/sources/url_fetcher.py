@@ -8,9 +8,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from mesa_legal_data.config import load_sources
+from mesa_legal_data.config import load_settings, load_sources
 from mesa_legal_data.sources.request_control import (
-    RequestBudget,
     enforce_min_interval,
     get_source_request_state,
 )
@@ -346,11 +345,31 @@ def fetch_url_stream(
     eff_timeout = (
         min(policy.timeout_seconds, timeout_seconds) if timeout_seconds is not None else policy.timeout_seconds
     )
+    settings = load_settings()
+    contact = settings.operator_contact
     eff_ua = policy.user_agent
+    if contact:
+        placeholder_contacts = {
+            "test@example.com",
+            "example.com",
+            "operator@example.com",
+            "placeholder",
+            "admin@example.com",
+            "foo@bar.com",
+        }
+        if settings.environment == "production" and contact.lower() in placeholder_contacts:
+            raise SourcePolicyError(
+                f"OPERATOR_CONTACT_INVALID: Placeholder contact '{contact}' is not allowed in production"
+            )
+        if contact not in eff_ua:
+            eff_ua = f"{eff_ua} (+{contact})"
+
     retries = policy.retries
 
     req_state = get_source_request_state(policy.source_id, policy.concurrency)
-    budget = RequestBudget(policy.max_requests_per_run)
+    from mesa_legal_data.sources.request_control import get_run_budget
+
+    budget = get_run_budget(policy.source_id, policy.max_requests_per_run)
 
     current_url = url
     visited: set[str] = set()

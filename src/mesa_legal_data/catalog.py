@@ -1055,6 +1055,13 @@ def approve_version_streaming(
                 details_json=json.dumps({"approved_records": approved_count}),
             )
 
+            try:
+                from mesa_legal_data.harvest.queue import reconcile_harvest_review_status
+
+                reconcile_harvest_review_status(version_id)
+            except Exception:
+                pass
+
         spool_conn.close()
         if spool_db_path.exists():
             try:

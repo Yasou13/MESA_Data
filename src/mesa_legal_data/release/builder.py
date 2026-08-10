@@ -17,6 +17,7 @@ from mesa_legal_data.catalog import (
 )
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
+from mesa_legal_data.release.security import validate_release_id
 from mesa_legal_data.release.verifier import verify_release_directory
 from mesa_legal_data.schema_validation import validate_record
 
@@ -43,6 +44,8 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
     if not release_id:
         now_str = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         release_id = f"release-{now_str}"
+    else:
+        validate_release_id(release_id)
 
     final_dir = data_root / "releases" / release_id
     if final_dir.exists():
@@ -57,8 +60,9 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
 
     conn = get_connection()
 
-    # Temporary SQLite spool DB for metadata and payload staging
-    spool_db_path = building_dir / f".spool-{uuid.uuid4().hex[:8]}.sqlite"
+    tmp_dir = data_root / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    spool_db_path = tmp_dir / f".spool-{uuid.uuid4().hex[:8]}.sqlite"
     spool_conn = sqlite3.connect(spool_db_path)
     spool_conn.execute("PRAGMA journal_mode = WAL;")
     spool_conn.execute("PRAGMA synchronous = NORMAL;")

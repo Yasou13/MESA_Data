@@ -34,6 +34,7 @@ class RequestBudget:
 
 
 _SOURCE_STATES: dict[str, SourceRequestState] = {}
+_RUN_BUDGETS: dict[str, RequestBudget] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
@@ -42,6 +43,21 @@ def get_source_request_state(source_id: str, concurrency: int = 1) -> SourceRequ
         if source_id not in _SOURCE_STATES or _SOURCE_STATES[source_id].concurrency_limit != concurrency:
             _SOURCE_STATES[source_id] = SourceRequestState(concurrency_limit=max(1, concurrency))
         return _SOURCE_STATES[source_id]
+
+
+def get_run_budget(source_id: str, max_requests: int) -> RequestBudget:
+    with _REGISTRY_LOCK:
+        if source_id not in _RUN_BUDGETS or _RUN_BUDGETS[source_id].max_requests != max_requests:
+            _RUN_BUDGETS[source_id] = RequestBudget(max_requests)
+        return _RUN_BUDGETS[source_id]
+
+
+def reset_run_budget(source_id: str | None = None) -> None:
+    with _REGISTRY_LOCK:
+        if source_id:
+            _RUN_BUDGETS.pop(source_id, None)
+        else:
+            _RUN_BUDGETS.clear()
 
 
 def enforce_min_interval(state: SourceRequestState, min_interval_seconds: float):

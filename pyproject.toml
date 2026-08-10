@@ -29,7 +29,7 @@ dependencies = [
 
 [project.scripts]
 mesa-data = "mesa_legal_data.cli:app"
-mesa-legal-data = "mesa_legal_data:main"
+mesa-legal-data = "mesa_legal_data.cli:app"
 
 [build-system]
 requires = ["setuptools>=61.0"]

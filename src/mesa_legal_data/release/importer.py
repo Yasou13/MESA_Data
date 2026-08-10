@@ -13,6 +13,7 @@ from mesa_legal_data.catalog import (
 )
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
+from mesa_legal_data.release.security import validate_release_id
 from mesa_legal_data.release.verifier import verify_release
 from mesa_legal_data.schema_validation import validate_record
 
@@ -94,6 +95,8 @@ def import_release_to_staging(release_id: str, batch_size: int = 2000) -> dict[s
     Imports a published, verified release package into the MESA staging database.
     Enforces catalog 'published' status check, streaming JSONL reading, and atomic rollback.
     """
+    validate_release_id(release_id)
+
     # 0. Check catalog database status first
     cat_conn = get_catalog_connection()
     c = cat_conn.cursor()
@@ -124,10 +127,15 @@ def import_release_to_staging(release_id: str, batch_size: int = 2000) -> dict[s
     with open(manifest_path, "rb") as f:
         manifest_sha256 = hash_stream(f)
 
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest_data = json.load(f)
+    files_dict = manifest_data.get("files", {})
+
     stg_conn = get_staging_connection()
     init_staging_db(stg_conn)
 
     cursor = stg_conn.cursor()
+    now_iso = datetime.now(UTC).isoformat()
 
     # Check if already imported
     cursor.execute(
@@ -138,6 +146,26 @@ def import_release_to_staging(release_id: str, batch_size: int = 2000) -> dict[s
     if existing:
         stored_manifest, _stored_status = existing
         if stored_manifest == manifest_sha256:
+            # Reconcile catalog audit record if missing from previous crash
+            cat_conn = get_catalog_connection()
+            try:
+                c_cur = cat_conn.cursor()
+                c_cur.execute("SELECT count(*) FROM mesa_imports WHERE release_id = ?", (release_id,))
+                has_audit = c_cur.fetchone()[0] > 0
+                if not has_audit:
+                    resolved_stg_path = get_staging_db_path().as_posix()
+                    record_mesa_import(
+                        conn=cat_conn,
+                        release_id=release_id,
+                        status="imported",
+                        target_db_path=resolved_stg_path,
+                        imported_at=now_iso,
+                        record_counts_json=json.dumps({"reconciled": True}),
+                        error_summary=None,
+                    )
+            finally:
+                cat_conn.close()
+
             stg_conn.close()
             return {
                 "status": "already_imported",
@@ -150,12 +178,15 @@ def import_release_to_staging(release_id: str, batch_size: int = 2000) -> dict[s
                 f"Release {release_id} already imported with different manifest SHA-256 collision"
             )
 
-    # 2. Stream JSONL records in batches
-    data_dir = release_dir / "data"
-    jsonl_files = sorted(list(data_dir.glob("*.jsonl")))
+    # 2. Stream JSONL records in batches derived strictly from authenticated manifest entries
+    jsonl_files: list[Path] = []
+    for rel_p in sorted(files_dict.keys()):
+        if rel_p.startswith("data/") and rel_p.endswith(".jsonl"):
+            p = release_dir / rel_p
+            if p.exists() and not p.is_symlink():
+                jsonl_files.append(p)
 
     type_counts = {"legislation": 0, "article": 0, "decision": 0, "citation": 0}
-    now_iso = datetime.now(UTC).isoformat()
     records_batch: list[tuple[str, str, str, str, str]] = []
 
     try:
@@ -233,13 +264,14 @@ def import_release_to_staging(release_id: str, batch_size: int = 2000) -> dict[s
 
     stg_conn.close()
 
-    # Audit in catalog DB
+    # Audit in catalog DB with resolved path
+    resolved_stg_path = get_staging_db_path().as_posix()
     cat_conn = get_catalog_connection()
     record_mesa_import(
         conn=cat_conn,
         release_id=release_id,
         status="imported",
-        target_db_path=str(settings.mesa_staging_db),
+        target_db_path=resolved_stg_path,
         imported_at=now_iso,
         record_counts_json=json.dumps(type_counts),
         error_summary=None,
@@ -261,6 +293,7 @@ def rollback_release(target_release_id: str) -> dict[str, Any]:
     """
     Rolls back active release in MESA staging to a previously imported target_release_id.
     """
+    validate_release_id(target_release_id)
     stg_conn = get_staging_connection()
     init_staging_db(stg_conn)
     cursor = stg_conn.cursor()

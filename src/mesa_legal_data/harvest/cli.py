@@ -8,8 +8,8 @@ from mesa_legal_data.harvest.database import get_harvest_db_path
 from mesa_legal_data.harvest.discovery.manifest import import_manifest_file
 from mesa_legal_data.harvest.migrations import apply_harvest_migrations
 from mesa_legal_data.harvest.queue import (
+    operator_retry_item,
     recover_expired_leases,
-    update_item_status,
 )
 from mesa_legal_data.harvest.reporting import (
     backup_harvest_db,
@@ -341,10 +341,10 @@ def harvest_failures(
 def harvest_retry(
     item_id: int = typer.Option(..., "--item-id", help="Harvest item ID to retry"),
 ):
-    """Resets a failed/retry_wait item back to queued status."""
+    """Resets a failed/retry_wait item back to queued status via operator action."""
     db_path = get_harvest_db_path()
     try:
-        update_item_status(item_id, "queued", db_path=db_path)
+        operator_retry_item(item_id, db_path=db_path)
         typer.secho(f"Item {item_id} reset to queued status.", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"Error retrying item {item_id}: {e}", fg=typer.colors.RED)

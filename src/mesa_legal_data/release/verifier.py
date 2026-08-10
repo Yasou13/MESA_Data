@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+from mesa_legal_data.catalog import get_connection as get_catalog_connection
+from mesa_legal_data.catalog import get_release
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.hashing import hash_stream
+from mesa_legal_data.release.security import validate_release_id
 from mesa_legal_data.schema_validation import validate_record
 
 
@@ -28,17 +31,17 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
     if not files_dict:
         raise ReleaseVerificationError("manifest.json has no 'files' dictionary")
 
-    # 1. Verify path traversal safety and SHA256 hashes for all files
+    # 1. Verify path traversal safety and SHA256 hashes for all manifested files
     for rel_filename, expected_hash in files_dict.items():
-        if rel_filename.startswith("/") or ".." in rel_filename:
+        if rel_filename.startswith("/") or ".." in rel_filename or "\\" in rel_filename:
             raise ReleaseVerificationError(f"Path traversal detected in manifest filename: {rel_filename}")
 
         target_file = release_dir / rel_filename
-        if not target_file.exists():
-            raise ReleaseVerificationError(f"File {rel_filename} missing from release directory {release_dir}")
-
         if target_file.is_symlink():
             raise ReleaseVerificationError(f"Symlink files are forbidden in release: {rel_filename}")
+
+        if not target_file.exists():
+            raise ReleaseVerificationError(f"File {rel_filename} missing from release directory {release_dir}")
 
         with open(target_file, "rb") as f:
             actual_hash = hash_stream(f)
@@ -48,7 +51,19 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
                 f"File hash mismatch for {rel_filename}: expected {expected_hash}, got {actual_hash}"
             )
 
-    # 2. Verify release.json details and line counts
+    # 2. Reject unmanifested files and symlinks inside the release directory tree
+    manifested_set = set(files_dict.keys())
+    manifested_set.add("manifest.json")
+
+    for entry in release_dir.rglob("*"):
+        if entry.is_symlink():
+            raise ReleaseVerificationError(f"Symlink detected in release directory: {entry}")
+        if entry.is_file():
+            rel_p = entry.relative_to(release_dir).as_posix()
+            if rel_p not in manifested_set:
+                raise ReleaseVerificationError(f"Unmanifested file found in release package: {rel_p}")
+
+    # 3. Verify release.json details and line counts
     release_json_path = release_dir / "release.json"
     if not release_json_path.exists():
         raise ReleaseVerificationError("release.json missing from release directory")
@@ -111,11 +126,35 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
 
 def verify_release(release_id: str) -> bool:
     """
-    Verifies integrity of a published release package against its manifest.json.
+    Verifies integrity of a published release package against catalog manifest_sha256 trust anchor.
     """
+    validate_release_id(release_id)
+
     settings = load_settings()
     release_dir = settings.data_root_path / "releases" / release_id
     if not release_dir.exists():
         raise ReleaseVerificationError(f"Release directory not found: {release_dir}")
+
+    manifest_path = release_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise ReleaseVerificationError(f"Release manifest.json missing from {release_dir}")
+
+    with open(manifest_path, "rb") as f:
+        actual_manifest_sha256 = hash_stream(f)
+
+    conn = get_catalog_connection()
+    try:
+        rel = get_release(conn, release_id)
+        if not rel:
+            raise ReleaseVerificationError(f"Release '{release_id}' not found in catalog database")
+        catalog_manifest_sha256 = rel.get("manifest_sha256")
+        if not catalog_manifest_sha256:
+            raise ReleaseVerificationError(f"Catalog release '{release_id}' has no recorded manifest_sha256")
+        if actual_manifest_sha256.lower() != catalog_manifest_sha256.lower():
+            raise ReleaseVerificationError(
+                f"Release manifest SHA256 mismatch with catalog trust anchor: expected {catalog_manifest_sha256}, got {actual_manifest_sha256}"
+            )
+    finally:
+        conn.close()
 
     return verify_release_directory(release_dir, expected_release_id=release_id)

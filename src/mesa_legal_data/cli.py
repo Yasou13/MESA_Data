@@ -404,7 +404,9 @@ def release_publish(
     from datetime import datetime
 
     from mesa_legal_data.catalog import get_connection
+    from mesa_legal_data.release.security import validate_release_id
 
+    validate_release_id(release_id)
     conn = get_connection()
     try:
         now = datetime.now(UTC).isoformat()
@@ -429,7 +431,9 @@ def release_revoke(
 ):
     """Revokes a published release package."""
     from mesa_legal_data.catalog import get_connection
+    from mesa_legal_data.release.security import validate_release_id
 
+    validate_release_id(release_id)
     conn = get_connection()
     try:
         conn.execute("UPDATE releases SET status = 'revoked' WHERE release_id = ?", (release_id,))

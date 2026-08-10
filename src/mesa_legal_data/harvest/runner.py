@@ -6,7 +6,6 @@ from typing import Any
 
 from mesa_legal_data.harvest.budgets import (
     check_free_disk_space,
-    check_source_error_circuit_breaker,
     get_daily_budget_usage,
     get_source_total_raw_bytes,
     get_total_raw_bytes,
@@ -42,7 +41,14 @@ def run_harvest_batch(
         harvest_cfg = load_harvest_config()
 
     if not harvest_cfg.enabled:
-        return {"processed": 0, "stopped_reason": "HARVEST_DISABLED"}
+        return {
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "retry_wait": 0,
+            "duplicate": 0,
+            "stopped_reason": "HARVEST_DISABLED",
+        }
 
     if worker_id is None:
         worker_id = f"worker-{uuid.uuid4().hex[:8]}"
@@ -60,6 +66,10 @@ def run_harvest_batch(
     if not disk_ok:
         return {
             "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "retry_wait": 0,
+            "duplicate": 0,
             "stopped_reason": f"LOW_DISK_SPACE (free: {free_bytes} < min: {harvest_cfg.target.minimum_free_disk_bytes})",
         }
 
@@ -68,6 +78,10 @@ def run_harvest_batch(
     if harvest_cfg.target.stop_when_target_reached and total_raw >= harvest_cfg.target.raw_bytes:
         return {
             "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "retry_wait": 0,
+            "duplicate": 0,
             "stopped_reason": f"GLOBAL_TARGET_REACHED ({total_raw} >= {harvest_cfg.target.raw_bytes})",
         }
 
@@ -80,7 +94,14 @@ def run_harvest_batch(
     )
 
     if not items:
-        return {"processed": 0, "stopped_reason": "NO_QUEUED_ITEMS"}
+        return {
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "retry_wait": 0,
+            "duplicate": 0,
+            "stopped_reason": "NO_QUEUED_ITEMS",
+        }
 
     processed_count = 0
     succeeded_count = 0
@@ -112,9 +133,12 @@ def run_harvest_batch(
             }
 
         # Check source circuit breaker
-        if check_source_error_circuit_breaker(
+        from mesa_legal_data.harvest.budgets import check_source_circuit_breaker, record_circuit_breaker_result
+
+        is_paused, is_probe = check_source_circuit_breaker(
             item.source_id, threshold=harvest_cfg.runner.stop_on_error_rate, db_path=db_path
-        ):
+        )
+        if is_paused:
             update_item_status(item_id, ItemStatus.QUEUED, db_path=db_path)
             continue
 
@@ -192,8 +216,9 @@ def run_harvest_batch(
                             duplicate=True,
                             db_path=db_path,
                         )
+                        if is_probe:
+                            record_circuit_breaker_result(item.source_id, success=True)
                         continue
-                    # Duplicate raw artifact but missing canonical processing -> continue to pipeline
 
                 finish_iso = datetime.now(UTC).isoformat()
                 record_attempt(
@@ -246,7 +271,7 @@ def run_harvest_batch(
                     if pipe_success
                     else ("PIPELINE_FAILED" if pipe_res.status == "failed" else "UNEXPECTED_PIPELINE_STATUS"),
                     error_message=None if pipe_success else f"Pipeline status: {pipe_res.status}",
-                    artifact_id=collect_res.artifact_id,
+                    artifact_id=artifact_id,
                     db_path=db_path,
                 )
 
@@ -255,6 +280,9 @@ def run_harvest_batch(
                     success=pipe_success,
                     db_path=db_path,
                 )
+
+                if is_probe:
+                    record_circuit_breaker_result(item.source_id, success=pipe_success)
 
                 if pipe_res.status == "approved":
                     update_item_status(
@@ -292,10 +320,17 @@ def run_harvest_batch(
                     failed_count += 1
             else:
                 record_pipeline_budget(item.source_id, success=True, db_path=db_path)
+                if is_probe:
+                    record_circuit_breaker_result(item.source_id, success=True)
                 update_item_status(item_id, ItemStatus.COMPLETED, db_path=db_path)
                 succeeded_count += 1
 
         except ServiceBridgeError as sbe:
+            if is_probe:
+                from mesa_legal_data.harvest.budgets import record_circuit_breaker_result
+
+                record_circuit_breaker_result(item.source_id, success=False)
+
             finish_iso = datetime.now(UTC).isoformat()
             record_attempt(
                 item_id=item_id,
@@ -340,6 +375,11 @@ def run_harvest_batch(
                 )
                 failed_count += 1
         except Exception as ex:
+            if is_probe:
+                from mesa_legal_data.harvest.budgets import record_circuit_breaker_result
+
+                record_circuit_breaker_result(item.source_id, success=False)
+
             finish_iso = datetime.now(UTC).isoformat()
             err_msg = str(ex)
             err_code = "UNEXPECTED_ERROR"

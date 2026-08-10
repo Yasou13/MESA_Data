@@ -238,11 +238,34 @@ def _check_canonical_committed(
                     ver_id = doc["current_version_id"]
                     ver = get_version(conn, ver_id)
                     if ver:
+                        v_app = ver.get("approval_status")
+                        d_st = doc.get("lifecycle_status")
+
                         cursor = conn.cursor()
                         cursor.execute("SELECT approval_status FROM records WHERE version_id = ?", (ver_id,))
-                        row = cursor.fetchone()
-                        status = row[0] if row else "approved"
-                        return True, status, ver_id
+                        rec_rows = cursor.fetchall()
+                        rec_statuses = set(r[0] for r in rec_rows) if rec_rows else set()
+
+                        if v_app == "approved" or d_st == "approved":
+                            if not any(s in ("pending", "needs_review", "rejected") for s in rec_statuses):
+                                return True, "approved", ver_id
+
+                        if (
+                            "needs_review" in rec_statuses
+                            or "pending" in rec_statuses
+                            or v_app in ("needs_review", "pending")
+                            or d_st in ("needs_review", "draft")
+                        ):
+                            return True, "needs_review", ver_id
+                        elif "rejected" in rec_statuses or v_app == "rejected" or d_st == "rejected":
+                            return True, "rejected", ver_id
+                        elif rec_statuses and all(s == "approved" for s in rec_statuses):
+                            return True, "approved", ver_id
+                        elif not rec_statuses:
+                            if v_app in ("approved", "needs_review", "rejected"):
+                                return True, v_app, ver_id
+
+                        return False, None, None
         finally:
             conn.close()
     except Exception:
@@ -253,7 +276,7 @@ def _check_canonical_committed(
 def recover_expired_leases(db_path: Path | None = None) -> int:
     """
     Stage-aware crash recovery:
-    - leased (expired): -> queued
+    - leased (expired): -> queued (or downloaded if raw artifact committed)
     - downloading (expired/stranded):
         committed artifact exists -> downloaded
         no committed artifact    -> queued
@@ -285,7 +308,10 @@ def recover_expired_leases(db_path: Path | None = None) -> int:
             new_ver_id = item.version_id
 
             if st == "leased":
-                new_st = "queued"
+                if item.artifact_id and _check_artifact_committed(item.artifact_id):
+                    new_st = "downloaded"
+                else:
+                    new_st = "queued"
             elif st == "downloading":
                 if item.artifact_id and _check_artifact_committed(item.artifact_id):
                     new_st = "downloaded"
@@ -294,17 +320,20 @@ def recover_expired_leases(db_path: Path | None = None) -> int:
             elif st == "downloaded":
                 new_st = "downloaded"
             elif st == "processing":
-                has_canon, canon_st, ver_id = _check_canonical_committed(item.artifact_id)
+                has_canon, canon_st, ver_id = _check_canonical_committed(item.artifact_id, db_path=db_path)
                 if has_canon:
                     if canon_st == "approved":
                         new_st = "completed"
-                    elif canon_st in ("needs_review", "rejected"):
+                    elif canon_st in ("needs_review", "rejected", "pending"):
                         new_st = "needs_review"
                     else:
-                        new_st = "completed"
+                        new_st = "downloaded"
                     new_ver_id = ver_id or item.version_id
                 else:
                     new_st = "downloaded"
+
+            status_changed = new_st != item.status
+            lease_cleared = item.lease_owner is not None or item.lease_expires_at is not None
 
             cursor.execute(
                 """
@@ -320,7 +349,8 @@ def recover_expired_leases(db_path: Path | None = None) -> int:
                 """,
                 (new_st, new_art_id, new_ver_id, now_iso, item.id),
             )
-            count += 1
+            if status_changed or lease_cleared:
+                count += 1
         conn.commit()
         return count
     finally:
@@ -379,10 +409,12 @@ def update_item_status(
             updates.append("next_retry_at = ?")
             params.append(next_retry_at)
 
-        if t_status == ItemStatus.DOWNLOADED or t_status == ItemStatus.COMPLETED:
-            updates.append("downloaded_at = ?")
-            params.append(now_iso)
-        if t_status == ItemStatus.COMPLETED or t_status == ItemStatus.NEEDS_REVIEW:
+        # Timestamps management
+        if t_status == ItemStatus.DOWNLOADED:
+            if current_item.downloaded_at is None:
+                updates.append("downloaded_at = ?")
+                params.append(now_iso)
+        if t_status in (ItemStatus.COMPLETED, ItemStatus.NEEDS_REVIEW):
             updates.append("pipeline_completed_at = ?")
             params.append(now_iso)
         if t_status in (
@@ -394,6 +426,15 @@ def update_item_status(
         ):
             updates.append("completed_at = ?")
             params.append(now_iso)
+
+        # Clear error state on successful/resumed statuses if no new error passed
+        if t_status in (ItemStatus.DOWNLOADED, ItemStatus.PROCESSING, ItemStatus.COMPLETED, ItemStatus.NEEDS_REVIEW):
+            if last_error_code is None:
+                updates.append("last_error_code = NULL")
+            if last_error_message is None:
+                updates.append("last_error_message = NULL")
+            if next_retry_at is None:
+                updates.append("next_retry_at = NULL")
 
         # Clear lease on terminal/retry/queued status
         if t_status in (
@@ -420,6 +461,99 @@ def update_item_status(
         return row_to_harvest_item(cursor.fetchone())
     finally:
         conn.close()
+
+
+def operator_retry_item(item_id: int, db_path: Path | None = None) -> HarvestItem:
+    """
+    Operator action to retry a failed or retry_wait item.
+    BLOCKED items cannot be retried automatically by operator.
+    """
+    item = get_harvest_item_by_id(item_id, db_path=db_path)
+    if not item:
+        raise ValueError(f"Harvest item {item_id} not found")
+    if item.status == ItemStatus.BLOCKED.value:
+        raise ValueError(f"Harvest item {item_id} is BLOCKED by security policy and cannot be retried by operator")
+
+    conn = get_harvest_connection(db_path)
+    now_iso = datetime.now(UTC).isoformat()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE harvest_items
+            SET status = 'queued',
+                lease_owner = NULL,
+                lease_started_at = NULL,
+                lease_expires_at = NULL,
+                next_retry_at = NULL,
+                last_error_code = NULL,
+                last_error_message = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso, item_id),
+        )
+        conn.commit()
+        cursor.execute("SELECT * FROM harvest_items WHERE id = ?", (item_id,))
+        return row_to_harvest_item(cursor.fetchone())
+    finally:
+        conn.close()
+
+
+def reconcile_harvest_review_status(
+    version_id: str, db_path: Path | None = None, catalog_db_path: Path | None = None
+) -> bool:
+    """
+    Reconciles a Harvest item's NEEDS_REVIEW status when human review for the associated version completes.
+    """
+    conn_h = get_harvest_connection(db_path)
+    try:
+        cursor_h = conn_h.cursor()
+        cursor_h.execute(
+            "SELECT id, status, artifact_id FROM harvest_items WHERE version_id = ? AND status = 'needs_review'",
+            (version_id,),
+        )
+        row = cursor_h.fetchone()
+        if not row:
+            # Check by artifact_id if version_id match failed
+            from mesa_legal_data.catalog import get_connection as get_cat_conn
+            from mesa_legal_data.catalog import get_version
+
+            cat_conn = get_cat_conn(catalog_db_path)
+            try:
+                ver = get_version(cat_conn, version_id)
+                if ver and ver.get("artifact_id"):
+                    cursor_h.execute(
+                        "SELECT id, status, artifact_id FROM harvest_items WHERE artifact_id = ? AND status = 'needs_review'",
+                        (ver["artifact_id"],),
+                    )
+                    row = cursor_h.fetchone()
+            finally:
+                cat_conn.close()
+        if not row:
+            return False
+
+        item_id = row["id"]
+
+        from mesa_legal_data.catalog import get_connection as get_cat_conn
+
+        cat_conn = get_cat_conn(catalog_db_path)
+        try:
+            cursor_c = cat_conn.cursor()
+            cursor_c.execute(
+                "SELECT count(*) FROM records WHERE version_id = ? AND approval_status = 'pending'", (version_id,)
+            )
+            pending_count = cursor_c.fetchone()[0]
+            if pending_count == 0:
+                update_item_status(item_id, ItemStatus.COMPLETED, version_id=version_id, db_path=db_path)
+                return True
+        finally:
+            cat_conn.close()
+    except Exception:
+        pass
+    finally:
+        conn_h.close()
+    return False
 
 
 def get_harvest_item_by_id(item_id: int, db_path: Path | None = None) -> HarvestItem | None:
