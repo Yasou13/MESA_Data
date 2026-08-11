@@ -1,62 +1,53 @@
 # MESA Legal Data
 
-MESA Legal Data, MESA hukuk ekosistemi için mevzuat, içtihat ve hukuki atıf verilerini toplayan, kanonikleştiren, doğrulayan ve MESA staging veritabanına güvenle aktaran uçtan uca veri platformudur.
+MESA Legal Data; MESA hukuk ekosistemi için resmî mevzuat, içtihat ve hukuki atıf verilerini toplayan, ham dosyaları değiştiremez biçimde saklayan, ayrıştıran, kanonikleştiren, doğrulayan ve MESA staging veritabanına aktaran uçtan uca veri platformudur.
+
+---
 
 ## Katmanlı Mimari
+
 ```text
-Resmî Kaynak
-   ├─ Manuel URL / Yerel Dosya
-   └─ Harvest Discovery → Queue
+Resmî Kaynak (HTTPS / Manuel PDF)
+   ├─ Manuel URL / Yerel Dosya (collect)
+   └─ Otomatik Keşif Kuyruğu (harvest discover → run)
               ↓
-        Güvenli Collect
+Ham Veri Deposu (raw/ — Değişmez Artifact + SHA-256 + Metadata)
               ↓
-raw (Değişmez ham artifact + SHA-256 + metadata)
-        ↓
-parse & canonical (Değişmez JSONL parçaları)
-        ↓
-JSON Schema + Legal Metadata + Privacy Taraması
-        ↓
-İnsan Onayı (Review & Approval)
-        ↓
-release (Değişmez JSONL paketi + manifest.json)
-        ↓
-MESA Staging DB (Atomik, Idempotent Import & Rollback)
+Ayrıştırma & Kanonikleştirme Pipeline'ı (parse → canonical JSONL)
+              ↓
+Gizlilik Taraması & Hukuki Metadata Doğrulaması (Schema & Privacy)
+              ↓
+İnsan Onayı (Human Review — approve / reject)
+              ↓
+Release Derleme & Doğrulama (build → verify → publish)
+              ↓
+MESA Staging DB (Atomik, Idempotent Import & Provenance)
 ```
 
-## Workspace (Çalışma Dizini)
+---
 
-MESA Legal Data, tüm verisini `MESA_DATA_DATA_ROOT` ortam değişkeninin gösterdiği dizinde saklar. Varsayılan: `~/.mesa-data/`.
+## Veri Dizin Yapısı (Workspace)
+
+Sistem tüm verilerini `MESA_DATA_DATA_ROOT` ortam değişkeninin gösterdiği dizinde saklar (Varsayılan: `~/.mesa-data/data` veya `config/settings.yaml` konumu).
 
 ```text
 $DATA_ROOT/
-  raw/                    # Değişmez ham artifact dosyaları
-  canonical/              # Değişmez JSONL canonical kayıtlar
-  releases/               # Değişmez release paketleri (manifest + JSONL)
-  exports/                # Dışa aktarma dosyaları
-  source_configs/         # Kaynak yapılandırma YAML dosyaları
-  backups/                # Catalog yedekleri
-  harvest/                # Harvest veritabanı ve yedekleri
-    harvest.sqlite
-    backups/
-  catalog.sqlite          # Ana catalog veritabanı
+  raw/                    # Değişmez ham artifact dosyaları (PDF, HTML)
+  canonical/              # Sürüm bazlı kanonik JSONL kayıtları
+  releases/               # Yayınlanan release paketleri (manifest.json + JSONL)
+  exports/                # Üretilen dışa aktarma dosyaları
+  backups/                # Katalog veritabanı yedekleri
+  harvest/                # Harvest veritabanı (harvest.sqlite) ve yedekleri
+  catalog.sqlite          # Ana katalog veritabanı
 ```
 
-## Veri Akışı
-
-```text
-1. Collect  → raw/ dizinine ham dosya + SHA-256 + metadata kaydı (Manuel veya Harvest Queue)
-2. Pipeline → parse → canonical JSONL üretimi → JSON Schema doğrulama
-3. Review   → İnsan onayı (approve/reject) → audit kaydı
-4. Release  → JSONL paketi + manifest.json + SHA-256 doğrulama
-5. Import   → MESA Staging DB'ye atomik aktarım
-6. Export   → Filtrelenmiş JSONL/CSV dışa aktarma
-```
+---
 
 ## Otomatik Veri Toplama (Harvest)
 
-MESA Legal Data, tanımlı resmî kaynakların belge bağlantılarını kontrollü biçimde keşfeden, kalıcı kuyruğa alan ve mevcut güvenli collect/pipeline akışıyla besleyen Harvest katmanına sahiptir. Harvest, ana catalog veritabanından bağımsız ayrı bir `harvest.sqlite` veritabanı üzerinde çalışır.
+MESA Legal Data, tanımlı resmî kaynaklardan belge bağlantılarını keşfeden ve indirme kuyruğunu yöneten bir Harvest altsistemine sahiptir. Harvest, ana katalogdan bağımsız `harvest.sqlite` üzerinde çalışır.
 
-### Harvest CLI Komutları
+### Harvest Komutları
 ```bash
 uv run mesa-data harvest init
 uv run mesa-data harvest config-check
@@ -65,17 +56,18 @@ uv run mesa-data harvest status
 uv run mesa-data harvest run --once --limit 25
 uv run mesa-data harvest failures
 uv run mesa-data harvest maintenance
-uv run mesa-data harvest import-manifest --file manifest.csv
 ```
 
 ### Güvenlik & Politika
-- Discovery yalnızca tanımlı resmî kaynaklarda (`sources.yaml` ve `harvest.yaml`) çalışır (pilot kaynak: Resmî Gazete mevzuat verisi).
-- İndirmeler core source policy, allowed hosts, SSRF, MIME, size ve rate-limit denetimlerinden geçer.
-- Otomatik review, publish veya import yapılmaz; insan onayı süreci aynen korunur.
+- Keşif ve indirmeler yalnızca `config/sources.yaml` ve `config/harvest.yaml` dosyalarında izin verilen resmi kaynaklarda çalışır.
+- İndirme işlemleri SSRF, MIME türü, boyut sınırı (~50 MB) ve hız sınırı denetimlerinden geçer.
+- Otomatik onay veya yayınlama yapılmaz; tüm veriler insan onayı (`review`) süzgecinden geçer.
 
-## Web Yönetim Paneli (Vanilla HTML/CSS/JS + FastAPI)
+---
 
-MESA Legal Data web yönetim paneli, tüm veri toplama, orkestrasyon, inceleme, release ve staging aktarım işlemlerini kullanıcı dostu sade bir HTML arayüz üzerinden gerçekleştirmenizi sağlar.
+## Web Yönetim Paneli (FastAPI + HTML/CSS/JS)
+
+MESA Legal Data, tüm veri toplama, orkestrasyon, inceleme, release ve staging aktarım işlemlerini yönetebileceğiniz web tabanlı bir arayüze sahiptir.
 
 ### Web Panelini Başlatma
 ```bash
@@ -85,136 +77,78 @@ Tarayıcınızda `http://127.0.0.1:8765` adresini açınız.
 
 ### Güvenlik & Admin Token
 - Web paneli varsayılan olarak yalnızca yerel bilgisayardan (`127.0.0.1`) erişilebilir durumdadır.
-- Dış ağa açılacak durumlarda `MESA_DATA_WEB_ADMIN_TOKEN` çevre değişkeninin ayarlanması zorunludur.
-- Tüm yazma isteklerinde (`POST`/`PUT`/`DELETE`) `X-MESA-Requested-With: web-admin` başlığı zorunlu tutulmaktadır.
-
-### Panel Ekranları
-1. **📊 Genel Bakış (Dashboard):** Core sayaçları + Otomatik Veri Toplama (Harvest) salt okunur özeti + aktif MESA release durumu.
-2. **➕ Veri Ekle:** Yerel dosya (PDF/HTML) veya izinli HTTPS URL üzerinden ham veri aktarımı (`raw`).
-3. **📄 Belgeler:** Tüm belgelerin listelenmesi, filtrelenmesi, artifact detayları ve tek tıkla pipeline orkestrasyonu.
-4. **🔍 Veri Gezgini:** Documents, artifacts, versions, records, issues, releases listeleme ve filtreleme.
-5. **İnceleme (Review):** İnceleme bekleyen canonical kayıtlar, metin önizlemeleri, blocker sorun uyarıları, insan onayı (`approve`) ve reddetme (`reject`).
-6. **Sorunlar (Issues):** Açık ve çözülmüş doğrulama sorunlarını salt okunur listeleme.
-7. **Kaynaklar (Sources):** İzinli kaynakları ve politikaları salt okunur listeleme.
-8. **📦 Release'ler:** Gerçek JSONL release paketleme (`build`), SHA-256 manifest doğrulaması (`verify`), yayınlama (`publish`), MESA staging DB aktarımı (`import`), geri alma (`rollback`) ve iptal (`revoke`).
-9. **Dışa Aktarma (Export):** Records JSONL/CSV, issues CSV, audit JSONL/CSV, provenance JSONL ve document package export üretme ve indirme.
-10. **Operasyonlar:** Filtered export, release build ve integrity audit arka plan işleri.
-11. **Audit:** Tüm veri yazma ve indirme audit kayıtlarını listeleme.
-12. **⚙️ Sistem:** Sistem teşhisi (`doctor`), bütünlük denetimi (`audit`) ve yedekleme (`backup`).
+- Sunucu dış ağa (`0.0.0.0`) açılacağında `MESA_DATA_WEB_ADMIN_TOKEN` ortam değişkeni zorunludur.
 
 ---
 
-## Hızlı Başlangıç (CLI)
+## Hızlı Komut Akışı (CLI)
 
-### 1. Ortam Kurulumu
+### 1. Kurulum ve Başlatma
 ```bash
+# Bağımlılıkları yükleyin
 uv sync --frozen
-```
 
-### 2. Veri Dizinlerinin ve Kataloğun Başlatılması
-```bash
+# Veri dizinlerini ve veritabanı şemasını hazırlayın
 uv run mesa-data init
 uv run mesa-data migrate
 ```
 
-### 3. Sağlık Kontrolü ve Bütünlük Taraması
-```bash
-uv run mesa-data doctor
-uv run mesa-data audit
-```
+### 2. Örnek Kullanım Akışı
 
-### 4. Örnek Kullanım Akışı
-
-#### Veri Toplama (Manual URL veya Dosya Import)
 ```bash
-uv run mesa-data collect url --source mevzuat --url https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf --document-id tr:legislation:constitution:2709 --title "Türkiye Cumhuriyeti Anayasası"
-```
+# A. Veri Ekleme (Manuel veya URL)
+uv run mesa-data collect url \
+  --source mevzuat \
+  --url https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf \
+  --document-id tr:legislation:constitution:2709 \
+  --title "Türkiye Cumhuriyeti Anayasası"
 
-#### Pipeline Orkestrasyonu (Parsing & Canonical Kayıt Üretimi)
-```bash
-uv run mesa-data pipeline run --artifact-id art-...
-```
+# B. Pipeline Orkestrasyonu
+uv run mesa-data pipeline run --artifact-id sha256:<ARTIFACT_HASH>
 
-#### İnceleme ve Onay (Review & Approval)
-```bash
+# C. İnceleme ve Onay
 uv run mesa-data review list --status pending
-uv run mesa-data review approve RECORD_ID --reviewer "yasin" --note "Kontrol edildi"
-```
+uv run mesa-data review approve-version <VERSION_ID> --reviewer "operator@example.com"
 
-#### Release Paketi Üretimi ve Yayınlanması
-```bash
+# D. Release Derleme ve Yayınlama
 uv run mesa-data release build --release-id release-v1.0
 uv run mesa-data release verify --release-id release-v1.0
 uv run mesa-data release publish --release-id release-v1.0
-```
 
-#### MESA Staging DB Import & Rollback
-```bash
+# E. MESA Staging DB Import
 uv run mesa-data release import --release-id release-v1.0
-uv run mesa-data release rollback --release-id release-v1.0
-uv run mesa-data provenance RECORD_ID
+
+# F. İzlenebilirlik Sorgusu
+uv run mesa-data provenance <RECORD_ID>
 ```
 
----
-
-## Exports (Dışa Aktarma)
-
+### 3. Teşhis ve Sağlık Kontrolü
 ```bash
-# API üzerinden
-POST /api/exports
-{
-  "export_type": "records_jsonl",
-  "filters": {"record_type": "article", "approval_status": "approved"}
-}
-```
-
-Desteklenen formatlar:
-- `records_jsonl` — Canonical kayıtlar (JSONL)
-- `records_csv` — Tablo formatı (CSV)
-- `issues_csv` — Doğrulama sorunları (CSV)
-- `audit_jsonl` / `audit_csv` — Denetim logları
-- `provenance_jsonl` — Veri kökeni zihniyeti
-- `document_package` — Ham belge paketleri
-
----
-
-## Downloads (Güvenli İndirmeler)
-
-Tüm indirmeler `resolve_verified_download` güvenlik katmanından geçer:
-- **Exact ID lookup** — Path traversal engeli
-- **Symlink kontrolü** — Gerçek dosya doğrulaması
-- **SHA-256 doğrulaması** — İndirme anında bütünlük kontrolü
-- **Audit kaydı** — Her indirme loglanır
-
----
-
-## Backup & Teşhis
-
-```bash
-# Teşhis
+# Sistem teşhisi ve bütünlük denetimi
 uv run mesa-data doctor
 
-# Yedekleme
+# Raw artifact SHA-256 bütünlük kontrolü
+uv run mesa-data audit
+
+# Veritabanı yedeği alma
 uv run mesa-data backup
 ```
 
 ---
 
-## Bilinen Sınırlar (Limitations)
+## Dokümantasyon
 
-- **Tek sunucu mimarisi** — SQLite write lock ile korunur, dağıtık dağıtım desteklenmez.
-- **Senkron pipeline** — Büyük dosyalarda (>100MB PDF) uzun sürebilir.
-- **Token tabanlı kimlik doğrulama** — OAuth/OIDC entegrasyonu henüz mevcut değil.
+- 🚀 **[Hızlı Başlangıç Rehberi](docs/HIZLI_BASLANGIC.md)** — 5 dakikada kurulum ve ilk veri aktarımı.
+- 📖 **[Kullanım Kılavuzu](docs/KULLANIM_KILAVUZU.md)** — Detaylı operasyon rehberi, Harvest altsistemi, arayüz tanıtımı ve CLI referansı.
+- 📐 **[MESA Import Sözleşmesi](docs/IMPORT_CONTRACT.md)** — Staging DB aktarım kuralları ve veri modeli sözleşmesi.
+- 🔒 **[MVP Kapanış Raporu](docs/MVP_CLOSURE_REPORT.md)** — MVP freeze doğrulamaları ve TLS güvenlik mimarisi.
 
 ---
 
-## V2'ye Ertelenen Özellikler (Scope-Out)
+## Sınırlar ve V2 Kapsamı
 
-Aşağıdaki deneysel özellikler MVP kapsamından çıkarılmış ve V2 sürümüne ertelenmiştir:
-- Record revision (kayıt revizyon) UI ve public API
-- Source config web editörü (kaynak ayarları `config/sources.yaml` üzerinden elle yönetilir)
-- Issue management (sorun waive/reopen/resolve sistemi)
-- Annotations (özel not ve etiket yönetimi API)
-- Release diff (release karşılaştırma merkezi)
-- Full snapshot merkezi
-- Çok kullanıcılı yetkilendirme (OAuth/OIDC)
+Aşağıdaki özellikler MVP kapsamı dışında bırakılmış ve V2 sürümüne ertelenmiştir:
+- Kayıt revizyon editörü (record revision UI)
+- Web üzerinden kaynak yapılandırma editörü (`config/sources.yaml` üzerinden yönetilir)
+- Otomatik sorun kapatma/waive mekanizması (sorunlar salt okunurdur)
+- Çok kullanıcılı OAuth/OIDC yetkilendirmesi
