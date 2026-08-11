@@ -1,6 +1,7 @@
 import ipaddress
 import os
 import socket
+import ssl
 import time
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -30,6 +31,85 @@ class SizeLimitExceededError(URLFetchError):
 
 class SourcePolicyError(URLFetchError):
     pass
+
+
+EXPECTED_GEOTRUST_INTERMEDIATE_FINGERPRINT = "c06e307f7cfc1d32fa72a4c033c87b90019af216f0775d64978a2eca6c8a230e"
+
+
+def verify_ca_cert_fingerprint(cert_path: Path, expected_hex_sha256: str) -> bool:
+    """
+    Parses the PEM/DER certificate file at cert_path and asserts that its DER SHA-256 fingerprint
+    matches expected_hex_sha256. Fails closed (returns False) on any mismatch or corruption.
+    """
+    try:
+        content = cert_path.read_bytes()
+        import base64
+        import hashlib
+
+        der_bytes: bytes
+        if b"-----BEGIN CERTIFICATE-----" in content:
+            lines = [
+                line.strip()
+                for line in content.decode("utf-8", errors="ignore").splitlines()
+                if line.strip() and not line.startswith("-----")
+            ]
+            der_bytes = base64.b64decode("".join(lines))
+        else:
+            der_bytes = content
+
+        computed = hashlib.sha256(der_bytes).hexdigest().lower()
+        clean_expected = expected_hex_sha256.replace(":", "").lower()
+        return computed == clean_expected
+    except Exception:
+        return False
+
+
+def get_packaged_intermediate_ca_path() -> Path | None:
+    """
+    Locates the packaged GeoTrust TLS RSA CA G1 intermediate certificate.
+    Uses importlib.resources with a fallback to relative package file path.
+    Verifies that the file exists and its SHA-256 fingerprint matches EXPECTED_GEOTRUST_INTERMEDIATE_FINGERPRINT.
+    Fails closed if the certificate is corrupted, missing, or tampered.
+    """
+    try:
+        import importlib.resources as pkg_resources
+
+        certs_dir = pkg_resources.files("mesa_legal_data").joinpath("certs")
+        cert_file = certs_dir.joinpath("geotrust_tls_rsa_ca_g1.pem")
+        path = Path(str(cert_file))
+        if path.is_file() and verify_ca_cert_fingerprint(path, EXPECTED_GEOTRUST_INTERMEDIATE_FINGERPRINT):
+            return path
+    except Exception:
+        pass
+
+    pkg_relative = Path(__file__).parent.parent / "certs" / "geotrust_tls_rsa_ca_g1.pem"
+    if pkg_relative.is_file() and verify_ca_cert_fingerprint(pkg_relative, EXPECTED_GEOTRUST_INTERMEDIATE_FINGERPRINT):
+        return pkg_relative
+
+    return None
+
+
+def build_ssl_context() -> ssl.SSLContext:
+    """
+    Builds a secure, additive SSLContext.
+    Starts with default system/OS CA trust.
+    If an explicit administrator override (SSL_CERT_FILE, REQUESTS_CA_BUNDLE, or CURL_CA_BUNDLE) is set, loads it.
+    Additively loads the verified packaged intermediate CA certificate (GeoTrust TLS RSA CA G1) to bridge missing intermediate server chains.
+    Enforces full TLS certificate validation and hostname verification.
+    """
+    import ssl
+
+    ctx = ssl.create_default_context()
+
+    ca_env = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
+    if ca_env and os.path.exists(ca_env):
+        ctx.load_verify_locations(cafile=ca_env)
+
+    packaged_ca = get_packaged_intermediate_ca_path()
+    if packaged_ca:
+        ctx.load_verify_locations(cafile=str(packaged_ca))
+
+    return ctx
 
 
 @dataclass(frozen=True)
@@ -376,19 +456,10 @@ def fetch_url_stream(
     visited: set[str] = set()
     MAX_REDIRECTS = 3
 
-    import ssl
-
-    ssl_verify: bool | ssl.SSLContext = True
-    ca_env = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
-    if ca_env and os.path.exists(ca_env):
-        ssl_verify = ssl.create_default_context(cafile=ca_env)
-    elif os.path.exists("/tmp/combined_ca.pem"):
-        ssl_verify = ssl.create_default_context(cafile="/tmp/combined_ca.pem")
-
     client = httpx.Client(
         follow_redirects=False,
         timeout=httpx.Timeout(eff_timeout),
-        verify=ssl_verify,
+        verify=build_ssl_context(),
         headers={
             "User-Agent": eff_ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.8",

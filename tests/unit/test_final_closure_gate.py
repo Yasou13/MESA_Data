@@ -536,3 +536,30 @@ def test_unsafe_release_ids_rejected():
     safe_ids = ["release-20260811", "release-v1.0", "mvp-001"]
     for s_id in safe_ids:
         assert validate_release_id(s_id) == s_id
+
+
+# 21. TLS hygiene & cert packaging invariants
+def test_tls_hygiene_and_cert_packaging():
+    import os
+    import ssl
+
+    from mesa_legal_data.sources.url_fetcher import (
+        EXPECTED_GEOTRUST_INTERMEDIATE_FINGERPRINT,
+        build_ssl_context,
+        get_packaged_intermediate_ca_path,
+        verify_ca_cert_fingerprint,
+    )
+
+    pkg_ca = get_packaged_intermediate_ca_path()
+    assert pkg_ca is not None
+    assert pkg_ca.is_file()
+    assert verify_ca_cert_fingerprint(pkg_ca, EXPECTED_GEOTRUST_INTERMEDIATE_FINGERPRINT) is True
+
+    assert (
+        verify_ca_cert_fingerprint(pkg_ca, "0000000000000000000000000000000000000000000000000000000000000000") is False
+    )
+
+    ctx = build_ssl_context()
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True
+    assert not os.path.exists("/tmp/combined_ca.pem")

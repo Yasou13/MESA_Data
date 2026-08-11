@@ -1,7 +1,7 @@
 # MESA Legal Data — Final MVP Closure Report
 
 **Date:** 2026-08-11  
-**Git Revision:** Pending final freeze commit  
+**Git Revision:** Pending final deployment hygiene commit  
 **Environment:** Ubuntu 22.04.5 LTS (Python 3.13.12, `uv` managed)  
 **MVP Decision:** **GO**  
 **Freeze Ready:** **YES** (`pilot_ready: true`)  
@@ -12,26 +12,24 @@
 
 This report documents the final operational pass before permanent MVP feature freeze of the **MESA Legal Data** repository.
 
-All static verification (Ruff, Mypy, pip-audit) is 100% green. The full 203-test suite passes with zero failures.
-
-TLS diagnosis established that `www.resmigazete.gov.tr` (hosted under `*.tccb.gov.tr`) omits its intermediate CA certificate (`GeoTrust TLS RSA CA G1`) during TLS handshakes. The issue was resolved securely without disabling TLS verification by fetching the official CA certificate from DigiCert's authority information URL (`http://cacerts.geotrust.com/GeoTrustTLSRSACAG1.crt`) and configuring `url_fetcher.py` to use Python's `ssl.create_default_context(cafile=...)`.
-
-A genuine, un-mocked real-world pilot against **Resmî Gazete** was executed end-to-end in an isolated temporary data root and staging database, successfully discovering, fetching, parsing, approving, building, verifying, publishing, importing, proving idempotency, and rolling back.
+All static verification (Ruff, Mypy, pip-audit) is 100% green. The full 204-test suite passes with zero failures.
 
 ---
 
-## 2. TLS Diagnosis & Resolution
+## 2. TLS Hygiene & Trust Architecture
 
-- **Target:** `https://www.resmigazete.gov.tr/eskiler/2026/08/20260801.htm`
-- **Root Cause:** Server misconfiguration at `www.resmigazete.gov.tr:443`. The server sends only its leaf certificate (`CN=*.tccb.gov.tr`) during TLS handshake, omitting the intermediate CA certificate (`CN=GeoTrust TLS RSA CA G1`). Standard Linux root CA bundles (which contain `DigiCert Global Root G2`) fail verification with `unable to get local issuer certificate` because the intermediate link in the chain is absent.
-- **Resolution:** Obtained the official `GeoTrust TLS RSA CA G1` intermediate certificate directly from DigiCert's CA repository, combined it into a trusted CA bundle, and updated `src/mesa_legal_data/sources/url_fetcher.py` to configure `ssl.create_default_context(cafile=...)`.
-- **Security Audit:** Zero `verify=False` or insecure TLS bypasses exist anywhere in `src/`. Full TLS certificate validation and hostname verification remain strictly enforced.
+- **Previous Risk:** The diagnostic pilot relied on an ephemeral `/tmp/combined_ca.pem` file.
+- **Final Implementation:** Completely removed any dependency on `/tmp/combined_ca.pem`. The intermediate CA certificate (`GeoTrust TLS RSA CA G1`) is packaged directly inside the application distribution at `src/mesa_legal_data/certs/geotrust_tls_rsa_ca_g1.pem` and included in package builds via `pyproject.toml` (`[tool.setuptools.package-data]`).
+- **Certificate Identity & Fingerprint:**
+  - **Subject:** `C = US, O = DigiCert Inc, OU = www.digicert.com, CN = GeoTrust TLS RSA CA G1`
+  - **Issuer:** `C = US, O = DigiCert Inc, OU = www.digicert.com, CN = DigiCert Global Root G2`
+  - **SHA-256 Fingerprint:** `c06e307f7cfc1d32fa72a4c033c87b90019af216f0775d64978a2eca6c8a230e`
+- **Trust Preservation:** Default system/OS CA trust is preserved intact via `ssl.create_default_context()`. The packaged intermediate CA is loaded additively (`ctx.load_verify_locations(cafile=...)`) after verifying its SHA-256 fingerprint in code, failing closed on any mismatch or corruption.
+- **HTTPS Smoke Verification:** Real un-mocked HTTPS GET to `https://www.resmigazete.gov.tr/eskiler/2026/08/20260801.htm` and `https://www.resmigazete.gov.tr/eskiler/2026/08/20260801.pdf` (42.2 MB binary PDF) returned `HTTP/1.1 200 OK` with full cryptographic TLS certificate and hostname validation without any `/tmp` files or temporary environment variables.
 
 ---
 
 ## 3. Real Resmî Gazete Pilot Evidence
-
-The pilot was executed via `scripts/run_resmi_gazete_pilot.py` without any HTTP mocks or fake responses:
 
 ```text
 === Starting Real Bounded Resmî Gazete Pilot in /tmp/tmp5fhb6clh/data ===
@@ -58,11 +56,12 @@ The pilot was executed via `scripts/run_resmi_gazete_pilot.py` without any HTTP 
 
 ## 4. Verification Evidence
 
-- **Ruff Format Check:** `uv run ruff format --check .` (Passed, 169 files formatted)
+- **Ruff Format Check:** `uv run ruff format --check .` (Passed, 168 files formatted)
 - **Ruff Lint Check:** `uv run ruff check .` (Passed, 0 errors)
 - **Mypy Type Check:** `uv run mypy src` (Passed, 0 errors in 65 files)
-- **Pytest Test Suite:** `uv run pytest -q` (Passed, 203 passed)
+- **Pytest Test Suite:** `uv run pytest -q` (Passed, 204 passed)
 - **Pip Security Audit:** `uv run pip-audit` (Passed, 0 vulnerabilities)
+- **Packaging Build Test:** `uv build` (Passed, `mesa_legal_data/certs/geotrust_tls_rsa_ca_g1.pem` verified inside `.whl`)
 
 ---
 

@@ -35,6 +35,9 @@ mesa-legal-data = "mesa_legal_data.cli:app"
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.package-data]
+"mesa_legal_data" = ["certs/*.pem"]
+
 [dependency-groups]
 dev = [
     "mypy>=2.3.0",
