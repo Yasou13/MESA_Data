@@ -32,6 +32,7 @@ def test_manifest_queue_collect_pipeline_retry_recovery_e2e(tmp_path: Path, monk
     (sandbox_data / "tmp").mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(sandbox_data))
+    monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "dev@mesa.gov.tr")
 
     # Initialize core catalog db and harvest db
     catalog_db = get_catalog_db_path()

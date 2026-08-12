@@ -7,9 +7,10 @@ on:
     branches: [ main, master ]
 
 jobs:
-  test:
+  static-checks:
+    name: Static & Security Gate
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -17,6 +18,7 @@ jobs:
         uses: astral-sh/setup-uv@v2
         with:
           version: "latest"
+          enable-cache: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,8 +37,54 @@ jobs:
       - name: Type Check (Mypy)
         run: uv run mypy src
 
-      - name: Test Suite (Pytest)
-        run: uv run pytest -q
-
       - name: Security Audit (Pip-audit)
         run: uv run pip-audit
+
+  test-fast:
+    name: Fast Deterministic Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run Fast Unit & Integration Tests
+        run: uv run pytest -m "not scale" -ra --durations=20
+
+  test-scale:
+    name: Scale & Hardening Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run Scale & Benchmark Tests
+        run: uv run pytest -m "scale" -ra --durations=20
+

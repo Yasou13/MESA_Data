@@ -28,7 +28,8 @@ MESA Staging DB (Atomik, Idempotent Import & Provenance)
 
 ## Veri Dizin Yapısı (Workspace)
 
-Sistem tüm verilerini `MESA_DATA_DATA_ROOT` ortam değişkeninin gösterdiği dizinde saklar (Varsayılan: `~/.mesa-data/data` veya `config/settings.yaml` konumu).
+Sistem tüm verilerini `MESA_DATA_DATA_ROOT` ortam değişkeninin gösterdiği dizinde saklar (Öncelik: Yapılandırılan `MESA_DATA_DATA_ROOT` → Varsayılan: `/storage/mesa-legal-data/data` → İzin hatasında yedek: `~/.mesa-data/data`).
+
 
 ```text
 $DATA_ROOT/

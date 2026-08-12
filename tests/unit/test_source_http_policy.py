@@ -1,5 +1,3 @@
-import time
-
 import pytest
 import respx
 
@@ -40,12 +38,23 @@ def test_request_budget_exceeded():
 
 
 def test_enforce_min_interval():
+    from mesa_legal_data.sources import request_control
+
     state = SourceRequestState(concurrency_limit=1)
-    start = time.monotonic()
-    enforce_min_interval(state, min_interval_seconds=0.1)
-    enforce_min_interval(state, min_interval_seconds=0.1)
-    elapsed = time.monotonic() - start
-    assert elapsed >= 0.08
+    start = request_control.time_func()
+    enforce_min_interval(state, min_interval_seconds=5.0)
+    enforce_min_interval(state, min_interval_seconds=5.0)
+    elapsed = request_control.time_func() - start
+    assert elapsed >= 4.99
+
+
+def test_request_control_isolation_between_tests():
+    from mesa_legal_data.sources import request_control
+
+    st = request_control.get_source_request_state("mevzuat")
+    assert st.last_request_started_monotonic is None
+    bg = request_control.get_run_budget("mevzuat", max_requests=10)
+    assert bg.used_requests == 0
 
 
 @respx.mock

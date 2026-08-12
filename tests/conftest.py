@@ -1,7 +1,10 @@
 import ipaddress
 import socket
+import time
 
 import pytest
+
+from mesa_legal_data.sources import request_control
 
 KNOWN_TEST_HOSTS = {
     "mevzuat.gov.tr": ["1.1.1.1"],
@@ -17,6 +20,32 @@ KNOWN_TEST_HOSTS = {
     "10.0.0.1": ["10.0.0.1"],
     "169.254.169.254": ["169.254.169.254"],
 }
+
+
+@pytest.fixture(autouse=True)
+def reset_request_control_state(monkeypatch):
+    """
+    Autouse fixture that resets process-global request control state between tests
+    and injects a fast virtual clock/sleeper to eliminate real wall-clock delays in mocked tests.
+    """
+    request_control.reset_source_states()
+    request_control.reset_run_budget()
+
+    virtual_clock = [time.monotonic()]
+
+    def fake_monotonic() -> float:
+        return virtual_clock[0]
+
+    def fake_sleep(seconds: float) -> None:
+        if seconds > 0:
+            virtual_clock[0] += seconds
+
+    monkeypatch.setattr(request_control, "time_func", fake_monotonic)
+    monkeypatch.setattr(request_control, "sleep_func", fake_sleep)
+
+    yield
+    request_control.reset_source_states()
+    request_control.reset_run_budget()
 
 
 @pytest.fixture(autouse=True)

@@ -37,12 +37,23 @@ _SOURCE_STATES: dict[str, SourceRequestState] = {}
 _RUN_BUDGETS: dict[str, RequestBudget] = {}
 _REGISTRY_LOCK = threading.Lock()
 
+time_func = time.monotonic
+sleep_func = time.sleep
+
 
 def get_source_request_state(source_id: str, concurrency: int = 1) -> SourceRequestState:
     with _REGISTRY_LOCK:
         if source_id not in _SOURCE_STATES or _SOURCE_STATES[source_id].concurrency_limit != concurrency:
             _SOURCE_STATES[source_id] = SourceRequestState(concurrency_limit=max(1, concurrency))
         return _SOURCE_STATES[source_id]
+
+
+def reset_source_states(source_id: str | None = None) -> None:
+    with _REGISTRY_LOCK:
+        if source_id:
+            _SOURCE_STATES.pop(source_id, None)
+        else:
+            _SOURCE_STATES.clear()
 
 
 def get_run_budget(source_id: str, max_requests: int) -> RequestBudget:
@@ -64,10 +75,10 @@ def enforce_min_interval(state: SourceRequestState, min_interval_seconds: float)
     if min_interval_seconds <= 0:
         return
     with state.lock:
-        now = time.monotonic()
+        now = time_func()
         if state.last_request_started_monotonic is not None:
             elapsed = now - state.last_request_started_monotonic
             if elapsed < min_interval_seconds:
                 sleep_needed = min_interval_seconds - elapsed
-                time.sleep(sleep_needed)
-        state.last_request_started_monotonic = time.monotonic()
+                sleep_func(sleep_needed)
+        state.last_request_started_monotonic = time_func()

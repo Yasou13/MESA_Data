@@ -71,12 +71,19 @@ Key P0 correctness implementations completed:
 
 ---
 
-## 4. Verification Evidence
+## 4. Verification Evidence & CI Performance
 
-- **Ruff Format Check:** `uv run ruff format --check .` (Passed, 169 files formatted)
+- **Ruff Format Check:** `uv run ruff format --check .` (Passed, 0 errors)
 - **Ruff Lint Check:** `uv run ruff check .` (Passed, 0 errors)
 - **Mypy Type Check:** `uv run mypy src` (Passed, 0 errors in 65 source files)
-- **Pytest Test Suite:** `uv run pytest -q` (Passed, 211 passed)
+- **Pytest Test Suite:**
+  - **Fast Deterministic Suite:** `uv run pytest -m "not scale" -ra --durations=20` (Passed, 206 passed in 10.16s)
+  - **Scale & Benchmark Suite:** `uv run pytest -m "scale" -ra --durations=20` (Passed, 4 passed in 57.06s)
+  - **Total:** 210 passed in 67.73s (1m07s wall clock)
+- **CI Acceleration & Topology:**
+  - Accidental real-time rate limit waits removed from mocked HTTP tests via `request_control` testable clock/sleeper abstraction and autouse fixture state resets.
+  - GitHub Actions topology split into parallel jobs: `static-checks` (timeout 10 min), `test-fast` (timeout 10 min), `test-scale` (timeout 15 min).
+  - Dependency caching enabled via `astral-sh/setup-uv@v2` (`enable-cache: true`).
 - **Pip Security Audit:** `uv run pip-audit` (Passed, 0 vulnerabilities)
 
 ---
@@ -86,3 +93,4 @@ Key P0 correctness implementations completed:
 - **MVP Decision:** **GO**
 - **Freeze Ready:** **YES**
 - **Feature Freeze Status:** Permanently active for v0.1.0 MVP release.
+

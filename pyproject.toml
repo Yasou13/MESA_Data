@@ -54,3 +54,9 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["BLE001", "B008", "DTZ007", "E501", "W293", "W291"]
+
+[tool.pytest.ini_options]
+markers = [
+    "scale: Large-scale or heavy benchmark tests processing thousands of records",
+]
+

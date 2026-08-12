@@ -1,6 +1,8 @@
 import builtins
 import hashlib
 
+import pytest
+
 from mesa_legal_data.catalog import (
     approve_version_streaming,
     get_connection,
@@ -13,7 +15,9 @@ from mesa_legal_data.catalog import (
 from mesa_legal_data.pipeline import process_artifact_pipeline
 
 
+@pytest.mark.scale
 def test_bulk_review_streaming_scale_and_single_pass(tmp_path, monkeypatch):
+
     monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
     db_path = get_db_path()
     migrate(None, db_path)

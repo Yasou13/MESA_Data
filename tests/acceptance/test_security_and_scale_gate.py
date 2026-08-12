@@ -19,6 +19,7 @@ from mesa_legal_data.sources.manual import import_manual_url
 from mesa_legal_data.sources.url_fetcher import SourcePolicyError, SSRFError
 
 
+@pytest.mark.scale
 @respx.mock
 def test_master_security_and_scale_acceptance_gate(tmp_path, monkeypatch):
     """

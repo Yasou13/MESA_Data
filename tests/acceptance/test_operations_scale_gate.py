@@ -1,6 +1,8 @@
 import hashlib
 import json
 
+import pytest
+
 from mesa_legal_data.catalog import (
     approve_version_streaming,
     get_connection,
@@ -12,7 +14,9 @@ from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.release.builder import build_release
 
 
+@pytest.mark.scale
 def test_operations_scale_gate(tmp_path, monkeypatch):
+
     monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
     db_path = get_db_path()
     migrate(None, db_path)

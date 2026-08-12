@@ -25,6 +25,7 @@ from mesa_legal_data.sources.url_fetcher import (
 )
 
 
+@pytest.mark.scale
 @respx.mock
 def test_final_hardening_acceptance_gate(tmp_path, monkeypatch):
     """
