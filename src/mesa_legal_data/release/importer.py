@@ -339,6 +339,7 @@ def rollback_release(target_release_id: str) -> dict[str, Any]:
 def get_record_provenance(record_id: str) -> dict[str, Any]:
     """
     Returns full provenance chain for a given record.
+    Verifies actual membership in the active release via staging_records.
     """
     cat_conn = get_catalog_connection()
     cursor = cat_conn.cursor()
@@ -355,6 +356,10 @@ def get_record_provenance(record_id: str) -> dict[str, Any]:
         (record_id,),
     )
     row = cursor.fetchone()
+    cat_conn.close()
+
+    if not row:
+        return {}
 
     stg_conn = get_staging_connection()
     init_staging_db(stg_conn)
@@ -362,14 +367,21 @@ def get_record_provenance(record_id: str) -> dict[str, Any]:
     stg_cur.execute("SELECT release_id FROM active_release WHERE singleton_id = 1")
     active_row = stg_cur.fetchone()
     active_release_id = active_row[0] if active_row else None
-    stg_conn.close()
-    cat_conn.close()
 
-    if not row:
-        return {}
+    # Verify actual membership: record must be in staging_records for the active release
+    in_active_release = False
+    if active_release_id:
+        stg_cur.execute(
+            "SELECT 1 FROM staging_records WHERE release_id = ? AND record_id = ? LIMIT 1",
+            (active_release_id, record_id),
+        )
+        in_active_release = stg_cur.fetchone() is not None
+
+    stg_conn.close()
 
     return {
         "active_release_id": active_release_id,
+        "in_active_release": in_active_release,
         "record_id": row[0],
         "version_id": row[1],
         "canonical_path": row[2],

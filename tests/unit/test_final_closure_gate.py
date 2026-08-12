@@ -563,3 +563,268 @@ def test_tls_hygiene_and_cert_packaging():
     assert ctx.verify_mode == ssl.CERT_REQUIRED
     assert ctx.check_hostname is True
     assert not os.path.exists("/tmp/combined_ca.pem")
+
+
+# 22. Human approval updates privacy_status='flagged' -> 'approved' for release eligibility
+def test_flagged_privacy_human_approval_resolves_eligibility(tmp_path, monkeypatch):
+    from mesa_legal_data.catalog import (
+        approve_version_streaming,
+        get_connection,
+        insert_artifact,
+        iter_records_for_release,
+        migrate,
+        upsert_document,
+    )
+
+    db_path = tmp_path / "catalog.sqlite"
+    migrate(None, db_path)
+    conn = get_connection(db_path)
+
+    now = datetime.now(UTC).isoformat()
+    upsert_document(conn, "doc1", "legislation", "law", "TR", "Test", "key1", "pending")
+    insert_artifact(
+        conn,
+        "art1",
+        "doc1",
+        "resmi_gazete",
+        "https://example.com/1",
+        now,
+        "http",
+        200,
+        "text/html",
+        "text/html",
+        100,
+        "hash1",
+        "raw/1.html",
+        None,
+        None,
+        "success",
+        None,
+        "{}",
+    )
+
+    conn.execute(
+        """
+        INSERT INTO versions (
+            version_id, document_id, artifact_id, version_kind, snapshot_date,
+            canonical_path, canonical_line, canonical_sha256, parser_name, parser_version,
+            schema_version, validation_status, privacy_status, approval_status, created_at
+        ) VALUES ('ver-flagged', 'doc1', 'art1', 'consolidated_snapshot', '2026-08-11',
+                  'canonical/test.jsonl', 1, 'hash1', 'parser', '1.0',
+                  '1.0.0', 'valid', 'flagged', 'pending', ?)
+        """,
+        (now,),
+    )
+    conn.execute(
+        """
+        INSERT INTO records (
+            record_id, version_id, record_type, canonical_path, canonical_line,
+            record_sha256, validation_status, approval_status, created_at
+        ) VALUES ('rec-flagged', 'ver-flagged', 'legislation', 'canonical/test.jsonl', 1,
+                  'hash1', 'valid', 'pending', ?)
+        """,
+        (now,),
+    )
+    conn.commit()
+
+    # Before approval: record must NOT be in release selection
+    refs_before = list(iter_records_for_release(conn))
+    assert len(refs_before) == 0
+
+    # Mock canonical file check in approve_version_streaming
+    c_file = tmp_path / "canonical" / "test.jsonl"
+    c_file.parent.mkdir(parents=True, exist_ok=True)
+    c_file.write_text('{"id":"rec-flagged"}\n', encoding="utf-8")
+    import hashlib
+
+    real_hash = hashlib.sha256('{"id":"rec-flagged"}\n'.encode("utf-8")).hexdigest()
+    conn.execute("UPDATE versions SET canonical_sha256 = ? WHERE version_id = 'ver-flagged'", (real_hash,))
+    conn.execute("UPDATE records SET record_sha256 = ? WHERE record_id = 'rec-flagged'", (real_hash,))
+    conn.commit()
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+
+    res = approve_version_streaming(conn, version_id="ver-flagged", reviewer="admin@mesa.org")
+    assert res["status"] == "approved"
+
+    # After human approval: version privacy_status is now 'approved' and record IS release eligible
+    cur = conn.cursor()
+    cur.execute("SELECT privacy_status, approval_status FROM versions WHERE version_id = 'ver-flagged'")
+    row = cur.fetchone()
+    assert row[0] == "approved"
+    assert row[1] == "approved"
+
+    refs_after = list(iter_records_for_release(conn))
+    assert len(refs_after) == 1
+    assert refs_after[0].record_id == "rec-flagged"
+    conn.close()
+
+
+# 23. Zero-record release build fails with ReleaseBuildError
+def test_empty_release_build_fails(tmp_path, monkeypatch):
+    from mesa_legal_data.catalog import migrate
+    from mesa_legal_data.release.builder import ReleaseBuildError, build_release
+
+    db_path = tmp_path / "catalog.sqlite"
+    migrate(None, db_path)
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+
+    with pytest.raises(ReleaseBuildError) as exc_info:
+        build_release("rel-empty-test")
+    assert "no eligible records found" in str(exc_info.value)
+
+
+# 24. Centralized publish_release function enforces verification and lifecycle state
+def test_centralized_publish_release_safety(tmp_path, monkeypatch):
+    from mesa_legal_data.catalog import create_release, get_connection, migrate
+    from mesa_legal_data.release.builder import ReleasePublishError, publish_release
+
+    db_path = tmp_path / "catalog.sqlite"
+    migrate(None, db_path)
+    conn = get_connection(db_path)
+
+    # 1. Unknown release fails
+    with pytest.raises(ReleasePublishError) as exc:
+        publish_release("rel-unknown")
+    assert "not found" in str(exc.value)
+
+    # 2. Release not in 'verified' status fails
+    create_release(
+        conn=conn,
+        release_id="rel-preparing",
+        release_path="releases/rel-preparing",
+        status="preparing",
+        schema_version="1.0.0",
+        counts_json="{}",
+        source_snapshot_json="[]",
+    )
+    conn.close()
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+
+    with pytest.raises(ReleasePublishError) as exc:
+        publish_release("rel-preparing")
+    assert "must be 'verified'" in str(exc.value)
+
+
+# 25. Provenance only claims membership if record is present in active release
+def test_provenance_actual_membership(tmp_path, monkeypatch):
+    from mesa_legal_data.catalog import (
+        get_connection,
+        insert_artifact,
+        migrate,
+        upsert_document,
+        upsert_source,
+    )
+    from mesa_legal_data.release.importer import (
+        get_record_provenance,
+        get_staging_connection,
+        init_staging_db,
+    )
+
+    db_c = tmp_path / "catalog.sqlite"
+    migrate(None, db_c)
+    conn = get_connection(db_c)
+    now = datetime.now(UTC).isoformat()
+    upsert_source(conn, "s1", "S1", "Auth", "https://example.com")
+    upsert_document(conn, "doc1", "legislation", "law", "TR", "Test", "key1", "pending")
+    insert_artifact(
+        conn,
+        "art1",
+        "doc1",
+        "s1",
+        "https://example.com/1",
+        now,
+        "http",
+        200,
+        "text/html",
+        "text/html",
+        100,
+        "hash1",
+        "raw/1.html",
+        None,
+        None,
+        "success",
+        None,
+        "{}",
+    )
+
+    conn.execute(
+        """
+        INSERT INTO versions (version_id, document_id, artifact_id, version_kind, snapshot_date, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at)
+        VALUES ('ver1', 'doc1', 'art1', 'snapshot', '2026-08-11', 'c/1', 1, 'h1', 'p', '1', '1.0.0', 'valid', 'clean', 'approved', ?)
+        """,
+        (now,),
+    )
+    conn.execute(
+        """
+        INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+        VALUES ('rec1', 'ver1', 'legislation', 'c/1', 1, 'h1', 'valid', 'approved', ?)
+        """,
+        (now,),
+    )
+    conn.commit()
+    conn.close()
+
+    db_stg = tmp_path / "staging.sqlite"
+    stg_conn = get_staging_connection(db_stg)
+    init_staging_db(stg_conn)
+    stg_conn.execute("INSERT INTO imported_releases VALUES ('rel-A', 'hashA', ?, 'imported')", (now,))
+    stg_conn.execute("INSERT INTO active_release VALUES (1, 'rel-A', ?)", (now,))
+    stg_conn.close()
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MESA_DATA_MESA_STAGING_DB", str(db_stg))
+
+    # Provenance for record NOT in staging_records should report in_active_release = False
+    prov = get_record_provenance("rec1")
+    assert prov["record_id"] == "rec1"
+    assert prov["active_release_id"] == "rel-A"
+    assert prov["in_active_release"] is False
+
+    # Once added to staging_records for rel-A, in_active_release becomes True
+    stg_conn = get_staging_connection(db_stg)
+    stg_conn.execute("INSERT INTO staging_records VALUES ('rel-A', 'rec1', 'legislation', 'h1', '{}')")
+    stg_conn.close()
+
+    prov2 = get_record_provenance("rec1")
+    assert prov2["in_active_release"] is True
+
+
+# 26. Operator contact enforcement and User-Agent injection
+def test_operator_contact_enforcement_and_user_agent(monkeypatch):
+    import respx
+
+    from mesa_legal_data.sources.request_control import reset_run_budget
+    from mesa_legal_data.sources.url_fetcher import SourcePolicyError, fetch_url_stream
+
+    reset_run_budget()
+    url = "https://www.resmigazete.gov.tr/eskiler/2026/08/20260801.htm"
+
+    # 1. Missing contact in production rejects automated source fetch
+    monkeypatch.setenv("MESA_DATA_ENVIRONMENT", "production")
+    monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "")
+    with pytest.raises(SourcePolicyError) as exc:
+        fetch_url_stream(url=url, source_id="resmi_gazete", document_family="legislation")
+    assert "OPERATOR_CONTACT_INVALID" in str(exc.value)
+
+    # 2. Placeholder contact in production rejects automated source fetch
+    monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "operator@example.com")
+    with pytest.raises(SourcePolicyError) as exc2:
+        fetch_url_stream(url=url, source_id="resmi_gazete", document_family="legislation")
+    assert "OPERATOR_CONTACT_INVALID" in str(exc2.value)
+
+    # 3. Valid contact appears in User-Agent header of actual outgoing request
+    monkeypatch.setenv("MESA_DATA_ENVIRONMENT", "development")
+    monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "valid-contact@mesalaw.org")
+
+    with respx.mock:
+        route = respx.get(url).respond(
+            status_code=200, headers={"Content-Type": "text/html"}, content=b"<html>OK</html>"
+        )
+        fetch_url_stream(url=url, source_id="resmi_gazete", document_family="legislation")
+        assert route.called
+        req = route.calls.last.request
+        ua = req.headers.get("User-Agent", "")
+        assert "valid-contact@mesalaw.org" in ua

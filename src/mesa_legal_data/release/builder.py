@@ -124,6 +124,16 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
 
         spool_conn.commit()
 
+        # 2b. Guard: empty releases are not allowed
+        count_cur = spool_conn.cursor()
+        count_cur.execute("SELECT COUNT(*) FROM selected_records")
+        total_selected = count_cur.fetchone()[0]
+        if total_selected == 0:
+            raise ReleaseBuildError(
+                "Cannot build release: no eligible records found. "
+                "Ensure records are approved, validated, and privacy-cleared before building a release."
+            )
+
         # 3. O(n) Single Sequential Pass over Canonical Part Files
         # Group selected records by canonical_path ordered by canonical_line
         path_cur = spool_conn.cursor()
@@ -400,3 +410,44 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
         raise ReleaseBuildError(f"Failed to build release {release_id}: {e}") from e
     finally:
         conn.close()
+
+
+class ReleasePublishError(Exception):
+    pass
+
+
+def publish_release(release_id: str) -> dict[str, Any]:
+    """
+    The ONE authoritative domain function for publishing a release.
+    Enforces: status must be 'verified', re-verifies cryptographic integrity,
+    then atomically transitions to 'published'. Both CLI and web API must use this.
+    """
+    from mesa_legal_data.catalog import get_release, mark_release_status
+    from mesa_legal_data.release.verifier import verify_release
+
+    validate_release_id(release_id)
+
+    conn = get_connection()
+    try:
+        rel = get_release(conn, release_id)
+        if not rel:
+            raise ReleasePublishError(f"Release '{release_id}' not found in catalog")
+
+        if rel["status"] != "verified":
+            raise ReleasePublishError(
+                f"Cannot publish release '{release_id}': status is '{rel['status']}', must be 'verified'"
+            )
+    finally:
+        conn.close()
+
+    # Re-verify cryptographic integrity before publishing
+    verify_release(release_id)
+
+    now_iso = datetime.now(UTC).isoformat()
+    conn = get_connection()
+    try:
+        mark_release_status(conn, release_id, "published", published_at=now_iso)
+    finally:
+        conn.close()
+
+    return {"release_id": release_id, "status": "published", "published_at": now_iso}

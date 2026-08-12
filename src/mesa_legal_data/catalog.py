@@ -1037,7 +1037,7 @@ def approve_version_streaming(
                 )
 
             conn.execute(
-                "UPDATE versions SET approval_status = 'approved' WHERE version_id = ?",
+                "UPDATE versions SET approval_status = 'approved', privacy_status = CASE WHEN privacy_status = 'flagged' THEN 'approved' ELSE privacy_status END WHERE version_id = ?",
                 (version_id,),
             )
             conn.execute(

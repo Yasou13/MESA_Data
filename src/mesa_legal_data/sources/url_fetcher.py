@@ -128,6 +128,7 @@ class ValidatedSourcePolicy:
     max_download_bytes: int
     user_agent: str
     min_interval_seconds: float
+    access_mode: str = "manual"
 
 
 def normalize_media_type(value: str | None) -> str | None:
@@ -316,6 +317,7 @@ def get_source_input_policy(
         max_download_bytes=int(source_info.http.max_download_bytes),
         user_agent=str(source_info.http.user_agent),
         min_interval_seconds=float(source_info.http.min_interval_seconds),
+        access_mode=str(getattr(source_info, "access_mode", "manual")),
     )
 
 
@@ -427,23 +429,35 @@ def fetch_url_stream(
         min(policy.timeout_seconds, timeout_seconds) if timeout_seconds is not None else policy.timeout_seconds
     )
     settings = load_settings()
-    contact = settings.operator_contact
+    contact = ""
+    try:
+        raw_c = getattr(settings, "operator_contact", "")
+        if raw_c:
+            contact = str(raw_c).strip()
+    except Exception:
+        contact = ""
+
+    placeholder_contacts = {
+        "test@example.com",
+        "example.com",
+        "operator@example.com",
+        "placeholder",
+        "admin@example.com",
+        "foo@bar.com",
+    }
+
+    if policy.access_mode != "manual":
+        if settings.environment == "production":
+            if not contact or contact.lower() in placeholder_contacts:
+                raise SourcePolicyError(
+                    f"OPERATOR_CONTACT_INVALID: Valid operator contact is required in production (got '{contact}')"
+                )
+        elif contact and contact.lower() in placeholder_contacts:
+            raise SourcePolicyError(f"OPERATOR_CONTACT_INVALID: Placeholder contact '{contact}' is not allowed")
+
     eff_ua = policy.user_agent
-    if contact:
-        placeholder_contacts = {
-            "test@example.com",
-            "example.com",
-            "operator@example.com",
-            "placeholder",
-            "admin@example.com",
-            "foo@bar.com",
-        }
-        if settings.environment == "production" and contact.lower() in placeholder_contacts:
-            raise SourcePolicyError(
-                f"OPERATOR_CONTACT_INVALID: Placeholder contact '{contact}' is not allowed in production"
-            )
-        if contact not in eff_ua:
-            eff_ua = f"{eff_ua} (+{contact})"
+    if contact and contact not in eff_ua:
+        eff_ua = f"{eff_ua} (+{contact})"
 
     retries = policy.retries
 

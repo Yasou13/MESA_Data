@@ -1,5 +1,4 @@
 import os
-from datetime import UTC
 from pathlib import Path
 
 import typer
@@ -401,28 +400,19 @@ def release_publish(
     release_id: str = typer.Option(..., "--release-id", help="Release ID to publish"),
 ):
     """Publishes a verified release package."""
-    from datetime import datetime
-
-    from mesa_legal_data.catalog import get_connection
+    from mesa_legal_data.release import publish_release
     from mesa_legal_data.release.security import validate_release_id
 
     validate_release_id(release_id)
-    conn = get_connection()
     try:
-        now = datetime.now(UTC).isoformat()
-        conn.execute(
-            "UPDATE releases SET status = 'published', published_at = ? WHERE release_id = ?",
-            (now, release_id),
-        )
+        result = publish_release(release_id)
         typer.secho(
-            f"Release {release_id} successfully PUBLISHED at {now}.",
+            f"Release {release_id} successfully PUBLISHED at {result['published_at']}.",
             fg=typer.colors.GREEN,
         )
     except Exception as e:
         typer.secho(f"Error publishing release: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-    finally:
-        conn.close()
 
 
 @release_app.command("revoke")

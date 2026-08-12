@@ -1,7 +1,6 @@
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -982,30 +981,21 @@ def verify_release_endpoint(release_id: str):
 @router.post("/releases/{release_id}/publish")
 async def publish_release_endpoint(release_id: str):
     async with write_lock.acquire_write():
-        conn = get_connection()
         try:
-            c = conn.cursor()
-            c.execute("SELECT status FROM releases WHERE release_id = ?", (release_id,))
-            row = c.fetchone()
-            if not row:
-                error_response("RELEASE_NOT_FOUND", f"Release {release_id} not found", status_code=404)
-            if row[0] != "verified":
-                error_response(
-                    "INVALID_STATE", f"Cannot publish release in status '{row[0]}', must be 'verified'", status_code=409
-                )
+            from mesa_legal_data.release import ReleasePublishError, publish_release
 
-            verify_release(release_id)
-            now_iso = datetime.now(UTC).isoformat()
-            conn.execute(
-                "UPDATE releases SET status = 'published', published_at = ? WHERE release_id = ?", (now_iso, release_id)
-            )
-            return ok_response({"release_id": release_id, "status": "published"})
+            result = publish_release(release_id)
+            return ok_response(result)
+        except ReleasePublishError as e:
+            msg = str(e)
+            if "not found" in msg.lower():
+                error_response("RELEASE_NOT_FOUND", msg, status_code=404)
+            else:
+                error_response("INVALID_STATE", msg, status_code=409)
         except Exception as e:
             if isinstance(e, HTTPException):
                 raise e
             error_response("RELEASE_PUBLISH_FAILED", str(e), status_code=400)
-        finally:
-            conn.close()
 
 
 @router.post("/releases/{release_id:path}/import")
