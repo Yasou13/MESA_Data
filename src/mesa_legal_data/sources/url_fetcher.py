@@ -447,13 +447,14 @@ def fetch_url_stream(
     }
 
     if policy.access_mode != "manual":
-        if settings.environment == "production":
-            if not contact or contact.lower() in placeholder_contacts:
-                raise SourcePolicyError(
-                    f"OPERATOR_CONTACT_INVALID: Valid operator contact is required in production (got '{contact}')"
-                )
-        elif contact and contact.lower() in placeholder_contacts:
-            raise SourcePolicyError(f"OPERATOR_CONTACT_INVALID: Placeholder contact '{contact}' is not allowed")
+        if not contact:
+            raise SourcePolicyError(
+                "OPERATOR_CONTACT_MISSING: Valid operator_contact must be configured in settings before automated web fetches"
+            )
+        if contact.lower() in placeholder_contacts:
+            raise SourcePolicyError(
+                f"OPERATOR_CONTACT_INVALID: Placeholder contact '{contact}' is not allowed for automated web fetches"
+            )
 
     eff_ua = policy.user_agent
     if contact and contact not in eff_ua:

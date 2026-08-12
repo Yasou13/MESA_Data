@@ -46,7 +46,7 @@ def run_pilot():
         # Set environment variables for isolation
         os.environ["MESA_DATA_DATA_ROOT"] = str(data_root)
         os.environ["MESA_DATA_MESA_STAGING_DB"] = str(staging_db)
-        os.environ["MESA_DATA_OPERATOR_CONTACT"] = "operator@mesalaw.org"
+        os.environ["MESA_DATA_OPERATOR_CONTACT"] = "contact@mesalaw.org"
         os.environ["MESA_DATA_ENVIRONMENT"] = "development"
 
         print(f"=== Starting Real Bounded Resmî Gazete Pilot in {data_root} ===")
@@ -153,7 +153,7 @@ def run_pilot():
         assert row is not None
         version_id = row[0]
 
-        app_res = approve_version_with_checks(cat_conn, version_id=version_id, reviewer="operator@mesalaw.org")
+        app_res = approve_version_with_checks(cat_conn, version_id=version_id, reviewer="contact@mesalaw.org")
         cat_conn.close()
         print(f"✓ Version approval result: {app_res}")
         assert app_res["approved_records"] > 0, "Approved records count must be > 0"

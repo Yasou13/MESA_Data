@@ -802,20 +802,30 @@ def test_operator_contact_enforcement_and_user_agent(monkeypatch):
     reset_run_budget()
     url = "https://www.resmigazete.gov.tr/eskiler/2026/08/20260801.htm"
 
-    # 1. Missing contact in production rejects automated source fetch
-    monkeypatch.setenv("MESA_DATA_ENVIRONMENT", "production")
+    # 1. Missing contact rejects automated source fetch regardless of environment
+    monkeypatch.setenv("MESA_DATA_ENVIRONMENT", "development")
     monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "")
     with pytest.raises(SourcePolicyError) as exc:
         fetch_url_stream(url=url, source_id="resmi_gazete", document_family="legislation")
-    assert "OPERATOR_CONTACT_INVALID" in str(exc.value)
+    assert "OPERATOR_CONTACT_MISSING" in str(exc.value)
 
-    # 2. Placeholder contact in production rejects automated source fetch
+    # 2. Placeholder contact rejects automated source fetch regardless of environment
     monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "operator@example.com")
     with pytest.raises(SourcePolicyError) as exc2:
         fetch_url_stream(url=url, source_id="resmi_gazete", document_family="legislation")
     assert "OPERATOR_CONTACT_INVALID" in str(exc2.value)
 
-    # 3. Valid contact appears in User-Agent header of actual outgoing request
+    # 3. Manual source with missing contact is allowed
+    monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "")
+    manual_url = "https://www.mevzuat.gov.tr/law.pdf"
+    with respx.mock:
+        route_m = respx.get(manual_url).respond(
+            status_code=200, headers={"Content-Type": "application/pdf"}, content=b"%PDF-1.4\nTest"
+        )
+        fetch_url_stream(url=manual_url, source_id="mevzuat", document_family="legislation")
+        assert route_m.called
+
+    # 4. Valid contact appears in User-Agent header of actual outgoing request
     monkeypatch.setenv("MESA_DATA_ENVIRONMENT", "development")
     monkeypatch.setenv("MESA_DATA_OPERATOR_CONTACT", "valid-contact@mesalaw.org")
 
