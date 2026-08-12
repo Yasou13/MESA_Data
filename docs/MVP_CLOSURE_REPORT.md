@@ -1,7 +1,7 @@
 # MESA Legal Data — Final MVP Closure Report
 
 **Date:** 2026-08-12  
-**Git Revision:** `53953054634e500d223265a889b8386846b905fc`  
+**Git Revision:** `9bc7e7edfc2a6ec317d740eb76b71b8e19c9e836`  
 **Environment:** Ubuntu 22.04.5 LTS (Python 3.13.12, `uv` managed)  
 **Canonical Version:** `0.1.0`  
 **MVP Decision:** **GO**  
