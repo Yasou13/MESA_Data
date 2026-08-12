@@ -576,6 +576,8 @@ def test_flagged_privacy_human_approval_resolves_eligibility(tmp_path, monkeypat
         upsert_document,
     )
 
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+
     db_path = tmp_path / "catalog.sqlite"
     migrate(None, db_path)
     conn = get_connection(db_path)
@@ -642,8 +644,6 @@ def test_flagged_privacy_human_approval_resolves_eligibility(tmp_path, monkeypat
     conn.execute("UPDATE records SET record_sha256 = ? WHERE record_id = 'rec-flagged'", (real_hash,))
     conn.commit()
 
-    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
-
     res = approve_version_streaming(conn, version_id="ver-flagged", reviewer="admin@mesa.org")
     assert res["status"] == "approved"
 
@@ -665,10 +665,10 @@ def test_empty_release_build_fails(tmp_path, monkeypatch):
     from mesa_legal_data.catalog import migrate
     from mesa_legal_data.release.builder import ReleaseBuildError, build_release
 
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+
     db_path = tmp_path / "catalog.sqlite"
     migrate(None, db_path)
-
-    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
 
     with pytest.raises(ReleaseBuildError) as exc_info:
         build_release("rel-empty-test")
@@ -679,6 +679,8 @@ def test_empty_release_build_fails(tmp_path, monkeypatch):
 def test_centralized_publish_release_safety(tmp_path, monkeypatch):
     from mesa_legal_data.catalog import create_release, get_connection, migrate
     from mesa_legal_data.release.builder import ReleasePublishError, publish_release
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
 
     db_path = tmp_path / "catalog.sqlite"
     migrate(None, db_path)
@@ -701,8 +703,6 @@ def test_centralized_publish_release_safety(tmp_path, monkeypatch):
     )
     conn.close()
 
-    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
-
     with pytest.raises(ReleasePublishError) as exc:
         publish_release("rel-preparing")
     assert "must be 'verified'" in str(exc.value)
@@ -722,6 +722,10 @@ def test_provenance_actual_membership(tmp_path, monkeypatch):
         get_staging_connection,
         init_staging_db,
     )
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    db_stg = tmp_path / "staging.sqlite"
+    monkeypatch.setenv("MESA_DATA_MESA_STAGING_DB", str(db_stg))
 
     db_c = tmp_path / "catalog.sqlite"
     migrate(None, db_c)
@@ -767,15 +771,11 @@ def test_provenance_actual_membership(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
 
-    db_stg = tmp_path / "staging.sqlite"
     stg_conn = get_staging_connection(db_stg)
     init_staging_db(stg_conn)
     stg_conn.execute("INSERT INTO imported_releases VALUES ('rel-A', 'hashA', ?, 'imported')", (now,))
     stg_conn.execute("INSERT INTO active_release VALUES (1, 'rel-A', ?)", (now,))
     stg_conn.close()
-
-    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("MESA_DATA_MESA_STAGING_DB", str(db_stg))
 
     # Provenance for record NOT in staging_records should report in_active_release = False
     prov = get_record_provenance("rec1")
