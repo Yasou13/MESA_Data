@@ -25,10 +25,11 @@ def run_seed_collection(
 ) -> list[FetchedArtifact]:
     """
     Collects seed legislation. If local_fixtures_dir is provided, imports from local files;
-    otherwise imports via URL.
+    otherwise imports via URL. Continues on individual item failures and reports them.
     """
     items = load_seed_config(config_path)
     collected = []
+    skipped: list[tuple[str, str, str]] = []  # (number, title, reason)
 
     for item in items:
         doc_id = item["document_id"]
@@ -61,10 +62,19 @@ def run_seed_collection(
                 )
             collected.append(artifact)
         except Exception as e:
-            # Skip if artifact already exists or sha256 UNIQUE constraint
             err_msg = str(e).lower()
+            # Skip if artifact already exists or sha256 UNIQUE constraint
             if "already exists" in err_msg or "unique constraint" in err_msg:
+                skipped.append((number, title, "already exists"))
                 continue
-            raise
+            # Log failure but continue with remaining items
+            skipped.append((number, title, str(e)))
+            continue
+
+    if skipped:
+        import sys
+        for number, title, reason in skipped:
+            short_reason = reason if "already exists" in reason else reason[:120]
+            print(f"  ⚠ Skipped {number} ({title}): {short_reason}", file=sys.stderr)
 
     return collected

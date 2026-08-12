@@ -9,24 +9,58 @@ class SizeLimitError(Exception):
     pass
 
 
+def _sniff_html(data: bytes) -> bool:
+    """Check if raw bytes look like HTML content (puremagic often misses HTML)."""
+    prefix = data[:512].lstrip().lower()
+    return (
+        prefix.startswith(b"<!doctype html")
+        or prefix.startswith(b"<html")
+        or b"<head" in prefix
+        or b"<body" in prefix
+    )
+
+
 def detect_mime_type(filepath: str | bytes | bytearray) -> str:
     """
     Detects the MIME type of a file based on magic numbers.
-    Defaults to text/plain or unknown if it cannot be determined.
+    Falls back to HTML sniffing when puremagic cannot determine the type,
+    since puremagic lacks reliable HTML detection (no magic bytes).
     """
+    raw_bytes: bytes | None = None
+
     try:
         if isinstance(filepath, (bytes, bytearray)):
             results = puremagic.magic_string(filepath)
+            raw_bytes = bytes(filepath)
         else:
             results = puremagic.magic_file(str(filepath))
 
         if results:
-            # Sort by confidence and get the most likely
-            # The puremagic returns list of Magic objects
             best_match = max(results, key=lambda match: match.confidence)
-            return best_match.mime_type
+            detected = best_match.mime_type
+
+            # puremagic sometimes returns text/plain for HTML files — double-check
+            if detected == "text/plain":
+                if raw_bytes is None:
+                    with open(filepath, "rb") as f:
+                        raw_bytes = f.read(512)
+                if _sniff_html(raw_bytes):
+                    return "text/html"
+
+            return detected
     except puremagic.PureError:
         pass
+
+    # puremagic couldn't detect anything — try HTML sniffing as last resort
+    if raw_bytes is None:
+        if isinstance(filepath, (bytes, bytearray)):
+            raw_bytes = bytes(filepath)
+        else:
+            with open(filepath, "rb") as f:
+                raw_bytes = f.read(512)
+
+    if _sniff_html(raw_bytes):
+        return "text/html"
 
     return "application/octet-stream"
 
