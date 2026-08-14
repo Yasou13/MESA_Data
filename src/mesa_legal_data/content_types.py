@@ -13,10 +13,7 @@ def _sniff_html(data: bytes) -> bool:
     """Check if raw bytes look like HTML content (puremagic often misses HTML)."""
     prefix = data[:512].lstrip().lower()
     return (
-        prefix.startswith(b"<!doctype html")
-        or prefix.startswith(b"<html")
-        or b"<head" in prefix
-        or b"<body" in prefix
+        prefix.startswith(b"<!doctype html") or prefix.startswith(b"<html") or b"<head" in prefix or b"<body" in prefix
     )
 
 
@@ -42,8 +39,11 @@ def detect_mime_type(filepath: str | bytes | bytearray) -> str:
             # puremagic sometimes returns text/plain for HTML files — double-check
             if detected == "text/plain":
                 if raw_bytes is None:
-                    with open(filepath, "rb") as f:
-                        raw_bytes = f.read(512)
+                    if isinstance(filepath, (bytes, bytearray)):
+                        raw_bytes = bytes(filepath)
+                    else:
+                        with open(filepath, "rb") as f:
+                            raw_bytes = f.read(512)
                 if _sniff_html(raw_bytes):
                     return "text/html"
 

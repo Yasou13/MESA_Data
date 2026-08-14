@@ -73,6 +73,7 @@ def run_seed_collection(
 
     if skipped:
         import sys
+
         for number, title, reason in skipped:
             short_reason = reason if "already exists" in reason else reason[:120]
             print(f"  ⚠ Skipped {number} ({title}): {short_reason}", file=sys.stderr)
