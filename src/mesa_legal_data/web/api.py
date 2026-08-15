@@ -894,6 +894,14 @@ def get_document_text_content(document_id: str):
     )
 
 
+SOURCE_FAMILY_MAP = {
+    "resmi_gazete": "legislation",
+    "mevzuat": "legislation",
+    "aym": "decision",
+    "yargitay": "decision",
+}
+
+
 @router.get("/documents/{document_id:path}")
 def get_document_detail(document_id: str):
     conn = get_connection()
@@ -929,6 +937,7 @@ def get_document_detail(document_id: str):
 
     conn.close()
     doc_data["artifacts"] = artifacts
+    doc_data["source_id"] = artifacts[0]["source_id"] if artifacts else "unknown"
     doc_data["open_issues"] = issues
     return ok_response(doc_data)
 
@@ -961,11 +970,16 @@ async def upload_artifact(
                         error_response("FILE_TOO_LARGE", f"File exceeds limit of {max_bytes} bytes", status_code=413)
                     buffer.write(chunk)
 
+            # Map correct family based on source capability if client passed default
+            effective_family = SOURCE_FAMILY_MAP.get(source_id, family)
+            if family != "legislation" and family in ("legislation", "decision"):
+                effective_family = family
+
             art = import_manual_file(
                 source_id=source_id,
                 file_path=temp_path,
                 document_id=document_id,
-                family=family,
+                family=effective_family,
                 document_type=document_type,
                 jurisdiction=jurisdiction,
                 title=title,
@@ -983,11 +997,15 @@ async def upload_artifact(
 @router.post("/documents/import-url")
 def import_from_url(req: UrlImportRequest):
     try:
+        effective_family = SOURCE_FAMILY_MAP.get(req.source_id, req.family)
+        if req.family != "legislation" and req.family in ("legislation", "decision"):
+            effective_family = req.family
+
         art = import_manual_url(
             source_id=req.source_id,
             url=req.url,
             document_id=req.document_id,
-            family=req.family,
+            family=effective_family,
             document_type=req.document_type,
             jurisdiction=req.jurisdiction,
             title=req.title,
@@ -1235,8 +1253,17 @@ def list_issues(
                    COALESCE(
                        (SELECT d.title FROM documents d WHERE d.document_id = v.subject_id),
                        (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id WHERE ver.version_id = v.subject_id),
-                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id)
-                   ) AS document_title
+                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id),
+                       (SELECT d.title FROM documents d JOIN artifacts a ON a.document_id = d.document_id WHERE a.artifact_id = v.subject_id)
+                   ) AS document_title,
+                   COALESCE(
+                       (CASE WHEN v.subject_type = 'document' THEN v.subject_id ELSE NULL END),
+                       (SELECT ver.document_id FROM versions ver WHERE ver.version_id = v.subject_id),
+                       (SELECT ver.document_id FROM versions ver JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id),
+                       (SELECT a.document_id FROM artifacts a WHERE a.artifact_id = v.subject_id)
+                   ) AS document_id,
+                   (SELECT a.source_id FROM artifacts a WHERE a.artifact_id = v.subject_id) AS source_id,
+                   (SELECT a.raw_path FROM artifacts a WHERE a.artifact_id = v.subject_id) AS raw_path
             FROM validation_issues v {where_sql} ORDER BY v.opened_at DESC""",
         params,
     )
@@ -1251,6 +1278,9 @@ def list_issues(
             "status": r[6],
             "opened_at": r[7],
             "document_title": r[8],
+            "document_id": r[9],
+            "source_id": r[10],
+            "raw_path": r[11],
         }
         for r in c.fetchall()
     ]
@@ -1259,15 +1289,27 @@ def list_issues(
 
 
 @router.post("/issues/{issue_id:path}/resolve")
-async def resolve_issue_endpoint(issue_id: str, req: Optional[IssueResolveRequest] = None):
+async def resolve_issue_endpoint(issue_id: str, request: Request, req: Optional[IssueResolveRequest] = None):
+    actor = extract_actor(request) if request else "web-user"
     async with write_lock.acquire_write():
         conn = get_connection()
         try:
             status = req.status if req else "resolved"
-            resolved_by = req.resolved_by if req and req.resolved_by else "web-user"
-            note = req.resolution_note if req else None
+            resolved_by = req.resolved_by if req and req.resolved_by else actor
+            note = req.resolution_note if req and req.resolution_note else "Manuel inceleme ile çözüldü kabul edildi."
             resolve_issue(conn, issue_id=issue_id, status=status, resolved_by=resolved_by, resolution_note=note)
-            return ok_response({"issue_id": issue_id, "status": status})
+            log_audit_event(
+                conn,
+                actor=resolved_by,
+                action="issue_resolved",
+                subject_type="issue",
+                subject_id=issue_id,
+                reason=note,
+                details_json=json.dumps({"status": status, "resolution_note": note}),
+            )
+            return ok_response(
+                {"issue_id": issue_id, "status": status, "resolved_by": resolved_by, "resolution_note": note}
+            )
         finally:
             conn.close()
 

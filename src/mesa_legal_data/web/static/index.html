@@ -783,6 +783,30 @@
     </div>
   </div>
 
+  <!-- Modal: Resolve Issue (Manual Override) -->
+  <div id="modal-resolve-issue" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="resolve-modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="resolve-modal-title">Manuel Olarak Çözüldü Kabul Et</h3>
+        <button class="btn-close" data-close="modal-resolve-issue" aria-label="Kapat">×</button>
+      </div>
+      <div id="resolve-modal-body" class="modal-body" style="padding: 16px 0;">
+        <div id="resolve-modal-warning" class="alert alert-warning" style="margin-bottom: 14px; font-size: 13px; line-height: 1.5;">
+          Bu işlem sorunu otomatik olarak düzeltmez. Kaydı inceleyen uzman tarafından manuel olarak çözüldü kabul eder.
+        </div>
+        <div class="form-group">
+          <label for="txt-resolve-note">Çözüm / Onay Gerekçesi <span style="color: var(--color-danger);">*</span></label>
+          <input type="text" id="txt-resolve-note" placeholder="Ör: Resmî kaynakta incelendi, içerik doğrulandı." required style="width: 100%;">
+          <span class="form-help">İşlem denetim günlüğüne kaydedilecektir.</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-confirm-resolve-issue" class="btn btn-warning">Manuel Çözüldü Olarak Onayla</button>
+        <button class="btn btn-secondary" data-close="modal-resolve-issue">İptal</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/theme.js"></script>
   <script src="/static/ui.js"></script>
   <script src="/static/app.js"></script>

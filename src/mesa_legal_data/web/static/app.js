@@ -29,6 +29,33 @@ const VIEW_DESCRIPTIONS = {
   system: "Sistem durumunu ve veritabanı bütünlüğünü denetleyin.",
 };
 
+const SOURCE_CAPABILITIES = {
+  resmi_gazete: {
+    family: "legislation",
+    docTypes: [
+      { id: "law", label: "Kanun" },
+      { id: "presidential_decree", label: "Cumhurbaşkanlığı Kararnamesi" },
+      { id: "presidential_decision", label: "Cumhurbaşkanı Kararı" },
+      { id: "regulation", label: "Yönetmelik" },
+      { id: "communique", label: "Tebliğ" },
+    ],
+  },
+  mevzuat: {
+    family: "legislation",
+    docTypes: [
+      { id: "law", label: "Kanun" },
+      { id: "regulation", label: "Yönetmelik" },
+      { id: "communique", label: "Tebliğ" },
+    ],
+  },
+  aym: {
+    family: "decision",
+    docTypes: [
+      { id: "decision", label: "Yargı Kararı (Bireysel Başvuru / Norm Denetimi)" },
+    ],
+  },
+};
+
 // --- Terminology & Presentation Helpers ---
 function humanTerm(term) {
   if (!term) return "";
@@ -79,6 +106,7 @@ function humanTerm(term) {
     document: "Belge",
     version: "Belge Sürümü",
     source: "Kaynak",
+    artifact: "Kaynak Dosya",
   };
   return map[term] || term;
 }
@@ -101,10 +129,14 @@ function humanSeverityBadge(severity) {
 }
 
 function humanIssueMessage(code, message) {
-  if (message && !message.startsWith("Validation error in") && !message.startsWith("Cannot approve") && !message.includes("Open blocker issues")) {
-    return message;
-  }
   const codeMap = {
+    TRANSPORT_VERIFICATION_FAILED: "Dosya bütünlüğü veya aktarım doğrulaması başarısız oldu. Dosya boyutu veya biçimi beklenenden farklı.",
+    PARSING_FAILED: "Belge metni okunamadı. Dosyanın içeriği ayrıştırılamadı; dosya formatını kontrol edin veya yeniden işlemeyi deneyin.",
+    SCHEMA_VALIDATION_FAILED: "Belge veri şemasına uymuyor. Hukuki veri alanları veya yapısı standartlara uygun değil.",
+    PRIVACY_TCKN_DETECTED: "T.C. Kimlik Numarası (TCKN) tespit edildi. Belgede korunması gereken kişisel veri bulundu.",
+    PRIVACY_IBAN_DETECTED: "Banka hesap numarası (IBAN) tespit edildi. Belgede kişisel finansal bilgi bulundu.",
+    PRIVACY_PHONE_DETECTED: "Telefon numarası tespit edildi. Belgede kişisel iletişim bilgisi bulundu.",
+    PRIVACY_EMAIL_DETECTED: "E-posta adresi tespit edildi. Belgede kişisel iletişim bilgisi bulundu.",
     VALIDATION_DATE_MISSING: "Belgedeki tarih bilgisi okunamadı veya eksik.",
     VALIDATION_TITLE_MISSING: "Belge başlığı tespit edilemedi.",
     VALIDATION_SCHEMA_INVALID: "Belge yapısı veya şema doğrulaması başarısız.",
@@ -112,9 +144,29 @@ function humanIssueMessage(code, message) {
     CANONICAL_LINE_MISSING: "Kanonik veri dosyasında ilgili kayıt satırı bulunamadı.",
     DUPLICATE_ITEM: "Aynı içerikli mükerrer kayıt tespit edildi.",
     PARSER_ERROR: "Belge içeriği ayrıştırılırken hata oluştu.",
-    BLOCKING_ISSUES_EXIST: "Çözülmesi gereken doğrulama sorunları bulunuyor.",
+    BLOCKING_ISSUES_EXIST: "Çözülmesi gereken kritik doğrulama sorunları bulunuyor.",
+    SOURCE_FAMILY_NOT_ALLOWED: "Seçilen kaynak ile belge türü ailesi uyuşmuyor.",
+    SOURCE_DISABLED: "Seçilen kaynak şu anda sistemde devre dışı bırakılmış.",
+    SOURCE_NOT_FOUND: "Belirtilen kaynak sistemde tanımlı değil.",
+    SOURCE_REQUIRED: "Kaynak belirtilmesi zorunludur.",
+    SOURCE_FAMILY_REQUIRED: "Belge ailesi belirtilmesi zorunludur.",
+    USER_AGENT_INVALID: "Kaynak erişim ayarlarında geçersiz kullanıcı aracısı tespit edildi.",
+    WRITE_LOCK_CONFLICT: "Başka bir yazma işlemi devam ediyor. Lütfen birkaç saniye sonra tekrar deneyin.",
+    RATE_LIMIT_EXCEEDED: "İstek sınırı aşıldı. Lütfen bir süre bekleyin.",
+    RECORD_APPROVE_BLOCKED: "Kayıt üzerinde açık kritik sorunlar bulunduğu için onaylanamaz.",
+    VERSION_APPROVE_BLOCKED: "Belge sürümü üzerinde açık kritik sorunlar bulunduğu için onaylanamaz.",
+    INVALID_DOCUMENT_TYPES: "En az bir geçerli belge türü seçilmelidir.",
+    INVALID_START_DATE: "Geçersiz başlangıç tarihi seçimi.",
+    HARVEST_ALREADY_RUNNING: "Veri toplama işlemi zaten devam ediyor.",
   };
-  return codeMap[code] || message || "Doğrulama sorunu tespit edildi.";
+
+  if (code && codeMap[code]) {
+    return codeMap[code];
+  }
+  if (message && !message.startsWith("Validation error in") && !message.startsWith("Cannot approve") && !message.includes("Open blocker issues") && !message.includes("failed:") && !message.includes("expected") && !message.includes("detected") && !message.includes("not allowed")) {
+    return message;
+  }
+  return "Belgenin işlenmesi sırasında bir sorun oluştu.";
 }
 
 function escapeHtml(str) {
@@ -497,6 +549,8 @@ async function loadHomeView() {
 async function loadCollectView() {
   setBusy(true);
   try {
+    updateDocTypesForSource("file-source", "file-doc-type");
+    updateDocTypesForSource("url-source", "url-doc-type");
     await updateHarvestCardState();
   } catch (err) {
     console.error("Collect view error:", err);
@@ -599,6 +653,11 @@ async function startHarvestAction() {
     if (chk && chk.checked) docTypes.push(chk.value);
   });
 
+  if (docTypes.length === 0) {
+    showToast("En az bir belge türü seçmelisiniz.", "warning");
+    return;
+  }
+
   setBusy(true);
   try {
     await apiRequest("/api/harvest/start", {
@@ -607,7 +666,7 @@ async function startHarvestAction() {
       body: JSON.stringify({
         source_id: "resmi_gazete",
         start_date: startDate || null,
-        document_types: docTypes.length ? docTypes : null,
+        document_types: docTypes,
       }),
     });
     showToast("Veri toplama işlemi başlatıldı.", "success");
@@ -682,11 +741,13 @@ async function loadLibraryView() {
 
     items.forEach((doc) => {
       const tr = document.createElement("tr");
+      const docStatus = doc.lifecycle_status || doc.status || "fetched";
+      const sourceId = doc.source_id || "resmi_gazete";
       tr.innerHTML = `
         <td><strong>${escapeHtml(doc.title || doc.document_id)}</strong></td>
         <td>${humanTerm(doc.document_type)}</td>
-        <td>${humanTerm(doc.source_id || "resmi_gazete")}</td>
-        <td>${statusBadge(doc.status)}</td>
+        <td>${humanTerm(sourceId)}</td>
+        <td>${statusBadge(docStatus)}</td>
         <td>${friendlyDate(doc.updated_at)}</td>
         <td>
           <button class="btn btn-sm btn-secondary" onclick="viewDocDetail('${escapeHtml(doc.document_id)}')">Detay</button>
@@ -709,29 +770,54 @@ async function loadLibraryView() {
 async function viewDocDetail(documentId) {
   setBusy(true);
   try {
-    const doc = await apiRequest(`/api/documents/${encodeURIComponent(documentId)}`);
+    const [doc, textRes] = await Promise.all([
+      apiRequest(`/api/documents/${encodeURIComponent(documentId)}`),
+      apiRequest(`/api/documents/${encodeURIComponent(documentId)}/text`).catch(() => ({ content: null })),
+    ]);
     state.currentDocId = documentId;
+
+    const sourceId = doc.source_id || (doc.artifacts && doc.artifacts[0]?.source_id) || "resmi_gazete";
+    const docStatus = doc.lifecycle_status || doc.status || "fetched";
+    const textContent = (textRes && textRes.content && textRes.content !== "Metin içeriği bulunamadı.")
+      ? textRes.content
+      : (doc.text_preview || doc.raw_text || (textRes && textRes.content) || "Metin içeriği henüz işlenmedi.");
+
+    let openIssuesHtml = "";
+    if (doc.open_issues && doc.open_issues.length > 0) {
+      openIssuesHtml = `
+        <div class="alert alert-warning" style="margin-top: 10px; font-size: 13px;">
+          <strong>Açık Sorunlar (${doc.open_issues.length}):</strong>
+          <ul style="margin: 4px 0 0 16px; padding: 0;">
+            ${doc.open_issues.map((i) => `<li>${humanSeverityBadge(i.severity)} ${escapeHtml(humanIssueMessage(i.code, i.message))}</li>`).join("")}
+          </ul>
+        </div>
+      `;
+    }
 
     const modalBody = document.getElementById("doc-modal-body");
     modalBody.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
         <div>
           <h4>${escapeHtml(doc.title || doc.document_id)}</h4>
-          <span style="font-size: 13px; color: var(--color-text-secondary);">${humanTerm(doc.source_id)} · ${humanTerm(doc.document_type)}</span>
+          <span style="font-size: 13px; color: var(--color-text-secondary);">${humanTerm(sourceId)} · ${humanTerm(doc.document_type)}</span>
         </div>
-        ${statusBadge(doc.status)}
+        ${statusBadge(docStatus)}
       </div>
 
+      ${openIssuesHtml}
+
       <div style="margin-top: 10px;">
-        <label style="font-size: 12px; font-weight: 700; color: var(--color-text-muted);">Metin Önizleme</label>
-        <pre class="code-box" style="margin-top: 4px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">${escapeHtml(doc.text_preview || doc.raw_text || "Metin önizlemesi bulunamadı.")}</pre>
+        <label style="font-size: 12px; font-weight: 700; color: var(--color-text-muted);">Belge Metni</label>
+        <pre class="code-box" style="margin-top: 4px; max-height: 280px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">${escapeHtml(textContent)}</pre>
       </div>
 
       <details class="technical-details">
         <summary>Teknik ayrıntılar</summary>
         <div class="technical-details-content">
-          <div><strong>Belge Kimliği (Document ID):</strong> <code class="mono">${escapeHtml(doc.document_id)}</code></div>
-          <div><strong>Artifact ID:</strong> <code class="mono">${escapeHtml(doc.artifact_id || "-")}</code></div>
+          <div><strong>Belge Kimliği:</strong> <code class="mono">${escapeHtml(doc.document_id)}</code></div>
+          <div><strong>Aile:</strong> ${escapeHtml(doc.family || "-")}</div>
+          <div><strong>Artifact ID:</strong> <code class="mono">${escapeHtml(doc.artifacts?.[0]?.artifact_id || "-")}</code></div>
+          <div><strong>SHA256:</strong> <code class="mono">${escapeHtml(doc.artifacts?.[0]?.sha256 || "-")}</code></div>
           <div><strong>Kayıt Sayısı:</strong> ${doc.record_count || 0}</div>
         </div>
       </details>
@@ -827,19 +913,28 @@ async function loadReviewView() {
 
       items.forEach((iss) => {
         const tr = document.createElement("tr");
-        const docTitle = iss.document_title || iss.subject_id || "Belirtilmemiş";
+        let docTitle = iss.document_title;
+        if (!docTitle) {
+          if (iss.subject_type === "artifact" || iss.subject_id?.startsWith("sha256:")) {
+            const srcLabel = iss.source_id ? ` (${humanTerm(iss.source_id)})` : "";
+            docTitle = `İşlenemeyen kaynak dosya${srcLabel}`;
+          } else {
+            docTitle = `İşlenemeyen veri kaydı`;
+          }
+        }
         const issueMsg = humanIssueMessage(iss.code, iss.message);
         const statusLabel = iss.status === "resolved" ? "Çözüldü" : "Çözüm bekliyor";
         const statusBadgeHtml = iss.status === "resolved" ? `<span class="badge badge-success">${statusLabel}</span>` : `<span class="badge badge-warning">${statusLabel}</span>`;
 
         let actionHtml = "";
+        if (iss.document_id) {
+          actionHtml += `<button type="button" class="btn btn-sm btn-secondary" onclick="viewDocDetail('${escapeHtml(iss.document_id)}')">Belgeyi Gör</button> `;
+        }
         if (iss.subject_type === "record" || iss.subject_id?.startsWith("rec-")) {
           actionHtml += `<button type="button" class="btn btn-sm btn-secondary" onclick="openRecordReviewModal('${escapeHtml(iss.subject_id)}')">Kaydı İncele</button> `;
-        } else if (iss.subject_type === "document" || iss.subject_id?.startsWith("tr:")) {
-          actionHtml += `<button type="button" class="btn btn-sm btn-secondary" onclick="viewDocDetail('${escapeHtml(iss.subject_id)}')">Belgeyi Gör</button> `;
         }
         if (iss.status === "open") {
-          actionHtml += `<button type="button" class="btn btn-sm btn-outline" onclick="resolveIssueAction('${escapeHtml(iss.issue_id)}')">Çözüldü İşaretle</button>`;
+          actionHtml += `<button type="button" class="btn btn-sm btn-outline" onclick="openResolveIssueModal('${escapeHtml(iss.issue_id)}', '${escapeHtml(iss.severity || '')}', '${escapeHtml(iss.code || '')}')">Manuel Çözüldü Kabul Et</button>`;
         }
 
         tr.innerHTML = `
@@ -853,6 +948,7 @@ async function loadReviewView() {
               <summary style="font-size: 11px;">Teknik ayrıntılar</summary>
               <div class="technical-details-content" style="font-size: 11px; padding: 4px 8px;">
                 <code>${escapeHtml(iss.code || "-")}</code> · ID: <code class="mono">${escapeHtml(iss.issue_id)}</code>
+                ${iss.subject_id ? ` · Konu: <code class="mono">${escapeHtml(iss.subject_id)}</code>` : ""}
               </div>
             </details>
           </td>
@@ -877,7 +973,44 @@ function showRecordIssues(recordId) {
   switchView("review");
 }
 
-async function resolveIssueAction(issueId) {
+let pendingResolveIssueState = null;
+
+function openResolveIssueModal(issueId, severity, code) {
+  pendingResolveIssueState = { issueId, severity, code };
+  const warningEl = document.getElementById("resolve-modal-warning");
+  const noteInput = document.getElementById("txt-resolve-note");
+  if (noteInput) noteInput.value = "";
+
+  const isBlockerOrPrivacy = (severity === "blocker" || severity === "critical" || String(code).startsWith("PRIVACY_"));
+  if (warningEl) {
+    if (isBlockerOrPrivacy) {
+      warningEl.className = "alert alert-danger";
+      warningEl.innerHTML = `
+        <strong>DİKKAT (Kritik / Kişisel Veri Doğrulama Uyarısı):</strong><br>
+        Bu sorun <strong>${escapeHtml(humanTerm(severity) || "Kritik")}</strong> seviyesindedir. Manuel onay vermek, ilgili kaydın doğrulama engelini kaldırarak yayına girmesine izin verir. Lütfen geçerli bir gerekçe belirtin.
+      `;
+    } else {
+      warningEl.className = "alert alert-warning";
+      warningEl.innerHTML = `
+        Bu işlem sorunu otomatik olarak düzeltmez. Kaydı inceleyen uzman tarafından manuel olarak çözüldü kabul eder.
+      `;
+    }
+  }
+
+  showModal("modal-resolve-issue");
+}
+
+async function confirmResolveIssueAction() {
+  if (!pendingResolveIssueState) return;
+  const noteInput = document.getElementById("txt-resolve-note");
+  const note = noteInput ? noteInput.value.trim() : "";
+  if (!note) {
+    showToast("Lütfen çözüldü kabul etme gerekçesini belirtiniz.", "warning");
+    if (noteInput) noteInput.focus();
+    return;
+  }
+
+  const { issueId } = pendingResolveIssueState;
   setBusy(true);
   try {
     await apiRequest(`/api/issues/${encodeURIComponent(issueId)}/resolve`, {
@@ -886,10 +1019,12 @@ async function resolveIssueAction(issueId) {
       body: JSON.stringify({
         status: "resolved",
         resolved_by: sessionStorage.getItem("mesa_actor") || "web-user",
-        resolution_note: "Kullanıcı arayüzünden manuel çözüldü olarak işaretlendi.",
+        resolution_note: note,
       }),
     });
-    showToast("Sorun başarıyla çözüldü olarak işaretlendi.", "success");
+    closeModal("modal-resolve-issue");
+    showToast("Sorun manuel olarak çözüldü kabul edildi.", "success");
+    pendingResolveIssueState = null;
     await loadReviewView();
   } catch (err) {
     console.error("Resolve issue error:", err);
@@ -1487,6 +1622,50 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnCollectStop) btnCollectStop.addEventListener("click", stopHarvestAction);
 
   // 10. Manual Ingestion Tabs & Forms
+  function updateDocTypesForSource(sourceSelectId, typeSelectId) {
+    const sourceSelect = document.getElementById(sourceSelectId);
+    const typeSelect = document.getElementById(typeSelectId);
+    if (!sourceSelect || !typeSelect) return;
+
+    const selectedSource = sourceSelect.value;
+    const currentVal = typeSelect.value;
+    const cap = SOURCE_CAPABILITIES[selectedSource];
+
+    typeSelect.innerHTML = `<option value="" disabled selected>— Belge türünü seçin —</option>`;
+    if (cap && cap.docTypes) {
+      let currentStillValid = false;
+      cap.docTypes.forEach((dt) => {
+        const opt = document.createElement("option");
+        opt.value = dt.id;
+        opt.textContent = dt.label;
+        if (dt.id === currentVal) {
+          opt.selected = true;
+          currentStillValid = true;
+        }
+        typeSelect.appendChild(opt);
+      });
+
+      if (currentVal && !currentStillValid) {
+        typeSelect.value = "";
+        showToast("Kaynak değiştirildi. Bu kaynak için belge türünü yeniden seçin.", "info");
+      }
+    }
+  }
+
+  const fileSourceEl = document.getElementById("file-source");
+  if (fileSourceEl) {
+    fileSourceEl.addEventListener("change", () => {
+      updateDocTypesForSource("file-source", "file-doc-type");
+    });
+  }
+
+  const urlSourceEl = document.getElementById("url-source");
+  if (urlSourceEl) {
+    urlSourceEl.addEventListener("change", () => {
+      updateDocTypesForSource("url-source", "url-doc-type");
+    });
+  }
+
   document.querySelectorAll("#manual-ingestion-box .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#manual-ingestion-box .tab-btn").forEach((b) => b.classList.remove("active"));
@@ -1496,9 +1675,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (tabId === "tab-manual-file") {
         document.getElementById("form-upload-file").classList.remove("hidden");
         document.getElementById("form-upload-url").classList.add("hidden");
+        updateDocTypesForSource("file-source", "file-doc-type");
       } else {
         document.getElementById("form-upload-file").classList.add("hidden");
         document.getElementById("form-upload-url").classList.remove("hidden");
+        updateDocTypesForSource("url-source", "url-doc-type");
       }
     });
   });
@@ -1526,18 +1707,29 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      const sourceCap = SOURCE_CAPABILITIES[sourceId] || { family: "legislation" };
+      const family = sourceCap.family || "legislation";
+
       const title = document.getElementById("file-title").value.trim();
       const docNum = document.getElementById("file-doc-number")?.value.trim();
       const customDocId = document.getElementById("file-doc-id")?.value.trim();
 
-      const documentId = customDocId || `tr:legislation:${docType}:${docNum || Date.now()}`;
+      let documentId = customDocId;
+      if (!documentId) {
+        if (family === "decision") {
+          const safeNum = (docNum || String(Date.now())).replace(/[\/\s]/g, "-");
+          documentId = `tr:case-law:${sourceId}:${docType}:${safeNum}`;
+        } else {
+          documentId = `tr:legislation:${docType}:${docNum || Date.now()}`;
+        }
+      }
 
       const formData = new FormData();
       formData.append("file", fileInput.files[0]);
       formData.append("source_id", sourceId);
       formData.append("document_id", documentId);
       formData.append("document_type", docType);
-      formData.append("family", "legislation");
+      formData.append("family", family);
       formData.append("jurisdiction", "TR");
       if (title) formData.append("title", title);
 
@@ -1556,6 +1748,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         showToast("Belge yüklendi ve işlendi. Kütüphane’de görüntüleyebilirsiniz.", "success");
         formUploadFile.reset();
+        updateDocTypesForSource("file-source", "file-doc-type");
       } catch (err) {
         console.error("Upload file error:", err);
       } finally {
@@ -1581,12 +1774,23 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      const sourceCap = SOURCE_CAPABILITIES[sourceId] || { family: "legislation" };
+      const family = sourceCap.family || "legislation";
+
       const url = document.getElementById("url-input").value.trim();
       const title = document.getElementById("url-title").value.trim();
       const docNum = document.getElementById("url-doc-number")?.value.trim();
       const customDocId = document.getElementById("url-doc-id")?.value.trim();
 
-      const documentId = customDocId || `tr:legislation:${docType}:${docNum || Date.now()}`;
+      let documentId = customDocId;
+      if (!documentId) {
+        if (family === "decision") {
+          const safeNum = (docNum || String(Date.now())).replace(/[\/\s]/g, "-");
+          documentId = `tr:case-law:${sourceId}:${docType}:${safeNum}`;
+        } else {
+          documentId = `tr:legislation:${docType}:${docNum || Date.now()}`;
+        }
+      }
 
       setBusy(true);
       try {
@@ -1598,7 +1802,7 @@ document.addEventListener("DOMContentLoaded", () => {
             url: url,
             document_id: documentId,
             document_type: docType,
-            family: "legislation",
+            family: family,
             jurisdiction: "TR",
             title: title || null,
           }),
@@ -1606,12 +1810,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
         showToast("Belge başarıyla indirildi ve işlendi.", "success");
         formUploadUrl.reset();
+        updateDocTypesForSource("url-source", "url-doc-type");
       } catch (err) {
         console.error("Import URL error:", err);
       } finally {
         setBusy(false);
       }
     });
+  }
+
+  const btnConfirmResolve = document.getElementById("btn-confirm-resolve-issue");
+  if (btnConfirmResolve) {
+    btnConfirmResolve.addEventListener("click", confirmResolveIssueAction);
   }
 
   // 11. Library Filters & Pagination
@@ -1732,6 +1942,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // 17. Initial API Status Check
+  // 17. Initial setup & API Status Check
+  updateDocTypesForSource("file-source", "file-doc-type");
+  updateDocTypesForSource("url-source", "url-doc-type");
   refreshApiStatus();
 });
