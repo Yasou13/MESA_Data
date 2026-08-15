@@ -244,9 +244,7 @@ def get_harvest_status_endpoint():
     cursor_data = get_discovery_cursor("resmi_gazete", db_path=db_path) or {}
     mode = cursor_data.get("mode")
     cursor_date_str = (
-        cursor_data.get("last_successful_date")
-        or cursor_data.get("backfill_next_date")
-        or cursor_data.get("next_date")
+        cursor_data.get("last_successful_date") or cursor_data.get("backfill_next_date") or cursor_data.get("next_date")
     )
 
     # Date coverage calculation

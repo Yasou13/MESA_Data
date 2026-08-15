@@ -41,7 +41,9 @@ def test_harvest_start_validation_and_duplicate_guard(client):
     assert future_res.json()["error"]["code"] == "INVALID_START_DATE"
 
     # 3. Invalid document types rejection
-    bad_types_res = client.post("/api/harvest/start", json={"source_id": "resmi_gazete", "document_types": ["invalid_type"]})
+    bad_types_res = client.post(
+        "/api/harvest/start", json={"source_id": "resmi_gazete", "document_types": ["invalid_type"]}
+    )
     assert bad_types_res.status_code == 400
     assert bad_types_res.json()["error"]["code"] == "INVALID_DOCUMENT_TYPES"
 
@@ -301,10 +303,7 @@ def test_frontend_api_contract_guard():
     from mesa_legal_data.web.api import router
 
     registered_routes = {
-        (route.path, method)
-        for route in router.routes
-        if hasattr(route, "methods")
-        for method in route.methods
+        (route.path, method) for route in router.routes if hasattr(route, "methods") for method in route.methods
     }
 
     critical_frontend_routes = [
@@ -329,5 +328,3 @@ def test_frontend_api_contract_guard():
 
     for path, method in critical_frontend_routes:
         assert (path, method) in registered_routes, f"Missing route contract: {method} {path}"
-
-

@@ -337,7 +337,15 @@ def run_collection_until_pause(
             if p == 0:
                 break
 
-        if status in ("cancelled", "failed", "up_to_date", "paused_disk_limit", "target_reached", "paused_daily_limit", "paused_safety"):
+        if status in (
+            "cancelled",
+            "failed",
+            "up_to_date",
+            "paused_disk_limit",
+            "target_reached",
+            "paused_daily_limit",
+            "paused_safety",
+        ):
             break
 
         # If discovery found nothing and worker processed nothing, we're up to date
