@@ -19,6 +19,7 @@ SUPPORTED_OPERATION_TYPES = {
     "filtered_export",
     "release_build",
     "integrity_audit",
+    "harvest_collection",
 }
 
 _cancelled_jobs: set[str] = set()
@@ -143,6 +144,65 @@ def _run_operation_task(operation_id: str):
                 progress_current=100,
                 result_json=json.dumps(res),
             )
+        elif op_type == "harvest_collection":
+            from mesa_legal_data.harvest.config import load_harvest_config
+            from mesa_legal_data.harvest.service import run_collection_until_pause
+
+            source_id = inp.get("source_id", "resmi_gazete")
+            start_date_str = inp.get("start_date")
+            doc_types = inp.get("document_types")
+
+            cfg = load_harvest_config()
+            if source_id in cfg.sources:
+                src_cfg = cfg.sources[source_id]
+                if start_date_str:
+                    src_cfg.date_from = start_date_str
+                if doc_types:
+                    src_cfg.selection.allowed_document_types = doc_types
+
+            def is_cancelled_cb() -> bool:
+                return is_cancelled(operation_id)
+
+            def progress_cb(prog: dict[str, Any]) -> None:
+                p_curr = prog.get("processed", 0)
+                if not is_cancelled(operation_id):
+                    update_operation_job(
+                        conn,
+                        operation_id,
+                        status="running",
+                        progress_current=min(99, max(10, p_curr)),
+                    )
+
+            res = run_collection_until_pause(
+                source_id=source_id,
+                harvest_cfg=cfg,
+                is_cancelled_cb=is_cancelled_cb,
+                progress_cb=progress_cb,
+            )
+
+            if is_cancelled(operation_id) or res.get("status") == "cancelled":
+                update_operation_job(
+                    conn,
+                    operation_id,
+                    status="cancelled",
+                    result_json=json.dumps(res),
+                )
+            elif res.get("status") == "failed":
+                update_operation_job(
+                    conn,
+                    operation_id,
+                    status="failed",
+                    error_summary=res.get("stopped_reason", "Harvest collection failed"),
+                    result_json=json.dumps(res),
+                )
+            else:
+                update_operation_job(
+                    conn,
+                    operation_id,
+                    status="succeeded",
+                    progress_current=100,
+                    result_json=json.dumps(res),
+                )
         else:
             raise ValueError(f"OPERATION_TYPE_NOT_SUPPORTED: Operation type '{op_type}' is not supported")
     except Exception as exc:

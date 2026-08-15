@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#f4f6f9">
-  <title>MESA Legal Data — Yönetim Paneli</title>
+  <title>MESA Legal Data — Hukuk Veri Yönetimi</title>
   <script>
     (() => {
       const preference = localStorage.getItem("mesa_theme") || "system";
@@ -28,70 +28,51 @@
         </svg>
         <h2>MESA Data</h2>
       </div>
+
       <nav class="nav-menu">
-        <div class="nav-group-title">VERİ</div>
-        <button class="nav-btn active" data-view="dashboard">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-          Genel Bakış
+        <div class="nav-group-title">ANA MENÜ</div>
+        <button class="nav-btn active" data-view="home">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+          Ana Sayfa
         </button>
-        <button class="nav-btn" data-view="add_data">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
-          Veri Ekle
+        <button class="nav-btn" data-view="collect">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="8 12 12 16 16 12"></polyline><line x1="12" y1="8" x2="12" y2="16"></line></svg>
+          Veri Topla
         </button>
-        <button class="nav-btn" data-view="documents">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
-          Belgeler
+        <button class="nav-btn" data-view="library">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+          Kütüphane
         </button>
-        <button class="nav-btn" data-view="explorer">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-          Veri Gezgini
-        </button>
-
-        <div class="nav-group-title">KALİTE</div>
-        <button class="nav-btn" data-view="reviews">
+        <button class="nav-btn" data-view="review">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-          İnceleme Masası
+          İnceleme
         </button>
-        <button class="nav-btn" data-view="issues">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-          Sorunlar
-        </button>
-
-        <div class="nav-group-title">DAĞITIM</div>
-        <button class="nav-btn" data-view="sources">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-          Kaynaklar
-        </button>
-        <button class="nav-btn" data-view="releases">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-          Release Merkezi
-        </button>
-        <button class="nav-btn" data-view="exports">
+        <button class="nav-btn" data-view="export">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-          Dışa Aktarma
+          Dışa Aktar
         </button>
 
-        <div class="nav-group-title">SİSTEM</div>
-        <button class="nav-btn" data-view="operations">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-          Operasyonlar
+        <div class="nav-group-title" style="margin-top: 12px;">YÖNETİM</div>
+        <button id="btn-toggle-advanced" class="advanced-toggle-btn" type="button" aria-expanded="false">
+          <span>Gelişmiş</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </button>
-        <button class="nav-btn" data-view="audit">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><path d="M16 13H8"></path><path d="M16 17H8"></path><path d="M10 9H8"></path></svg>
-          Audit
-        </button>
-        <button class="nav-btn" data-view="system">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-          Sistem
-        </button>
+        <div id="advanced-subnav" class="advanced-subnav hidden">
+          <button class="nav-btn" data-view="sources">Kaynaklar</button>
+          <button class="nav-btn" data-view="explorer">Veri Gezgini</button>
+          <button class="nav-btn" data-view="releases">Release Geçmişi</button>
+          <button class="nav-btn" data-view="operations">Arka Plan İşlemleri</button>
+          <button class="nav-btn" data-view="audit">İşlem Geçmişi</button>
+          <button class="nav-btn" data-view="system">Sistem</button>
+        </div>
       </nav>
+
       <div class="sidebar-footer">
         <div id="api-status" class="status-indicator api-status status-checking" role="status" aria-live="polite">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="api-status-text" class="status-text">Durum kontrol ediliyor…</span>
         </div>
         <small id="app-version">Sürüm v0.1.0</small>
-
       </div>
     </aside>
 
@@ -103,8 +84,8 @@
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
           </button>
           <div class="header-title-group">
-            <h1 id="view-title">Genel Bakış</h1>
-            <p id="view-desc">Sistemin veri, kalite ve release durumunu tek yerde izleyin.</p>
+            <h1 id="view-title">Ana Sayfa</h1>
+            <p id="view-desc">MESA Data ile resmî hukuk verilerini toplayın, inceleyin ve kullanıma hazır hale getirin.</p>
           </div>
         </div>
         <div class="header-actions">
@@ -124,241 +105,528 @@
       <!-- Toast Notification Container -->
       <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-      <!-- Views Container -->
+      <!-- Views Body -->
       <div class="content-body">
         
-        <!-- View 1: Dashboard -->
-        <section id="view-dashboard" class="view-panel active">
-          <div class="stats-grid">
-            <div class="stat-card">
-              <span class="stat-label">Toplam Belge</span>
-              <span class="stat-val" id="stat-docs">0</span>
+        <!-- View 1: Home (Ana Sayfa) -->
+        <section id="view-home" class="view-panel active">
+          <!-- Onboarding / First-run welcome state -->
+          <div id="home-welcome-card" class="welcome-card hidden">
+            <div>
+              <h2>MESA Data’ya hoş geldiniz</h2>
+              <p style="margin-top: 4px;">MESA Data, resmî hukuk belgelerini toplar, işler, kontrol etmenizi sağlar ve kullanıma hazır veri olarak dışa aktarır.</p>
             </div>
-            <div class="stat-card">
-              <span class="stat-label">Raw Artifact</span>
-              <span class="stat-val" id="stat-artifacts">0</span>
+            
+            <div class="step-list">
+              <div class="step-item">
+                <span class="step-number">1. Adım</span>
+                <span class="step-title">Veri topla</span>
+                <span class="step-desc">Resmî Gazete’den otomatik olarak veya kendi dosyanızı ekleyerek başlayın.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">2. Adım</span>
+                <span class="step-title">İncele</span>
+                <span class="step-desc">Kontrol gerektiren işlenmiş kayıtları kolayca gözden geçirin.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">3. Adım</span>
+                <span class="step-title">Dışa aktar</span>
+                <span class="step-desc">Onaylanan veriyi dosya olarak alın veya MESA’ya aktarın.</span>
+              </div>
             </div>
-            <div class="stat-card">
-              <span class="stat-label">Canonical Kayıt</span>
-              <span class="stat-val" id="stat-records">0</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">İnceleme Bekleyen</span>
-              <span class="stat-val" id="stat-pending">0</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Onaylı Kayıt</span>
-              <span class="stat-val" id="stat-approved">0</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Açık Blocker / Error</span>
-              <span class="stat-val" id="stat-issues">0</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Published Release</span>
-              <span class="stat-val" id="stat-releases">0</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Aktif MESA Release</span>
-              <span class="stat-val text-sm" id="stat-active-release">YOK</span>
+
+            <div class="welcome-actions">
+              <button id="btn-welcome-start" class="btn btn-primary">İlk veri toplamayı başlat</button>
+              <button id="btn-welcome-upload" class="btn btn-secondary">Dosya yükle</button>
             </div>
           </div>
 
-          <!-- Harvest Read-Only Summary Section -->
-          <div id="harvest-summary-panel" class="panel-box" style="margin-bottom: 24px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-              <h3 style="margin: 0;">Otomatik Veri Toplama (Harvest)</h3>
-              <span id="harvest-status-badge" class="badge badge-info">Yükleniyor...</span>
-            </div>
-            
-            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
-              <div class="stat-card">
-                <span class="stat-label">Toplanan Ham Veri</span>
-                <span class="stat-val text-sm" id="harvest-raw-text">0 B / 30 GB</span>
+          <!-- Normal Home Dashboard Container -->
+          <div id="home-normal-container" class="view-panel">
+            <!-- Next action card -->
+            <div id="home-next-action" class="next-action-card">
+              <div class="next-action-info">
+                <h4 id="next-action-title">Önerilen işlem yükleniyor...</h4>
+                <p id="next-action-desc">Sistem durumu değerlendiriliyor.</p>
               </div>
+              <button id="btn-next-action" class="btn btn-primary">İşleme Git</button>
+            </div>
+
+            <!-- Top 4 Metrics -->
+            <div class="stats-grid">
               <div class="stat-card">
-                <span class="stat-label">Kuyrukta Bekleyen</span>
-                <span class="stat-val" id="harvest-queued">0</span>
+                <span class="stat-label">Toplam Belge</span>
+                <span class="stat-val" id="stat-docs">0</span>
               </div>
               <div class="stat-card">
                 <span class="stat-label">İnceleme Bekleyen</span>
-                <span class="stat-val" id="harvest-review">0</span>
+                <span class="stat-val" id="stat-pending">0</span>
               </div>
               <div class="stat-card">
-                <span class="stat-label">Hata / Retry Wait</span>
-                <span class="stat-val" id="harvest-errors">0 / 0</span>
+                <span class="stat-label">Açık Sorunlar</span>
+                <span class="stat-val" id="stat-issues">0</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Son Toplama</span>
+                <span class="stat-val text-sm" id="stat-last-harvest">-</span>
               </div>
             </div>
 
-            <!-- Progress Bar -->
-            <div style="margin-bottom: 16px;">
-              <div class="harvest-progress">
-                <div id="harvest-progress-bar" class="harvest-progress-bar" style="width: 0%;"></div>
-              </div>
-            </div>
-
-            <!-- Meta details row -->
-            <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--text-secondary);">
-              <div><strong>Kaynak:</strong> <span id="harvest-meta-source">resmi_gazete</span></div>
-              <div><strong>Mod:</strong> <span id="harvest-meta-mode">BACKFILL</span></div>
-              <div><strong>Son Discovery:</strong> <span id="harvest-meta-status">-</span></div>
-              <div><strong>Cursor Tarihi:</strong> <span id="harvest-meta-cursor">-</span></div>
-            </div>
-          </div>
-
-          <div class="dashboard-sections">
+            <!-- Harvest status summary card -->
             <div class="panel-box">
-              <h3>Son Güncellenen Belgeler</h3>
-              <div class="table-responsive">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Document ID</th>
-                      <th>Tür</th>
-                      <th>Başlık</th>
-                      <th>Durum</th>
-                      <th>Güncelleme</th>
-                    </tr>
-                  </thead>
-                  <tbody id="tbl-recent-docs"></tbody>
-                </table>
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <div>
+                  <h3 style="margin: 0;">Veri toplama durumu</h3>
+                  <p id="home-harvest-message" style="font-size: 13px; color: var(--color-text-secondary); margin-top: 2px;">Yükleniyor...</p>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span id="home-harvest-badge" class="badge badge-neutral">Kontrol ediliyor...</span>
+                  <button id="btn-home-harvest-cta" class="btn btn-sm btn-primary">Veri Topla</button>
+                </div>
+              </div>
+              
+              <div class="harvest-progress" style="margin-top: 4px;">
+                <div id="home-harvest-progress-bar" class="harvest-progress-bar" style="width: 0%;"></div>
+              </div>
+
+              <div id="home-harvest-stats-row" style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--color-text-secondary); margin-top: 4px;">
+                <div><strong>Kapsam İlerlemesi:</strong> <span id="home-harvest-coverage">0%</span></div>
+                <div><strong>İşlenen:</strong> <span id="home-harvest-completed">0</span></div>
+                <div><strong>İnceleme Bekleyen:</strong> <span id="home-harvest-review">0</span></div>
               </div>
             </div>
 
-            <div class="panel-box">
-              <h3>Son İşlem Geçmişi</h3>
-              <div class="table-responsive">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Run ID</th>
-                      <th>Komut</th>
-                      <th>Durum</th>
-                      <th>Başlangıç</th>
-                    </tr>
-                  </thead>
-                  <tbody id="tbl-recent-runs"></tbody>
-                </table>
+            <!-- Recent items grid -->
+            <div class="dashboard-sections">
+              <div class="panel-box">
+                <h3>Son Eklenen Belgeler</h3>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Başlık</th>
+                        <th>Tür</th>
+                        <th>Durum</th>
+                        <th>Güncelleme</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tbl-recent-docs"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="panel-box">
+                <h3>Son İşlemler</h3>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>İşlem</th>
+                        <th>Durum</th>
+                        <th>Zaman</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tbl-recent-runs"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- View 2: Add Data -->
-        <section id="view-add_data" class="view-panel hidden">
-          <div class="panel-box">
-            <div class="tab-buttons">
-              <button class="tab-btn active" data-tab="tab-file">Dosyadan Yükle</button>
-              <button class="tab-btn" data-tab="tab-url">Resmî URL'den Yükle</button>
+        <!-- View 2: Collect (Veri Topla) -->
+        <section id="view-collect" class="view-panel hidden">
+          <!-- Primary Resmî Gazete Card -->
+          <div class="source-card primary-source" id="card-resmi-gazete">
+            <div class="source-card-header">
+              <div class="source-title-group">
+                <h3>T.C. Resmî Gazete</h3>
+                <p>Kanun, yönetmelik, tebliğ ve desteklenen diğer Resmî Gazete belgelerini otomatik toplar.</p>
+              </div>
+              <span id="collect-status-badge" class="badge badge-neutral">Yükleniyor...</span>
             </div>
 
-            <!-- Tab 1: File Upload Form -->
-            <form id="form-upload-file" class="tab-content active">
-              <div class="form-group">
-                <label for="file-source">Kaynak</label>
-                <select id="file-source" required>
-                  <option value="mevzuat">mevzuat (Resmî Mevzuat Portalı)</option>
-                  <option value="aym">aym (Anayasa Mahkemesi)</option>
-                  <option value="yargitay">yargitay (Yargıtay Karar Bankası)</option>
-                  <option value="resmi_gazete">resmi_gazete (T.C. Resmî Gazete)</option>
-                </select>
+            <div class="tags-row">
+              <span class="tag-pill">1 Ocak 2015’ten bugüne</span>
+              <span class="tag-pill">Kanunlar</span>
+              <span class="tag-pill">Cumhurbaşkanlığı Kararnameleri</span>
+              <span class="tag-pill">Cumhurbaşkanı Kararları</span>
+              <span class="tag-pill">Yönetmelikler</span>
+              <span class="tag-pill">Tebliğler</span>
+            </div>
+
+            <!-- Progress Area -->
+            <div id="collect-progress-box" class="panel-box" style="background: var(--color-surface-subtle); padding: 14px; margin: 4px 0;">
+              <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;">
+                <span id="collect-progress-text">Geçmiş veriler taranıyor</span>
+                <span id="collect-progress-pct">0%</span>
               </div>
-              <div class="form-group">
-                <label for="file-family">Belge Ailesi</label>
-                <select id="file-family" required>
-                  <option value="legislation">legislation (Mevzuat)</option>
-                  <option value="decision">decision (Yargı Kararı)</option>
-                </select>
+              <div class="harvest-progress">
+                <div id="collect-progress-bar" class="harvest-progress-bar" style="width: 0%;"></div>
               </div>
+              <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--color-text-secondary); margin-top: 10px;">
+                <div><strong id="collect-cursor-text">Şu anda: - civarı taranıyor</strong></div>
+                <div><span id="collect-stat-found">0</span> belge bulundu</div>
+                <div><span id="collect-stat-completed">0</span> işlendi</div>
+                <div><span id="collect-stat-review">0</span> inceleme bekliyor</div>
+              </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+              <button id="btn-collect-start" class="btn btn-primary">Toplamayı Başlat</button>
+              <button id="btn-collect-stop" class="btn btn-danger hidden">Durdur</button>
+            </div>
+
+            <!-- Collapsed Scope Disclosure -->
+            <details class="technical-details" id="collect-scope-details">
+              <summary>Kapsamı değiştir</summary>
+              <div class="technical-details-content">
+                <div class="form-group" style="margin-bottom: 8px;">
+                  <label for="collect-start-date">Başlangıç Tarihi</label>
+                  <input type="text" id="collect-start-date" value="2015-01-01" placeholder="YYYY-AA-GG" style="max-width: 200px;">
+                </div>
+                <div class="form-group" style="margin-bottom: 4px;">
+                  <label>Toplanacak Belge Türleri</label>
+                  <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; margin-top: 4px;">
+                    <label><input type="checkbox" id="chk-type-law" value="law" checked> Kanunlar</label>
+                    <label><input type="checkbox" id="chk-type-decree" value="presidential_decree" checked> Cumhurbaşkanlığı Kararnameleri</label>
+                    <label><input type="checkbox" id="chk-type-decision" value="presidential_decision" checked> Cumhurbaşkanı Kararları</label>
+                    <label><input type="checkbox" id="chk-type-regulation" value="regulation" checked> Yönetmelikler</label>
+                    <label><input type="checkbox" id="chk-type-communique" value="communique" checked> Tebliğler</label>
+                  </div>
+                </div>
+                <span class="form-help">Bu seçimler yalnızca bu toplama çalışması için geçerlidir.</span>
+              </div>
+            </details>
+          </div>
+
+          <!-- Other Sources Capability Cards -->
+          <div class="panel-box">
+            <h3>Diğer Resmî Kaynaklar</h3>
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+              <div class="source-card">
+                <div class="source-card-header">
+                  <div class="source-title-group">
+                    <h3>Mevzuat Bilgi Sistemi</h3>
+                    <p>Kanun, KHK, Tüzük ve Yönetmelik metinleri.</p>
+                  </div>
+                  <span class="badge badge-info">Manuel ekleme</span>
+                </div>
+                <p style="font-size: 13px; color: var(--color-text-muted);">Bu kaynak için otomatik toplama bu sürümde desteklenmiyor. Belgelerinizi dosya veya resmî bağlantı ile ekleyebilirsiniz.</p>
+              </div>
+
+              <div class="source-card">
+                <div class="source-card-header">
+                  <div class="source-title-group">
+                    <h3>Anayasa Mahkemesi</h3>
+                    <p>Norm denetimi ve bireysel başvuru kararları.</p>
+                  </div>
+                  <span class="badge badge-info">Manuel ekleme</span>
+                </div>
+                <p style="font-size: 13px; color: var(--color-text-muted);">Bu kaynak için otomatik toplama bu sürümde desteklenmiyor. Karar dosyalarını aşağıdan manuel olarak ekleyebilirsiniz.</p>
+              </div>
+
+              <div class="source-card">
+                <div class="source-card-header">
+                  <div class="source-title-group">
+                    <h3>Yargıtay</h3>
+                    <p>Yargıtay daire ve kurul kararları.</p>
+                  </div>
+                  <span class="badge badge-neutral">Kapalı</span>
+                </div>
+                <p style="font-size: 13px; color: var(--color-text-muted);">Bu kaynak mevcut sistem yapılandırmasında devre dışıdır.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Manual Ingestion Section -->
+          <div class="panel-box" id="manual-ingestion-box">
+            <h3>Belgeyi kendim eklemek istiyorum</h3>
+            <div class="tab-buttons">
+              <button class="tab-btn active" data-tab="tab-manual-file">Dosya yükle</button>
+              <button class="tab-btn" data-tab="tab-manual-url">Resmî bağlantı</button>
+            </div>
+
+            <!-- Form: File Upload -->
+            <form id="form-upload-file" class="tab-content active" style="margin-top: 14px;">
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                <div class="form-group">
+                  <label for="file-source">Kaynak</label>
+                  <select id="file-source" required>
+                    <option value="resmi_gazete">T.C. Resmî Gazete</option>
+                    <option value="mevzuat">Mevzuat Bilgi Sistemi</option>
+                    <option value="aym">Anayasa Mahkemesi</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="file-doc-type">Belge Türü</label>
+                  <select id="file-doc-type" required>
+                    <option value="law">Kanun</option>
+                    <option value="presidential_decree">Cumhurbaşkanlığı Kararnamesi</option>
+                    <option value="presidential_decision">Cumhurbaşkanı Kararı</option>
+                    <option value="regulation">Yönetmelik</option>
+                    <option value="communique">Tebliğ</option>
+                    <option value="decision">Yargı Kararı</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 14px;">
+                <div class="form-group">
+                  <label for="file-title">Belge Başlığı</label>
+                  <input type="text" id="file-title" placeholder="Ör: Türk Medeni Kanunu" required>
+                </div>
+                <div class="form-group">
+                  <label for="file-doc-number">Belge Numarası</label>
+                  <input type="text" id="file-doc-number" placeholder="Ör: 4721">
+                </div>
+              </div>
+
               <div class="form-group">
                 <label for="file-input">Dosya Seç (PDF / HTML)</label>
                 <input type="file" id="file-input" required>
               </div>
-              <div class="form-group">
-                <label for="file-doc-id">Document ID</label>
-                <input type="text" id="file-doc-id" placeholder="tr:legislation:law:4721" required>
-                <span class="form-help">Örnek: tr:legislation:law:4721</span>
+
+              <details class="technical-details">
+                <summary>Gelişmiş belge kimliği (Opsiyonel)</label></summary>
+                <div class="technical-details-content">
+                  <input type="text" id="file-doc-id" placeholder="tr:legislation:law:4721">
+                  <span class="form-help">Boş bırakılırsa belge türü ve numarasından otomatik oluşturulur.</span>
+                </div>
+              </details>
+
+              <div style="margin-top: 14px;">
+                <button type="submit" class="btn btn-primary" id="btn-submit-file">Belgeyi Yükle ve İşle</button>
               </div>
-              <div class="form-group">
-                <label for="file-title">Başlık (Opsiyonel)</label>
-                <input type="text" id="file-title" placeholder="Türk Medeni Kanunu">
-              </div>
-              <button type="submit" class="btn btn-primary" id="btn-submit-file">Yükle</button>
             </form>
 
-            <!-- Tab 2: URL Import Form -->
-            <form id="form-upload-url" class="tab-content hidden">
-              <div class="form-group">
-                <label for="url-source">Kaynak</label>
-                <select id="url-source" required>
-                  <option value="mevzuat">mevzuat (https://www.mevzuat.gov.tr)</option>
-                </select>
+            <!-- Form: URL Import -->
+            <form id="form-upload-url" class="tab-content hidden" style="margin-top: 14px;">
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                <div class="form-group">
+                  <label for="url-source">Kaynak</label>
+                  <select id="url-source" required>
+                    <option value="mevzuat">Mevzuat Bilgi Sistemi (https://www.mevzuat.gov.tr)</option>
+                    <option value="resmi_gazete">T.C. Resmî Gazete (https://www.resmigazete.gov.tr)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="url-doc-type">Belge Türü</label>
+                  <select id="url-doc-type" required>
+                    <option value="law">Kanun</option>
+                    <option value="regulation">Yönetmelik</option>
+                    <option value="communique">Tebliğ</option>
+                  </select>
+                </div>
               </div>
+
               <div class="form-group">
-                <label for="url-input">Resmî HTTPS URL</label>
-                <input type="url" id="url-input" placeholder="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.2709.pdf" required>
-                <span class="form-help">Yalnız sources.yaml içinde izin verilen HTTPS adresleri kabul edilir.</span>
+                <label for="url-input">Resmî HTTPS Bağlantısı</label>
+                <input type="url" id="url-input" placeholder="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.4721.pdf" required>
               </div>
-              <div class="form-group">
-                <label for="url-doc-id">Document ID</label>
-                <input type="text" id="url-doc-id" placeholder="tr:legislation:constitution:2709" required>
+
+              <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 14px;">
+                <div class="form-group">
+                  <label for="url-title">Belge Başlığı</label>
+                  <input type="text" id="url-title" placeholder="Ör: Türk Medeni Kanunu" required>
+                </div>
+                <div class="form-group">
+                  <label for="url-doc-number">Belge Numarası</label>
+                  <input type="text" id="url-doc-number" placeholder="Ör: 4721">
+                </div>
               </div>
-              <div class="form-group">
-                <label for="url-title">Başlık (Opsiyonel)</label>
-                <input type="text" id="url-title" placeholder="Türkiye Cumhuriyeti Anayasası">
+
+              <details class="technical-details">
+                <summary>Gelişmiş belge kimliği (Opsiyonel)</summary>
+                <div class="technical-details-content">
+                  <input type="text" id="url-doc-id" placeholder="tr:legislation:law:4721">
+                  <span class="form-help">Boş bırakılırsa belge türü ve numarasından otomatik oluşturulur.</span>
+                </div>
+              </details>
+
+              <div style="margin-top: 14px;">
+                <button type="submit" class="btn btn-primary" id="btn-submit-url">İndir ve İşle</button>
               </div>
-              <button type="submit" class="btn btn-primary" id="btn-submit-url">İndir ve İçe Aktar</button>
             </form>
           </div>
         </section>
 
-        <!-- View 3: Documents -->
-        <section id="view-documents" class="view-panel hidden">
+        <!-- View 3: Library (Kütüphane) -->
+        <section id="view-library" class="view-panel hidden">
           <div class="panel-box">
             <div class="filter-bar">
-              <input type="text" id="filter-doc-q" placeholder="Document ID veya başlık ara...">
-              <select id="filter-doc-status">
-                <option value="">Tüm Durumlar</option>
-                <option value="fetched">fetched</option>
-                <option value="needs_review">needs_review</option>
-                <option value="approved">approved</option>
+              <input type="text" id="filter-lib-q" placeholder="Belge başlığı veya konu ara..." style="flex: 1; min-width: 200px;">
+              <select id="filter-lib-source" style="width: auto; min-width: 140px;">
+                <option value="">Tüm Kaynaklar</option>
+                <option value="resmi_gazete">Resmî Gazete</option>
+                <option value="mevzuat">Mevzuat</option>
+                <option value="aym">AYM</option>
               </select>
-              <button id="btn-doc-filter" class="btn btn-secondary">Filtrele</button>
+              <select id="filter-lib-status" style="width: auto; min-width: 140px;">
+                <option value="">Tüm Durumlar</option>
+                <option value="fetched">İşlendi</option>
+                <option value="needs_review">İnceleme Bekliyor</option>
+                <option value="approved">Onaylandı</option>
+              </select>
+              <button id="btn-lib-filter" class="btn btn-secondary">Filtrele</button>
             </div>
+
             <div class="table-responsive">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Document ID</th>
-                    <th>Aile / Tür</th>
                     <th>Başlık</th>
+                    <th>Tür</th>
+                    <th>Kaynak</th>
                     <th>Durum</th>
-                    <th>Artifact</th>
                     <th>Güncelleme</th>
-                    <th>İşlemler</th>
+                    <th>İşlem</th>
                   </tr>
                 </thead>
-                <tbody id="tbl-docs"></tbody>
+                <tbody id="tbl-library"></tbody>
               </table>
             </div>
-            <div class="pagination-bar">
-              <button id="btn-doc-prev" class="btn btn-sm">‹ Önceki</button>
-              <span id="lbl-doc-page">Sayfa 1</span>
-              <button id="btn-doc-next" class="btn btn-sm">Sonraki ›</button>
+
+            <div class="pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px;">
+              <button id="btn-lib-prev" class="btn btn-sm">‹ Önceki</button>
+              <span id="lbl-lib-page" style="font-size: 13px; color: var(--color-text-muted);">Sayfa 1</span>
+              <button id="btn-lib-next" class="btn btn-sm">Sonraki ›</button>
             </div>
           </div>
         </section>
 
-        <!-- View 4: Reviews -->
-        <section id="view-reviews" class="view-panel hidden">
+        <!-- View 4: Review (İnceleme) -->
+        <section id="view-review" class="view-panel hidden">
+          <div class="panel-box">
+            <div class="tab-buttons">
+              <button class="tab-btn active" data-review-tab="pending">İnceleme bekleyenler</button>
+              <button class="tab-btn" data-review-tab="issues">Sorunlar</button>
+            </div>
+
+            <!-- Tab Content: Records to review -->
+            <div id="review-tab-pending" class="tab-content active" style="margin-top: 14px;">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Belge</th>
+                      <th>Kayıt Türü</th>
+                      <th>Doğrulama</th>
+                      <th>Durum</th>
+                      <th>Tarih</th>
+                      <th>İşlem</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-reviews"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Tab Content: Issues list -->
+            <div id="review-tab-issues" class="tab-content hidden" style="margin-top: 14px;">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Konu</th>
+                      <th>Önem</th>
+                      <th>Kod</th>
+                      <th>Mesaj</th>
+                      <th>Durum</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-issues-list"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- View 5: Export (Dışa Aktar) -->
+        <section id="view-export" class="view-panel hidden">
+          <div class="dashboard-sections">
+            <!-- Section A: File Export -->
+            <div class="panel-box">
+              <h3>Dosya olarak indir</h3>
+              <p style="font-size: 13px; color: var(--color-text-secondary);">Onaylanmış hukuk kayıtlarını istediğiniz dosya biçiminde dışa aktarın.</p>
+              
+              <div class="form-group" style="margin-top: 10px;">
+                <label for="sel-export-format">Dışa Aktarma Biçimi</label>
+                <select id="sel-export-format">
+                  <option value="records_jsonl">JSONL — Veri işleme ve model eğitiminde önerilen</option>
+                  <option value="records_csv">CSV — Excel ve tablo araçları için</option>
+                </select>
+              </div>
+
+              <div style="margin-top: 10px;">
+                <button id="btn-export-create" class="btn btn-primary">Dışa aktarmayı oluştur</button>
+              </div>
+            </div>
+
+            <!-- Section B: MESA Transfer -->
+            <div class="panel-box">
+              <h3>MESA’ya aktar</h3>
+              <p style="font-size: 13px; color: var(--color-text-secondary);">Onaylanan kayıtları doğrulanmış bir veri paketi halinde MESA aktarım alanına gönderir.</p>
+
+              <div id="mesa-transfer-progress-box" class="panel-box hidden" style="background: var(--color-surface-subtle); padding: 12px; margin: 10px 0;">
+                <span id="mesa-transfer-status-text" style="font-size: 13px; font-weight: 600;">Paket hazırlanıyor...</span>
+              </div>
+
+              <div style="margin-top: 16px;">
+                <button id="btn-mesa-transfer" class="btn btn-success">MESA’ya Aktar</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Export History -->
+          <div class="panel-box" style="margin-top: 14px;">
+            <h3>Dışa Aktarma Geçmişi</h3>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Paket ID</th>
+                    <th>Biçim</th>
+                    <th>Durum</th>
+                    <th>Kayıt Sayısı</th>
+                    <th>Oluşturulma</th>
+                    <th>İndir</th>
+                  </tr>
+                </thead>
+                <tbody id="tbl-exports"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Advanced Sub-views -->
+        <section id="view-sources" class="view-panel hidden">
+          <div class="panel-box">
+            <h3>Kaynak Yapılandırmaları (Salt Okunur)</h3>
+            <span class="form-help">Kaynak limitleri ve ayarları sources.yaml üzerinden yönetilir.</span>
+            <div id="sources-list" style="margin-top: 14px;"></div>
+          </div>
+        </section>
+
+        <section id="view-explorer" class="view-panel hidden">
           <div class="panel-box">
             <div class="filter-bar">
-              <select id="filter-review-status">
-                <option value="pending">İnceleme Bekleyenler (pending)</option>
-                <option value="approved">Onaylılar (approved)</option>
-                <option value="rejected">Reddedilenler (rejected)</option>
+              <input type="text" id="filter-explorer-q" placeholder="Kayıt ara...">
+              <select id="filter-explorer-type">
+                <option value="">Tüm Türler</option>
+                <option value="article">Madde (article)</option>
+                <option value="legislation">Mevzuat (legislation)</option>
+                <option value="decision">Karar (decision)</option>
+                <option value="citation">Atıf (citation)</option>
               </select>
-              <button id="btn-review-filter" class="btn btn-secondary">Yenile</button>
+              <select id="filter-explorer-approval">
+                <option value="">Tüm Onay Durumları</option>
+                <option value="pending">İnceleme Bekleyen (pending)</option>
+                <option value="approved">Onaylı (approved)</option>
+                <option value="rejected">Reddedilen (rejected)</option>
+              </select>
+              <button id="btn-explorer-search" class="btn btn-primary">Ara</button>
             </div>
             <div class="table-responsive">
               <table class="data-table">
@@ -366,30 +634,26 @@
                   <tr>
                     <th>Record ID</th>
                     <th>Tür</th>
-                    <th>Document ID</th>
-                    <th>Validation</th>
-                    <th>Onay Durumu</th>
+                    <th>Belge</th>
+                    <th>Kaynak</th>
+                    <th>Onay</th>
+                    <th>Doğrulama</th>
                     <th>Oluşturulma</th>
-                    <th>İşlemler</th>
                   </tr>
                 </thead>
-                <tbody id="tbl-reviews"></tbody>
+                <tbody id="tbl-explorer"></tbody>
               </table>
             </div>
           </div>
         </section>
 
-        <!-- View 5: Releases -->
         <section id="view-releases" class="view-panel hidden">
           <div class="panel-box">
-            <div class="release-build-card">
-              <h3>Yeni Release Paketle</h3>
-              <div class="form-row">
-                <input type="text" id="txt-release-id" placeholder="legal-core-2026-v1">
-                <button id="btn-build-release" class="btn btn-primary">Package Release</button>
-              </div>
+            <div class="release-build-card" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <input type="text" id="txt-release-id" placeholder="legal-core-2026-v1" style="max-width: 260px;">
+              <button id="btn-build-release" class="btn btn-primary">Yeni Paket Oluştur</button>
             </div>
-            <div class="table-responsive">
+            <div class="table-responsive" style="margin-top: 14px;">
               <table class="data-table">
                 <thead>
                   <tr>
@@ -409,155 +673,14 @@
           </div>
         </section>
 
-        <!-- View: Explorer -->
-        <section id="view-explorer" class="view-panel hidden">
-          <div class="panel-box">
-            <div class="filter-bar">
-              <input type="text" id="filter-explorer-q" placeholder="Kayıt ara...">
-              <select id="filter-explorer-type">
-                <option value="">Tüm Türler</option>
-                <option value="article">article</option>
-                <option value="legislation">legislation</option>
-                <option value="decision">decision</option>
-                <option value="citation">citation</option>
-              </select>
-              <select id="filter-explorer-approval">
-                <option value="">Tüm Onay</option>
-                <option value="pending">pending</option>
-                <option value="approved">approved</option>
-                <option value="rejected">rejected</option>
-              </select>
-              <select id="filter-explorer-sort">
-                <option value="created_at">Tarih</option>
-                <option value="record_id">Record ID</option>
-                <option value="record_type">Tür</option>
-              </select>
-              <button id="btn-explorer-search" class="btn btn-primary">Ara</button>
-            </div>
-            <div id="explorer-facets" class="facets-bar"></div>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th><input type="checkbox" id="chk-explorer-all"></th>
-                    <th>Record ID</th>
-                    <th>Tür</th>
-                    <th>Belge</th>
-                    <th>Kaynak</th>
-                    <th>Onay</th>
-                    <th>Validation</th>
-                    <th>Oluşturulma</th>
-                  </tr>
-                </thead>
-                <tbody id="tbl-explorer"></tbody>
-              </table>
-            </div>
-            <div class="pagination-bar">
-              <button id="btn-explorer-prev" class="btn btn-sm">‹ Önceki</button>
-              <span id="lbl-explorer-page">Sayfa 1</span>
-              <button id="btn-explorer-next" class="btn btn-sm">Sonraki ›</button>
-            </div>
-          </div>
-        </section>
-
-        <!-- View: Issues -->
-        <section id="view-issues" class="view-panel hidden">
-          <div class="panel-box">
-            <div class="filter-bar">
-              <select id="filter-issue-status">
-                <option value="open">Açık</option>
-                <option value="resolved">Çözüldü</option>
-                <option value="">Tümü</option>
-              </select>
-              <select id="filter-issue-severity">
-                <option value="">Tüm Önem</option>
-                <option value="blocker">blocker</option>
-                <option value="error">error</option>
-                <option value="warning">warning</option>
-                <option value="info">info</option>
-              </select>
-              <button id="btn-issue-filter" class="btn btn-secondary">Yenile</button>
-            </div>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Issue ID</th>
-                    <th>Konu Türü</th>
-                    <th>Konu ID</th>
-                    <th>Önem</th>
-                    <th>Kod</th>
-                    <th>Mesaj</th>
-                    <th>Durum</th>
-                  </tr>
-                </thead>
-                <tbody id="tbl-issues"></tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
-        <!-- View: Sources (Read-Only) -->
-        <section id="view-sources" class="view-panel hidden">
-          <div class="panel-box">
-            <h3>Kaynak Yapılandırmaları (Salt Okunur)</h3>
-            <span class="form-help">Kaynak limitleri ve ayarları sources.yaml üzerinden yönetilir.</span>
-            <div id="sources-list"></div>
-          </div>
-        </section>
-
-        <!-- View: Exports -->
-        <section id="view-exports" class="view-panel hidden">
-          <div class="panel-box">
-            <h3>Dışa Aktarma Oluştur</h3>
-            <div class="filter-bar">
-              <select id="sel-export-type">
-                <option value="records_jsonl">records_jsonl</option>
-                <option value="records_csv">records_csv</option>
-                <option value="issues_csv">issues_csv</option>
-                <option value="audit_jsonl">audit_jsonl</option>
-                <option value="audit_csv">audit_csv</option>
-                <option value="provenance_jsonl">provenance_jsonl</option>
-                <option value="document_package">document_package</option>
-              </select>
-              <button id="btn-export-create" class="btn btn-primary">Dışa Aktar</button>
-            </div>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Export ID</th>
-                    <th>Tür</th>
-                    <th>Durum</th>
-                    <th>Dosya</th>
-                    <th>Oluşturulma</th>
-                    <th>İndir</th>
-                  </tr>
-                </thead>
-                <tbody id="tbl-exports"></tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
-        <!-- View: Operations -->
         <section id="view-operations" class="view-panel hidden">
           <div class="panel-box">
-            <h3>İşlem Oluştur</h3>
-            <div class="filter-bar">
-              <select id="sel-op-type">
-                <option value="filtered_export">filtered_export</option>
-                <option value="release_build">release_build</option>
-                <option value="integrity_audit">integrity_audit</option>
-              </select>
-              <input type="text" id="txt-op-scope" placeholder="Scope (ör: all)" value="all">
-              <button id="btn-op-create" class="btn btn-primary">Başlat</button>
-            </div>
+            <h3>Arka Plan İşlemleri</h3>
             <div class="table-responsive">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Job ID</th>
+                    <th>İşlem ID</th>
                     <th>Tür</th>
                     <th>Durum</th>
                     <th>İlerleme</th>
@@ -571,10 +694,9 @@
           </div>
         </section>
 
-        <!-- View: Audit -->
         <section id="view-audit" class="view-panel hidden">
           <div class="panel-box">
-            <h3>Audit Geçmişi</h3>
+            <h3>İşlem Geçmişi (Audit)</h3>
             <div class="filter-bar">
               <input type="text" id="filter-audit-actor" placeholder="Aktör filtresi...">
               <button id="btn-audit-filter" class="btn btn-secondary">Yenile</button>
@@ -596,15 +718,14 @@
           </div>
         </section>
 
-        <!-- View: System -->
         <section id="view-system" class="view-panel hidden">
           <div class="panel-box">
             <h3>Sistem Teşhisi ve Sağlık Durumu</h3>
-            <div class="system-actions">
+            <div class="system-actions" style="display: flex; gap: 10px;">
               <button id="btn-sys-doctor" class="btn btn-secondary">Doctor Çalıştır</button>
               <button id="btn-sys-backup" class="btn btn-secondary">Catalog Backup Al</button>
             </div>
-            <pre id="sys-status-output" class="code-box">Yükleniyor...</pre>
+            <pre id="sys-status-output" class="code-box" style="margin-top: 14px; padding: 14px; background: var(--color-surface-subtle); border-radius: 6px; overflow-x: auto;">Yükleniyor...</pre>
           </div>
         </section>
 
@@ -644,9 +765,8 @@
         <button class="btn-close" data-close="modal-record-detail" aria-label="Kapat">×</button>
       </div>
       <div id="record-modal-body" class="modal-body"></div>
-      <div class="modal-footer">
-        <input type="text" id="txt-reviewer-name" placeholder="İnceleyen Adı (ör: yasin)" value="yasin">
-        <input type="text" id="txt-reviewer-note" placeholder="İnceleme Notu (opsiyonel)">
+      <div class="modal-footer" style="align-items: center;">
+        <input type="text" id="txt-reviewer-note" placeholder="İnceleme Notu (opsiyonel)" style="flex: 1;">
         <button id="btn-record-approve" class="btn btn-success">Onayla</button>
         <button id="btn-record-reject" class="btn btn-danger">Reddet</button>
       </div>

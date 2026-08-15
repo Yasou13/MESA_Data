@@ -46,3 +46,10 @@ class UrlImportRequest(BaseModel):
     document_type: str = Field(default="law")
     jurisdiction: str = Field(default="TR")
     title: Optional[str] = Field(default=None)
+
+
+class HarvestStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: str = "resmi_gazete"
+    start_date: Optional[str] = None
+    document_types: Optional[list[str]] = None

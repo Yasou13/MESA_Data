@@ -35,6 +35,7 @@ from mesa_legal_data.release.importer import (
 )
 from mesa_legal_data.sources import import_manual_file, import_manual_url
 from mesa_legal_data.web.schemas import (
+    HarvestStartRequest,
     ReleaseCreateRequest,
     ReviewRequest,
     RevokeRequest,
@@ -161,9 +162,253 @@ def get_dashboard():
     )
 
 
-# 8.3 Public Config
+# --- HARVEST ENDPOINTS ---
+
+
+@router.get("/harvest/status")
+def get_harvest_status_endpoint():
+    from datetime import date, datetime
+
+    from mesa_legal_data.harvest.config import load_harvest_config
+    from mesa_legal_data.harvest.database import get_harvest_connection, get_harvest_db_path
+    from mesa_legal_data.harvest.discovery_state import get_discovery_cursor
+    from mesa_legal_data.harvest.reporting import get_harvest_status_summary
+
+    settings = load_settings()
+    data_root = settings.data_root_path
+    db_path = get_harvest_db_path(custom_data_root=data_root)
+
+    # Check active operation job
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT operation_id, status, error_summary FROM operation_jobs WHERE operation_type = 'harvest_collection' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1"
+    )
+    active_op_row = c.fetchone()
+    conn.close()
+
+    active_op_id = active_op_row[0] if active_op_row else None
+    active_op_status = active_op_row[1] if active_op_row else None
+
+    if not db_path.exists():
+        return ok_response(
+            {
+                "state": "not_started",
+                "initialized": False,
+                "source_id": "resmi_gazete",
+                "source_name": "T.C. Resmî Gazete",
+                "mode": None,
+                "start_date": "2015-01-01",
+                "cursor_date": None,
+                "coverage_percent": 0,
+                "total_items": 0,
+                "queued": 0,
+                "completed": 0,
+                "needs_review": 0,
+                "retry_wait": 0,
+                "failed": 0,
+                "blocked": 0,
+                "duplicate": 0,
+                "last_discovery_at": None,
+                "last_discovery_status": None,
+                "active_operation_id": active_op_id,
+                "active_operation_status": active_op_status,
+                "message": "Henüz veri toplama başlatılmadı.",
+            }
+        )
+
+    cfg = load_harvest_config()
+    src_cfg = cfg.sources.get("resmi_gazete")
+    start_date_str = (src_cfg.date_from if src_cfg else None) or "2015-01-01"
+
+    summary = get_harvest_status_summary(db_path=db_path)
+    status_counts = summary.get("status_counts", {})
+    total_items = summary.get("total_items", 0)
+
+    # Last discovery info
+    h_conn = get_harvest_connection(db_path)
+    last_discovery_status = None
+    last_discovery_at = None
+    try:
+        hc = h_conn.cursor()
+        hc.execute(
+            "SELECT status, started_at FROM discovery_runs WHERE source_id = 'resmi_gazete' ORDER BY started_at DESC LIMIT 1"
+        )
+        d_row = hc.fetchone()
+        if d_row:
+            last_discovery_status = d_row["status"]
+            last_discovery_at = d_row["started_at"]
+    finally:
+        h_conn.close()
+
+    cursor_data = get_discovery_cursor("resmi_gazete", db_path=db_path) or {}
+    mode = cursor_data.get("mode")
+    cursor_date_str = (
+        cursor_data.get("last_successful_date")
+        or cursor_data.get("backfill_next_date")
+        or cursor_data.get("next_date")
+    )
+
+    # Date coverage calculation
+    coverage_percent = 0
+    today = date.today()
+    try:
+        start_d = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        total_span = (today - start_d).days
+        if total_span > 0:
+            if mode == "incremental" or (
+                mode == "backfill" and cursor_data.get("backfill_next_date") is None and cursor_date_str
+            ):
+                coverage_percent = 100
+            elif cursor_date_str:
+                curr_d = datetime.strptime(cursor_date_str, "%Y-%m-%d").date()
+                traversed = (today - curr_d).days
+                coverage_percent = min(100, max(0, int((traversed / total_span) * 100)))
+    except Exception:
+        coverage_percent = 0
+
+    queued = status_counts.get("queued", 0) + status_counts.get("leased", 0)
+    completed = status_counts.get("completed", 0)
+    needs_review = status_counts.get("needs_review", 0)
+    retry_wait = status_counts.get("retry_wait", 0)
+    failed = status_counts.get("failed", 0)
+    blocked = status_counts.get("blocked", 0)
+    duplicate = status_counts.get("duplicate", 0)
+
+    # State computation
+    if active_op_status in ("queued", "running"):
+        state = "running"
+        if mode == "incremental":
+            message = "Güncel Resmî Gazete verileri kontrol ediliyor."
+        elif cursor_date_str:
+            message = f"Resmî Gazete geçmiş verileri toplanıyor (Şu anda {cursor_date_str} civarı taranıyor)."
+        else:
+            message = "Resmî Gazete veri toplama işlemi devam ediyor."
+    elif failed > 0 or last_discovery_status == "failed":
+        state = "attention"
+        message = "Toplama sırasında dikkat gerektiren sorunlar oluştu."
+    elif total_items == 0 and not last_discovery_at:
+        state = "not_started"
+        message = "Henüz veri toplama başlatılmadı."
+    elif queued == 0 and mode == "incremental":
+        state = "up_to_date"
+        message = "Resmî Gazete verileri güncel görünüyor."
+    else:
+        state = "paused"
+        message = "Veri toplama duraklatıldı."
+
+    return ok_response(
+        {
+            "state": state,
+            "initialized": True,
+            "source_id": "resmi_gazete",
+            "source_name": "T.C. Resmî Gazete",
+            "mode": mode,
+            "start_date": start_date_str,
+            "cursor_date": cursor_date_str,
+            "coverage_percent": coverage_percent,
+            "total_items": total_items,
+            "queued": queued,
+            "completed": completed,
+            "needs_review": needs_review,
+            "retry_wait": retry_wait,
+            "failed": failed,
+            "blocked": blocked,
+            "duplicate": duplicate,
+            "last_discovery_at": last_discovery_at,
+            "last_discovery_status": last_discovery_status,
+            "active_operation_id": active_op_id,
+            "active_operation_status": active_op_status,
+            "message": message,
+        }
+    )
+
+
+@router.post("/harvest/start")
+async def start_harvest_endpoint(req: HarvestStartRequest, request: Request):
+    from datetime import date, datetime
+
+    from mesa_legal_data.operations import submit_operation
+
+    if req.source_id != "resmi_gazete":
+        error_response(
+            "SOURCE_NOT_SUPPORTED",
+            f"Otomatik veri toplama şu anda yalnızca 'resmi_gazete' için desteklenmektedir. '{req.source_id}' için manuel ekleme kullanınız.",
+            status_code=400,
+        )
+
+    if req.start_date:
+        try:
+            s_date = datetime.strptime(req.start_date, "%Y-%m-%d").date()
+            if s_date > date.today():
+                error_response("INVALID_START_DATE", "Başlangıç tarihi gelecekte olamaz.", status_code=400)
+        except ValueError:
+            error_response("INVALID_START_DATE", "Başlangıç tarihi YYYY-AA-GG biçiminde olmalıdır.", status_code=400)
+
+    allowed_types = {"law", "presidential_decree", "presidential_decision", "regulation", "communique"}
+    if req.document_types is not None:
+        if len(req.document_types) == 0:
+            error_response("INVALID_DOCUMENT_TYPES", "En az bir belge türü seçilmelidir.", status_code=400)
+        invalid = [t for t in req.document_types if t not in allowed_types]
+        if invalid:
+            error_response("INVALID_DOCUMENT_TYPES", f"Desteklenmeyen belge türleri: {invalid}", status_code=400)
+
+    actor = extract_actor(request)
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "SELECT operation_id FROM operation_jobs WHERE operation_type = 'harvest_collection' AND status IN ('queued', 'running')"
+            )
+            running_op = c.fetchone()
+            if running_op:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "HARVEST_ALREADY_RUNNING", "message": "Veri toplama zaten devam ediyor."},
+                )
+
+            input_dict = {
+                "source_id": req.source_id,
+                "start_date": req.start_date,
+                "document_types": req.document_types,
+            }
+            op_id = submit_operation(
+                conn,
+                operation_type="harvest_collection",
+                requested_by=actor,
+                input_dict=input_dict,
+            )
+            return ok_response({"operation_id": op_id, "status": "submitted"})
+        finally:
+            conn.close()
+
+
+@router.post("/harvest/stop")
+async def stop_harvest_endpoint(request: Request):
+    from mesa_legal_data.operations import cancel_operation
+
+    actor = extract_actor(request)
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "SELECT operation_id FROM operation_jobs WHERE operation_type = 'harvest_collection' AND status IN ('queued', 'running')"
+            )
+            row = c.fetchone()
+            if not row:
+                return ok_response({"status": "not_running"})
+
+            op_id = row[0]
+            cancel_operation(conn, op_id, actor=actor)
+            return ok_response({"operation_id": op_id, "status": "cancelled"})
+        finally:
+            conn.close()
+
+
+# 8.3 Public Config & Sources
 @router.get("/config/public")
-@router.get("/sources")
 def get_public_config():
     settings = load_settings()
     sources_yaml_path = Path(__file__).parent.parent.parent.parent / "config" / "sources.yaml"
@@ -184,6 +429,34 @@ def get_public_config():
             "storage": settings.storage.model_dump(),
         }
     )
+
+
+@router.get("/sources")
+def list_sources_endpoint():
+    sources_yaml_path = Path(__file__).parent.parent.parent.parent / "config" / "sources.yaml"
+    sources_list = []
+    if sources_yaml_path.exists():
+        src_cfg = load_sources(sources_yaml_path)
+        for s_id, s_info in src_cfg.sources.items():
+            if s_id == "resmi_gazete" and s_info.enabled:
+                automation = "supported"
+            elif not s_info.enabled:
+                automation = "disabled"
+            else:
+                automation = "manual"
+            sources_list.append(
+                {
+                    "source_id": s_id,
+                    "name": s_info.name,
+                    "authority": s_info.authority,
+                    "base_url": s_info.base_url,
+                    "access_mode": s_info.access_mode,
+                    "enabled": s_info.enabled,
+                    "families": s_info.families,
+                    "automation": automation,
+                }
+            )
+    return ok_response(sources_list)
 
 
 # 8.4 Documents
@@ -208,6 +481,9 @@ def list_documents(
     if family:
         where_clauses.append("d.family = ?")
         params.append(family)
+    if source:
+        where_clauses.append("d.document_id IN (SELECT a.document_id FROM artifacts a WHERE a.source_id = ?)")
+        params.append(source)
     if q:
         where_clauses.append("(d.document_id LIKE ? OR d.title LIKE ?)")
         params.extend([f"%{q}%", f"%{q}%"])
@@ -220,7 +496,8 @@ def list_documents(
     offset = (page - 1) * page_size
     query = f"""
         SELECT d.document_id, d.family, d.document_type, d.jurisdiction, d.title, d.stable_key, d.lifecycle_status, d.current_version_id, d.updated_at,
-               (SELECT count(*) FROM artifacts a WHERE a.document_id = d.document_id) as art_count
+               (SELECT count(*) FROM artifacts a WHERE a.document_id = d.document_id) as art_count,
+               (SELECT a.source_id FROM artifacts a WHERE a.document_id = d.document_id ORDER BY a.retrieved_at DESC LIMIT 1) as source_id
         FROM documents d
         {where_sql}
         ORDER BY d.updated_at DESC
@@ -241,6 +518,7 @@ def list_documents(
                 "current_version_id": r[7],
                 "updated_at": r[8],
                 "artifact_count": r[9],
+                "source_id": r[10] or "unknown",
             }
         )
 
@@ -701,6 +979,7 @@ async def upload_artifact(
 
 @router.post("/artifacts/from-url")
 @router.post("/manual/import-url")
+@router.post("/documents/import-url")
 def import_from_url(req: UrlImportRequest):
     try:
         art = import_manual_url(
@@ -784,9 +1063,10 @@ def list_records(
 
     offset = (page - 1) * page_size
     query = f"""
-        SELECT r.record_id, r.version_id, r.record_type, r.canonical_path, r.canonical_line, r.record_sha256, r.validation_status, r.approval_status, r.created_at, v.document_id
+        SELECT r.record_id, r.version_id, r.record_type, r.canonical_path, r.canonical_line, r.record_sha256, r.validation_status, r.approval_status, r.created_at, v.document_id, d.title
         FROM records r
         JOIN versions v ON r.version_id = v.version_id
+        LEFT JOIN documents d ON v.document_id = d.document_id
         {where_sql}
         ORDER BY r.created_at DESC
         LIMIT ? OFFSET ?
@@ -806,6 +1086,7 @@ def list_records(
                 "approval_status": row[7],
                 "created_at": row[8],
                 "document_id": row[9],
+                "document_title": row[10] or row[9],
             }
         )
 
@@ -817,12 +1098,37 @@ def list_records(
 @router.get("/reviews/records/{record_id:path}")
 def get_record_detail(record_id: str):
     conn = get_connection()
-    rec = get_record(conn, record_id)
-    if not rec:
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT r.record_id, r.version_id, r.record_type, r.canonical_path, r.canonical_line, r.record_sha256,
+               r.validation_status, r.approval_status, r.created_at, v.document_id, d.title
+        FROM records r
+        JOIN versions v ON r.version_id = v.version_id
+        LEFT JOIN documents d ON v.document_id = d.document_id
+        WHERE r.record_id = ?
+        """,
+        (record_id,),
+    )
+    row = c.fetchone()
+    if not row:
         conn.close()
         error_response("RECORD_NOT_FOUND", f"Record {record_id} not found", status_code=404)
 
-    rec_data = dict(rec or {})
+    rec_data = {
+        "record_id": row[0],
+        "version_id": row[1],
+        "record_type": row[2],
+        "canonical_path": row[3],
+        "canonical_line": row[4],
+        "record_sha256": row[5],
+        "validation_status": row[6],
+        "approval_status": row[7],
+        "created_at": row[8],
+        "document_id": row[9],
+        "document_title": row[10] or row[9],
+    }
+
     # Read canonical line preview (up to 20,000 chars)
     settings = load_settings()
     c_abs_path = settings.data_root_path / str(rec_data["canonical_path"])
@@ -832,7 +1138,11 @@ def get_record_detail(record_id: str):
         with open(c_abs_path, "r", encoding="utf-8") as f:
             for idx, line in enumerate(f, start=1):
                 if idx == target_line:
-                    text_preview = line[:20000]
+                    try:
+                        parsed = json.loads(line)
+                        text_preview = parsed.get("text") or parsed.get("title") or line[:20000]
+                    except Exception:
+                        text_preview = line[:20000]
                     break
 
     blockers = list_open_blocking_issues(conn, subject_id=record_id)
@@ -1001,6 +1311,7 @@ async def publish_release_endpoint(release_id: str):
 @router.post("/releases/{release_id:path}/import")
 @router.post("/releases/{release_id:path}/import-to-mesa")
 @router.post("/releases/{release_id:path}/import-to-staging")
+@router.post("/releases/{release_id:path}/import-staging")
 async def import_release_endpoint(release_id: str):
     async with write_lock.acquire_write():
         try:
@@ -1075,6 +1386,16 @@ async def run_backup():
 
 
 # --- EXPORTS & PACKAGES ---
+
+
+@router.get("/exports")
+def list_exports_endpoint(limit: int = Query(50, ge=1, le=200)):
+    from mesa_legal_data.catalog import list_export_packages
+
+    conn = get_connection()
+    items = list_export_packages(conn, limit=limit)
+    conn.close()
+    return ok_response(items)
 
 
 @router.post("/exports")
@@ -1354,6 +1675,14 @@ def explorer_search_endpoint(
     c.execute(count_sql, params)
     total = c.fetchone()[0]
 
+    order_clause = "r.created_at DESC"
+    if sort == "record_id":
+        order_clause = "r.record_id ASC"
+    elif sort == "record_type":
+        order_clause = "r.record_type ASC"
+    elif sort == "created_at":
+        order_clause = "r.created_at DESC"
+
     offset = (effective_page - 1) * effective_page_size
     data_sql = f"""
         SELECT r.record_id, r.record_type, r.version_id, r.approval_status, r.validation_status, r.canonical_path, r.canonical_line, r.record_sha256, d.document_id, d.title, a.source_id, r.created_at
@@ -1362,10 +1691,10 @@ def explorer_search_endpoint(
         JOIN artifacts a ON v.artifact_id = a.artifact_id
         JOIN documents d ON v.document_id = d.document_id
         WHERE {where_str}
-        ORDER BY r.created_at DESC
+        ORDER BY {order_clause}
         LIMIT ? OFFSET ?
     """
-    c.execute(data_sql, params + [page_size, offset])
+    c.execute(data_sql, params + [effective_page_size, offset])
     rows = c.fetchall()
     conn.close()
 

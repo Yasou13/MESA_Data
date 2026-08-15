@@ -513,10 +513,21 @@ def web_cmd(
 
     import uvicorn
 
+    from mesa_legal_data.web.bootstrap import prepare_web_runtime
+
     admin_token = os.environ.get("MESA_DATA_WEB_ADMIN_TOKEN", "").strip()
     if host not in ("127.0.0.1", "::1", "localhost") and not admin_token:
         typer.secho(
             "ERROR: Binding to non-loopback host requires MESA_DATA_WEB_ADMIN_TOKEN to be set.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        prepare_web_runtime()
+    except Exception as e:
+        typer.secho(
+            f"MESA Data başlatılamadı: {e}\nAyrıntı için gelişmiş günlükleri kontrol edin.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)

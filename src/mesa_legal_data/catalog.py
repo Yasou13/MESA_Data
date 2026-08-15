@@ -1716,3 +1716,29 @@ def get_export_package(conn: sqlite3.Connection, export_id: str) -> dict[str, An
 def update_export_package_status(conn: sqlite3.Connection, export_id: str, status: str):
     with transaction(conn):
         conn.execute("UPDATE export_packages SET status = ? WHERE export_id = ?", (status, export_id))
+
+
+def list_export_packages(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT export_id, export_type, relative_path, sha256, byte_size, record_count, filters_json, created_by, created_at, expires_at, status FROM export_packages ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    )
+    items = []
+    for r in cursor.fetchall():
+        items.append(
+            {
+                "export_id": r[0],
+                "export_type": r[1],
+                "relative_path": r[2],
+                "sha256": r[3],
+                "byte_size": r[4],
+                "record_count": r[5],
+                "filters_json": r[6],
+                "created_by": r[7],
+                "created_at": r[8],
+                "expires_at": r[9],
+                "status": r[10],
+            }
+        )
+    return items
