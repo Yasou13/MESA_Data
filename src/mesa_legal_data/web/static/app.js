@@ -12,6 +12,7 @@ const state = {
   harvestStatus: null,
   harvestPollTimer: null,
   activeReviewTab: "pending",
+  issueFilterSubjectId: null,
 };
 
 const VIEW_DESCRIPTIONS = {
@@ -45,8 +46,9 @@ function humanTerm(term) {
     mevzuat: "Mevzuat Bilgi Sistemi",
     aym: "Anayasa Mahkemesi",
     yargitay: "Yargıtay",
-    not_started: "Henüz başlanmadı",
-    running: "Toplama devam ediyor",
+    danistay: "Danıştay",
+    idle: "Hazır",
+    running: "Çalışıyor",
     paused: "Duraklatıldı",
     up_to_date: "Güncel",
     attention: "Dikkat gerekiyor",
@@ -64,8 +66,55 @@ function humanTerm(term) {
     published: "Yayınlandı",
     imported: "MESA'ya aktarıldı",
     revoked: "Geri çekildi",
+    open: "Çözüm bekliyor",
+    resolved: "Çözüldü",
+    blocker: "Kritik",
+    critical: "Kritik",
+    error: "Yüksek (Hata)",
+    high: "Yüksek",
+    medium: "Orta",
+    low: "Düşük",
+    info: "Düşük (Bilgi)",
+    record: "Kayıt",
+    document: "Belge",
+    version: "Belge Sürümü",
+    source: "Kaynak",
   };
   return map[term] || term;
+}
+
+function humanSeverityBadge(severity) {
+  const s = String(severity || "error").toLowerCase();
+  if (s === "blocker" || s === "critical") {
+    return `<span class="badge badge-danger">Kritik</span>`;
+  }
+  if (s === "error" || s === "high") {
+    return `<span class="badge badge-danger">Yüksek</span>`;
+  }
+  if (s === "warning" || s === "medium") {
+    return `<span class="badge badge-warning">Orta</span>`;
+  }
+  if (s === "info" || s === "low") {
+    return `<span class="badge badge-info">Düşük</span>`;
+  }
+  return `<span class="badge badge-neutral">${escapeHtml(humanTerm(s))}</span>`;
+}
+
+function humanIssueMessage(code, message) {
+  if (message && !message.startsWith("Validation error in") && !message.startsWith("Cannot approve") && !message.includes("Open blocker issues")) {
+    return message;
+  }
+  const codeMap = {
+    VALIDATION_DATE_MISSING: "Belgedeki tarih bilgisi okunamadı veya eksik.",
+    VALIDATION_TITLE_MISSING: "Belge başlığı tespit edilemedi.",
+    VALIDATION_SCHEMA_INVALID: "Belge yapısı veya şema doğrulaması başarısız.",
+    HASH_MISMATCH: "Veri bütünlüğü doğrulaması uyuşmadı (SHA256).",
+    CANONICAL_LINE_MISSING: "Kanonik veri dosyasında ilgili kayıt satırı bulunamadı.",
+    DUPLICATE_ITEM: "Aynı içerikli mükerrer kayıt tespit edildi.",
+    PARSER_ERROR: "Belge içeriği ayrıştırılırken hata oluştu.",
+    BLOCKING_ISSUES_EXIST: "Çözülmesi gereken doğrulama sorunları bulunuyor.",
+  };
+  return codeMap[code] || message || "Doğrulama sorunu tespit edildi.";
 }
 
 function escapeHtml(str) {
@@ -116,10 +165,10 @@ function setBusy(isBusy) {
 function statusBadge(statusStr) {
   const label = humanTerm(statusStr);
   let badgeClass = "badge-neutral";
-  if (["approved", "verified", "published", "imported", "succeeded", "up_to_date", "valid"].includes(statusStr)) badgeClass = "badge-success";
-  if (["needs_review", "pending", "running", "warning"].includes(statusStr)) badgeClass = "badge-warning";
-  if (["rejected", "failed", "revoked", "invalid", "attention"].includes(statusStr)) badgeClass = "badge-danger";
-  if (["fetched", "queued", "paused"].includes(statusStr)) badgeClass = "badge-info";
+  if (["approved", "verified", "published", "imported", "succeeded", "up_to_date", "valid", "resolved"].includes(statusStr)) badgeClass = "badge-success";
+  if (["needs_review", "pending", "running", "warning", "open"].includes(statusStr)) badgeClass = "badge-warning";
+  if (["rejected", "failed", "revoked", "invalid", "attention", "blocker", "critical"].includes(statusStr)) badgeClass = "badge-danger";
+  if (["fetched", "queued", "paused", "info", "low"].includes(statusStr)) badgeClass = "badge-info";
 
   return `<span class="badge ${badgeClass}">${escapeHtml(label)}</span>`;
 }
@@ -611,8 +660,23 @@ async function loadLibraryView() {
     tbody.innerHTML = "";
 
     if (items.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">Kayıtlı belge bulunamadı.</td></tr>`;
-      document.getElementById("lbl-lib-page").textContent = "Sayfa 1 / 1";
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="6" class="empty-state">
+            <div class="empty-state-card" style="padding: 30px; text-align: center;">
+              <h4 style="margin: 0 0 6px 0; font-size: 15px;">Henüz kütüphanenizde belge yok</h4>
+              <p style="margin: 0 0 14px 0; color: var(--color-text-secondary); font-size: 13px;">Resmî Gazete'den veri toplayabilir veya kendi belgenizi ekleyebilirsiniz.</p>
+              <div style="display: flex; gap: 10px; justify-content: center;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="switchView('collect')">Veri Topla</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="switchView('collect'); setTimeout(() => { document.querySelector('[data-tab=\&quot;tab-manual-file\&quot;]')?.click(); document.getElementById('manual-ingestion-box')?.scrollIntoView({behavior:'smooth'}); }, 100);">Dosya Yükle</button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      `;
+      document.getElementById("lbl-lib-page").textContent = "Sayfa 1 / 1 (0 Belge)";
+      document.getElementById("btn-lib-prev").disabled = true;
+      document.getElementById("btn-lib-next").disabled = true;
       return;
     }
 
@@ -701,7 +765,20 @@ async function loadReviewView() {
       tbody.innerHTML = "";
 
       if (items.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="empty-state">İnceleme bekleyen kayıt bulunmamaktadır.</td></tr>`;
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" class="empty-state">
+              <div class="empty-state-card" style="padding: 30px; text-align: center;">
+                <h4 style="margin: 0 0 6px 0; font-size: 15px;">Şu anda inceleme bekleyen kayıt yok</h4>
+                <p style="margin: 0 0 14px 0; color: var(--color-text-secondary); font-size: 13px;">Hazır verilerinizi dışa aktarabilir veya yeni veri toplamaya devam edebilirsiniz.</p>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                  <button type="button" class="btn btn-primary btn-sm" onclick="switchView('export')">Dışa Aktar</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="switchView('collect')">Veri Topla</button>
+                </div>
+              </div>
+            </td>
+          </tr>
+        `;
         return;
       }
 
@@ -723,30 +800,100 @@ async function loadReviewView() {
       document.getElementById("review-tab-pending").classList.add("hidden");
       document.getElementById("review-tab-issues").classList.remove("hidden");
 
-      const res = await apiRequest("/api/issues");
-      const items = res.items || [];
+      let url = "/api/issues";
+      if (state.issueFilterSubjectId) {
+        url += `?subject_id=${encodeURIComponent(state.issueFilterSubjectId)}`;
+      }
+
+      const res = await apiRequest(url);
+      const items = Array.isArray(res) ? res : (res?.items || []);
       const tbody = document.getElementById("tbl-issues-list");
       tbody.innerHTML = "";
 
       if (items.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">Açık sorun bulunmamaktadır.</td></tr>`;
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" class="empty-state">
+              <div class="empty-state-card" style="padding: 30px; text-align: center;">
+                <h4 style="margin: 0 0 6px 0; font-size: 15px;">Çözülmesi gereken sorun yok</h4>
+                <p style="margin: 0; color: var(--color-text-secondary); font-size: 13px;">Sistem şu anda kullanıcı müdahalesi gerektiren bir sorun bildirmiyor.</p>
+                ${state.issueFilterSubjectId ? `<div style="margin-top: 12px;"><button type="button" class="btn btn-sm btn-secondary" onclick="state.issueFilterSubjectId=null; loadReviewView();">Tüm Sorunları Göster</button></div>` : ""}
+              </div>
+            </td>
+          </tr>
+        `;
         return;
       }
 
       items.forEach((iss) => {
         const tr = document.createElement("tr");
+        const docTitle = iss.document_title || iss.subject_id || "Belirtilmemiş";
+        const issueMsg = humanIssueMessage(iss.code, iss.message);
+        const statusLabel = iss.status === "resolved" ? "Çözüldü" : "Çözüm bekliyor";
+        const statusBadgeHtml = iss.status === "resolved" ? `<span class="badge badge-success">${statusLabel}</span>` : `<span class="badge badge-warning">${statusLabel}</span>`;
+
+        let actionHtml = "";
+        if (iss.subject_type === "record" || iss.subject_id?.startsWith("rec-")) {
+          actionHtml += `<button type="button" class="btn btn-sm btn-secondary" onclick="openRecordReviewModal('${escapeHtml(iss.subject_id)}')">Kaydı İncele</button> `;
+        } else if (iss.subject_type === "document" || iss.subject_id?.startsWith("tr:")) {
+          actionHtml += `<button type="button" class="btn btn-sm btn-secondary" onclick="viewDocDetail('${escapeHtml(iss.subject_id)}')">Belgeyi Gör</button> `;
+        }
+        if (iss.status === "open") {
+          actionHtml += `<button type="button" class="btn btn-sm btn-outline" onclick="resolveIssueAction('${escapeHtml(iss.issue_id)}')">Çözüldü İşaretle</button>`;
+        }
+
         tr.innerHTML = `
-          <td><strong>${escapeHtml(iss.target_id || iss.document_id || "-")}</strong></td>
-          <td><span class="badge badge-danger">${escapeHtml(iss.severity || "error")}</span></td>
-          <td><code>${escapeHtml(iss.issue_code || "-")}</code></td>
-          <td>${escapeHtml(iss.message || "")}</td>
-          <td>${statusBadge(iss.status || "open")}</td>
+          <td>
+            <strong>${escapeHtml(docTitle)}</strong>
+            <div style="font-size: 12px; color: var(--color-text-secondary);">${humanTerm(iss.subject_type || "kayıt")}</div>
+          </td>
+          <td>
+            <div>${escapeHtml(issueMsg)}</div>
+            <details class="technical-details" style="margin-top: 4px;">
+              <summary style="font-size: 11px;">Teknik ayrıntılar</summary>
+              <div class="technical-details-content" style="font-size: 11px; padding: 4px 8px;">
+                <code>${escapeHtml(iss.code || "-")}</code> · ID: <code class="mono">${escapeHtml(iss.issue_id)}</code>
+              </div>
+            </details>
+          </td>
+          <td>${humanSeverityBadge(iss.severity)}</td>
+          <td>${statusBadgeHtml}</td>
+          <td><div style="display: flex; flex-wrap: wrap; gap: 4px;">${actionHtml || "-"}</div></td>
         `;
         tbody.appendChild(tr);
       });
     }
   } catch (err) {
     console.error("Review view error:", err);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function showRecordIssues(recordId) {
+  closeModal("modal-record-detail");
+  state.activeReviewTab = "issues";
+  state.issueFilterSubjectId = recordId;
+  switchView("review");
+}
+
+async function resolveIssueAction(issueId) {
+  setBusy(true);
+  try {
+    await apiRequest(`/api/issues/${encodeURIComponent(issueId)}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "resolved",
+        resolved_by: sessionStorage.getItem("mesa_actor") || "web-user",
+        resolution_note: "Kullanıcı arayüzünden manuel çözüldü olarak işaretlendi.",
+      }),
+    });
+    showToast("Sorun başarıyla çözüldü olarak işaretlendi.", "success");
+    await loadReviewView();
+  } catch (err) {
+    console.error("Resolve issue error:", err);
+    showToast("Sorun durumu güncellenemedi. İşlem kaydedilmedi.", "danger");
   } finally {
     setBusy(false);
   }
@@ -817,6 +964,30 @@ async function handleRecordDecision(decision) {
     await loadReviewView();
   } catch (err) {
     console.error("Record decision error:", err);
+    const errStr = String(err.message || "");
+    const isBlocker = errStr.includes("çözülmesi gereken") || errStr.includes("blocker") || errStr.includes("BLOCKING_ISSUES_EXIST");
+    if (isBlocker) {
+      showToast("Bu kayıt henüz onaylanamaz. Çözülmesi gereken doğrulama sorunları bulunuyor.", "danger");
+      const modalBody = document.getElementById("record-modal-body");
+      if (modalBody) {
+        let blockerNotice = document.getElementById("record-blocker-notice");
+        if (!blockerNotice) {
+          blockerNotice = document.createElement("div");
+          blockerNotice.id = "record-blocker-notice";
+          blockerNotice.style.cssText = "margin-top: 12px; padding: 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid var(--color-danger); border-radius: 6px;";
+          modalBody.appendChild(blockerNotice);
+        }
+        blockerNotice.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+            <div>
+              <strong style="color: var(--color-danger);">Bu kayıt henüz onaylanamaz.</strong>
+              <div style="font-size: 13px; color: var(--color-text-secondary); margin-top: 2px;">Çözülmesi gereken doğrulama sorunları bulunuyor.</div>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" onclick="showRecordIssues('${escapeHtml(state.currentRecordId)}')">Sorunları Gör</button>
+          </div>
+        `;
+      }
+    }
   } finally {
     setBusy(false);
   }
@@ -826,7 +997,52 @@ async function handleRecordDecision(decision) {
 async function loadExportView() {
   setBusy(true);
   try {
-    const exportsList = await apiRequest("/api/exports");
+    const [exportsList, stats] = await Promise.all([
+      apiRequest("/api/exports"),
+      apiRequest("/api/dashboard/stats").catch(() => null),
+    ]);
+
+    const approvedCount = stats?.counts?.approved_records || 0;
+    const btnCreateExport = document.getElementById("btn-export-create");
+    const btnMesaTransfer = document.getElementById("btn-mesa-transfer");
+
+    let emptyNotice = document.getElementById("export-empty-notice");
+    if (approvedCount === 0) {
+      if (!emptyNotice) {
+        emptyNotice = document.createElement("div");
+        emptyNotice.id = "export-empty-notice";
+        emptyNotice.style.cssText = "margin-bottom: 16px; padding: 14px 18px; border-left: 4px solid var(--color-warning); background: var(--color-surface-subtle); border-radius: 6px;";
+        const exportPanel = document.getElementById("view-export");
+        if (exportPanel) exportPanel.insertBefore(emptyNotice, exportPanel.firstChild);
+      }
+      emptyNotice.innerHTML = `
+        <h4 style="margin: 0 0 4px 0; font-size: 14px;">Henüz dışa aktarılabilecek hazır kayıt yok</h4>
+        <p style="margin: 0 0 10px 0; font-size: 13px; color: var(--color-text-secondary);">Dışa aktarma yapabilmek için önce veri toplayın ve gerekiyorsa inceleme adımını tamamlayın.</p>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn btn-primary btn-sm" onclick="switchView('collect')">Veri Topla</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="switchView('review')">İncelemeye Git</button>
+        </div>
+      `;
+      if (btnCreateExport) {
+        btnCreateExport.disabled = true;
+        btnCreateExport.title = "Dışa aktarma oluşturmak için önce en az 1 onaylanmış kayıt gereklidir.";
+      }
+      if (btnMesaTransfer) {
+        btnMesaTransfer.disabled = true;
+        btnMesaTransfer.title = "MESA transferi için önce en az 1 onaylanmış kayıt gereklidir.";
+      }
+    } else {
+      if (emptyNotice) emptyNotice.remove();
+      if (btnCreateExport) {
+        btnCreateExport.disabled = false;
+        btnCreateExport.title = "";
+      }
+      if (btnMesaTransfer) {
+        btnMesaTransfer.disabled = false;
+        btnMesaTransfer.title = "";
+      }
+    }
+
     const tbody = document.getElementById("tbl-exports");
     tbody.innerHTML = "";
 
@@ -1074,7 +1290,7 @@ async function importRelease(releaseId) {
 async function loadOperationsView() {
   setBusy(true);
   try {
-    const ops = await apiRequest("/api/operations");
+    const ops = await apiRequest("/api/operations/jobs");
     const tbody = document.getElementById("tbl-operations");
     tbody.innerHTML = "";
 
@@ -1086,12 +1302,12 @@ async function loadOperationsView() {
     ops.forEach((op) => {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td><code class="mono">${escapeHtml(op.operation_id)}</code></td>
-        <td>${humanTerm(op.operation_type)}</td>
+        <td><code class="mono">${escapeHtml(op.operation_id || op.job_id || "-")}</code></td>
+        <td>${humanTerm(op.operation_type || op.source_id)}</td>
         <td>${statusBadge(op.status)}</td>
-        <td>${op.progress_current !== null ? `${op.progress_current}%` : "-"}</td>
-        <td>${friendlyDate(op.created_at)}</td>
-        <td>${friendlyDate(op.completed_at)}</td>
+        <td>${op.progress_current !== null && op.progress_current !== undefined ? `${op.progress_current}%` : "-"}</td>
+        <td>${friendlyDate(op.created_at || op.started_at)}</td>
+        <td>${friendlyDate(op.finished_at || op.completed_at)}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -1227,6 +1443,14 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const btnSysToken = document.getElementById("btn-sys-token");
+  if (btnSysToken) {
+    btnSysToken.addEventListener("click", () => {
+      document.getElementById("txt-token-input").value = state.token;
+      showModal("modal-token");
+    });
+  }
+
   const btnSaveToken = document.getElementById("btn-save-token");
   if (btnSaveToken) {
     btnSaveToken.addEventListener("click", () => {
@@ -1291,6 +1515,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const sourceId = document.getElementById("file-source").value;
       const docType = document.getElementById("file-doc-type").value;
+      if (!sourceId) {
+        showToast("Lütfen belgenin kaynağını seçin.", "warning");
+        document.getElementById("file-source")?.focus();
+        return;
+      }
+      if (!docType) {
+        showToast("Lütfen belge türünü seçin.", "warning");
+        document.getElementById("file-doc-type")?.focus();
+        return;
+      }
+
       const title = document.getElementById("file-title").value.trim();
       const docNum = document.getElementById("file-doc-number")?.value.trim();
       const customDocId = document.getElementById("file-doc-id")?.value.trim();
@@ -1335,6 +1570,17 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       const sourceId = document.getElementById("url-source").value;
       const docType = document.getElementById("url-doc-type").value;
+      if (!sourceId) {
+        showToast("Lütfen belgenin kaynağını seçin.", "warning");
+        document.getElementById("url-source")?.focus();
+        return;
+      }
+      if (!docType) {
+        showToast("Lütfen belge türünü seçin.", "warning");
+        document.getElementById("url-doc-type")?.focus();
+        return;
+      }
+
       const url = document.getElementById("url-input").value.trim();
       const title = document.getElementById("url-title").value.trim();
       const docNum = document.getElementById("url-doc-number")?.value.trim();

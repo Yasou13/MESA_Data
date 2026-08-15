@@ -298,6 +298,203 @@ def test_regression_mux_cert_003_harvest_document_type_filtering(client):
     assert "presidential_decree" not in src_cfg.selection.allowed_document_types
 
 
+def test_issues_contract_and_resolution(client):
+    """Test A & B: Verify /api/issues contract, document_title join, and issue resolution workflow."""
+    from datetime import UTC, datetime
+
+    from mesa_legal_data.catalog import get_connection, open_issue
+
+    now = datetime.now(UTC).isoformat()
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO documents (document_id, family, document_type, jurisdiction, title, stable_key, lifecycle_status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "tr:legislation:law:5000",
+                "legislation",
+                "law",
+                "TR",
+                "Örnek Test Kanunu",
+                "test-key-5000",
+                "active",
+                now,
+                now,
+            ),
+        )
+    open_issue(
+        conn,
+        issue_id="iss-test-001",
+        subject_type="document",
+        subject_id="tr:legislation:law:5000",
+        severity="blocker",
+        code="VALIDATION_DATE_MISSING",
+        message="Validation error in date",
+        details_json="{}",
+    )
+    conn.close()
+
+    # 1. Fetch issues list (frontend receives direct list)
+    res = client.get("/api/issues")
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert isinstance(data, list)
+    assert len(data) >= 1
+
+    matched = [i for i in data if i["issue_id"] == "iss-test-001"]
+    assert len(matched) == 1
+    iss = matched[0]
+    assert iss["subject_id"] == "tr:legislation:law:5000"
+    assert iss["code"] == "VALIDATION_DATE_MISSING"
+    assert iss["severity"] == "blocker"
+    assert iss["status"] == "open"
+    assert iss["document_title"] == "Örnek Test Kanunu"
+
+    # 2. Resolve issue via endpoint
+    resolve_res = client.post(
+        "/api/issues/iss-test-001/resolve",
+        json={"status": "resolved", "resolved_by": "test-user", "resolution_note": "Sorun düzeltildi."},
+    )
+    assert resolve_res.status_code == 200
+    assert resolve_res.json()["data"]["status"] == "resolved"
+
+    # 3. Verify resolved issue status
+    res_resolved = client.get("/api/issues?status=resolved")
+    assert res_resolved.status_code == 200
+    resolved_ids = [i["issue_id"] for i in res_resolved.json()["data"]]
+    assert "iss-test-001" in resolved_ids
+
+
+def test_blocked_record_approval_ux_contract(client):
+    """Test C & E: Verify blocker approval returns human-readable Turkish error with BLOCKING_ISSUES_EXIST."""
+    from datetime import UTC, datetime
+
+    from mesa_legal_data.catalog import (
+        get_connection,
+        insert_artifact,
+        insert_record,
+        insert_version,
+        open_issue,
+    )
+
+    now = datetime.now(UTC).isoformat()
+    conn = get_connection()
+    doc_id = "tr:legislation:law:blocked1"
+    art_id = "art-blocked-001"
+    ver_id = "ver-blocked-001"
+    record_id = "rec-blocked-test-001"
+
+    with conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO documents (document_id, family, document_type, jurisdiction, title, stable_key, lifecycle_status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (doc_id, "legislation", "law", "TR", "Bloke Kanun", "key-blocked", "active", now, now),
+        )
+    insert_artifact(
+        conn,
+        art_id,
+        doc_id,
+        "resmi_gazete",
+        "https://resmigazete.gov.tr/blocked",
+        now,
+        "manual",
+        200,
+        "text/html",
+        "text/html",
+        100,
+        "sha256-art",
+        "raw/blocked.html",
+        None,
+        None,
+        "fetched",
+        None,
+        "{}",
+    )
+    insert_version(
+        conn,
+        ver_id,
+        doc_id,
+        art_id,
+        "full",
+        None,
+        None,
+        None,
+        "canonical/blocked.jsonl",
+        1,
+        "sha256-can",
+        "rg_parser",
+        "1.0.0",
+        "1.0.0",
+        "needs_review",
+        "clean",
+        "pending",
+    )
+    insert_record(
+        conn,
+        record_id=record_id,
+        version_id=ver_id,
+        record_type="law",
+        canonical_path="canonical/blocked.jsonl",
+        canonical_line=1,
+        record_sha256="sha-test",
+        validation_status="needs_review",
+        approval_status="pending",
+    )
+    open_issue(
+        conn,
+        issue_id="iss-blocker-001",
+        subject_type="record",
+        subject_id=record_id,
+        severity="blocker",
+        code="BLOCKING_ISSUES_EXIST",
+        message="Open blocker issues exist for record",
+        details_json="{}",
+    )
+    conn.close()
+
+    # Attempt to approve
+    approve_res = client.post(
+        f"/api/reviews/records/{record_id}/approve",
+        json={"reviewer": "test-reviewer", "note": "Attempt approval"},
+    )
+    assert approve_res.status_code == 400
+    err = approve_res.json()["error"]
+    assert err["code"] == "BLOCKING_ISSUES_EXIST"
+    assert "Bu kayıt henüz onaylanamaz" in err["message"]
+    assert "Çözülmesi gereken doğrulama sorunları bulunuyor" in err["message"]
+
+
+def test_operations_jobs_contract(client):
+    """Test I: Verify /api/operations/jobs endpoint exists and returns finished_at."""
+    from datetime import UTC, datetime
+
+    from mesa_legal_data.catalog import create_operation_job, get_connection, update_operation_job
+
+    now = datetime.now(UTC).isoformat()
+    conn = get_connection()
+    job_id = "op_test_contract_01"
+    create_operation_job(
+        conn,
+        operation_type="harvest_collection",
+        requested_by="web-user",
+        input_json="{}",
+        operation_id=job_id,
+    )
+    update_operation_job(conn, job_id, status="succeeded", progress_current=100, finished_at=now)
+    conn.close()
+
+    res = client.get("/api/operations/jobs")
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    job = [j for j in data if j["operation_id"] == job_id][0]
+    assert "finished_at" in job
+    assert "created_at" in job
+    assert "status" in job
+    assert job["status"] == "succeeded"
+
+
 def test_frontend_api_contract_guard():
     """Contract guard verifying all critical endpoints called by app.js exist."""
     from mesa_legal_data.web.api import router
@@ -324,6 +521,13 @@ def test_frontend_api_contract_guard():
         ("/api/releases/{release_id}/publish", "POST"),
         ("/api/releases/{release_id:path}/import-staging", "POST"),
         ("/api/audit-events", "GET"),
+        ("/api/issues", "GET"),
+        ("/api/issues/{issue_id:path}/resolve", "POST"),
+        ("/api/operations/jobs", "GET"),
+        ("/api/records/{record_id:path}/approve", "POST"),
+        ("/api/records/{record_id:path}/reject", "POST"),
+        ("/api/reviews/records/{record_id:path}/approve", "POST"),
+        ("/api/reviews/records/{record_id:path}/reject", "POST"),
     ]
 
     for path, method in critical_frontend_routes:

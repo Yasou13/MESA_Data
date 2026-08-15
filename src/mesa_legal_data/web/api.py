@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 
 from mesa_legal_data.audit import backup_catalog, log_audit_event, run_doctor_check
 from mesa_legal_data.catalog import (
+    BlockingValidationIssueExists,
     approve_record_with_checks,
     approve_version_streaming,
     get_artifact,
@@ -19,6 +20,7 @@ from mesa_legal_data.catalog import (
     get_release,
     list_open_blocking_issues,
     reject_record_with_checks,
+    resolve_issue,
 )
 from mesa_legal_data.config import load_settings, load_sources
 from mesa_legal_data.pipeline import process_artifact_pipeline
@@ -36,6 +38,7 @@ from mesa_legal_data.release.importer import (
 from mesa_legal_data.sources import import_manual_file, import_manual_url
 from mesa_legal_data.web.schemas import (
     HarvestStartRequest,
+    IssueResolveRequest,
     ReleaseCreateRequest,
     ReviewRequest,
     RevokeRequest,
@@ -1160,6 +1163,13 @@ async def approve_record(record_id: str, req: ReviewRequest):
         try:
             res = approve_record_with_checks(conn, record_id, req.reviewer, req.note)
             return ok_response(res)
+        except BlockingValidationIssueExists as e:
+            error_response(
+                "BLOCKING_ISSUES_EXIST",
+                "Bu kayıt henüz onaylanamaz. Çözülmesi gereken doğrulama sorunları bulunuyor.",
+                status_code=400,
+                details={"record_id": record_id, "error": str(e)},
+            )
         except Exception as e:
             error_response("REVIEW_FAILED", str(e), status_code=400)
         finally:
@@ -1207,21 +1217,27 @@ def list_issues(
     where_clauses = []
     params = []
     if status:
-        where_clauses.append("status = ?")
+        where_clauses.append("v.status = ?")
         params.append(status)
     if severity:
-        where_clauses.append("severity = ?")
+        where_clauses.append("v.severity = ?")
         params.append(severity)
     if subject_type:
-        where_clauses.append("subject_type = ?")
+        where_clauses.append("v.subject_type = ?")
         params.append(subject_type)
     if subject_id:
-        where_clauses.append("subject_id = ?")
+        where_clauses.append("v.subject_id = ?")
         params.append(subject_id)
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     c.execute(
-        f"SELECT issue_id, subject_type, subject_id, severity, code, message, status, opened_at FROM validation_issues {where_sql} ORDER BY opened_at DESC",
+        f"""SELECT v.issue_id, v.subject_type, v.subject_id, v.severity, v.code, v.message, v.status, v.opened_at,
+                   COALESCE(
+                       (SELECT d.title FROM documents d WHERE d.document_id = v.subject_id),
+                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id WHERE ver.version_id = v.subject_id),
+                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id)
+                   ) AS document_title
+            FROM validation_issues v {where_sql} ORDER BY v.opened_at DESC""",
         params,
     )
     issues = [
@@ -1234,11 +1250,26 @@ def list_issues(
             "message": r[5],
             "status": r[6],
             "opened_at": r[7],
+            "document_title": r[8],
         }
         for r in c.fetchall()
     ]
     conn.close()
     return ok_response(issues)
+
+
+@router.post("/issues/{issue_id:path}/resolve")
+async def resolve_issue_endpoint(issue_id: str, req: Optional[IssueResolveRequest] = None):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            status = req.status if req else "resolved"
+            resolved_by = req.resolved_by if req and req.resolved_by else "web-user"
+            note = req.resolution_note if req else None
+            resolve_issue(conn, issue_id=issue_id, status=status, resolved_by=resolved_by, resolution_note=note)
+            return ok_response({"issue_id": issue_id, "status": status})
+        finally:
+            conn.close()
 
 
 # 8.9 Releases

@@ -53,3 +53,10 @@ class HarvestStartRequest(BaseModel):
     source_id: str = "resmi_gazete"
     start_date: Optional[str] = None
     document_types: Optional[list[str]] = None
+
+
+class IssueResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field(default="resolved")
+    resolved_by: str = Field(default="web-user")
+    resolution_note: Optional[str] = Field(default=None, max_length=2000)

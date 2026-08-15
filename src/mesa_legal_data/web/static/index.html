@@ -94,7 +94,7 @@
             <option value="light">Açık Tema</option>
             <option value="dark">Koyu Tema (Siyah)</option>
           </select>
-          <button id="btn-token" class="btn btn-secondary admin-access-btn" type="button" aria-label="Yönetici erişimini ayarla">
+          <button id="btn-token" class="btn btn-secondary admin-access-btn hidden" type="button" aria-label="Yönetici erişimini ayarla">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.778-7.778zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
             <span class="admin-access-label">Yönetici Erişimi</span>
           </button>
@@ -354,6 +354,7 @@
                 <div class="form-group">
                   <label for="file-source">Kaynak</label>
                   <select id="file-source" required>
+                    <option value="" disabled selected>— Kaynak seçin —</option>
                     <option value="resmi_gazete">T.C. Resmî Gazete</option>
                     <option value="mevzuat">Mevzuat Bilgi Sistemi</option>
                     <option value="aym">Anayasa Mahkemesi</option>
@@ -362,6 +363,7 @@
                 <div class="form-group">
                   <label for="file-doc-type">Belge Türü</label>
                   <select id="file-doc-type" required>
+                    <option value="" disabled selected>— Belge türünü seçin —</option>
                     <option value="law">Kanun</option>
                     <option value="presidential_decree">Cumhurbaşkanlığı Kararnamesi</option>
                     <option value="presidential_decision">Cumhurbaşkanı Kararı</option>
@@ -389,7 +391,7 @@
               </div>
 
               <details class="technical-details">
-                <summary>Gelişmiş belge kimliği (Opsiyonel)</label></summary>
+                <summary>Gelişmiş belge kimliği (Opsiyonel)</summary>
                 <div class="technical-details-content">
                   <input type="text" id="file-doc-id" placeholder="tr:legislation:law:4721">
                   <span class="form-help">Boş bırakılırsa belge türü ve numarasından otomatik oluşturulur.</span>
@@ -407,6 +409,7 @@
                 <div class="form-group">
                   <label for="url-source">Kaynak</label>
                   <select id="url-source" required>
+                    <option value="" disabled selected>— Kaynak seçin —</option>
                     <option value="mevzuat">Mevzuat Bilgi Sistemi (https://www.mevzuat.gov.tr)</option>
                     <option value="resmi_gazete">T.C. Resmî Gazete (https://www.resmigazete.gov.tr)</option>
                   </select>
@@ -414,6 +417,7 @@
                 <div class="form-group">
                   <label for="url-doc-type">Belge Türü</label>
                   <select id="url-doc-type" required>
+                    <option value="" disabled selected>— Belge türünü seçin —</option>
                     <option value="law">Kanun</option>
                     <option value="regulation">Yönetmelik</option>
                     <option value="communique">Tebliğ</option>
@@ -529,11 +533,11 @@
                 <table class="data-table">
                   <thead>
                     <tr>
-                      <th>Konu</th>
-                      <th>Önem</th>
-                      <th>Kod</th>
-                      <th>Mesaj</th>
+                      <th>Belge / Konu</th>
+                      <th>Sorun Açıklaması</th>
+                      <th>Önem Derecesi</th>
                       <th>Durum</th>
+                      <th>İşlem</th>
                     </tr>
                   </thead>
                   <tbody id="tbl-issues-list"></tbody>
@@ -726,6 +730,12 @@
               <button id="btn-sys-backup" class="btn btn-secondary">Catalog Backup Al</button>
             </div>
             <pre id="sys-status-output" class="code-box" style="margin-top: 14px; padding: 14px; background: var(--color-surface-subtle); border-radius: 6px; overflow-x: auto;">Yükleniyor...</pre>
+          </div>
+
+          <div class="panel-box" style="margin-top: 14px;">
+            <h3>Yönetici Erişimi (Admin Token)</h3>
+            <p style="font-size: 13px; color: var(--color-text-secondary);">Sunucu güvenliği veya yetkili API erişimi için admin token yapılandırması.</p>
+            <button id="btn-sys-token" class="btn btn-secondary" style="margin-top: 8px;">Yönetici Token'ı Ayarla</button>
           </div>
         </section>
 
