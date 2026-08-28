@@ -75,3 +75,19 @@ class ParserCertifyRequest(BaseModel):
     parser_version: str = Field(min_length=1, max_length=50)
     certified: bool = True
     certified_by: Optional[str] = Field(default="operator", max_length=100)
+
+
+class MesaTargetSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str = Field(min_length=5, max_length=500)
+    tenant_id: str = Field(min_length=1, max_length=100)
+    workspace_id: str = Field(min_length=1, max_length=100)
+    dataset_id: str = Field(min_length=1, max_length=100)
+    agent_id: str = Field(min_length=1, max_length=100)
+    content_limit_chars: int = Field(default=32768, ge=1024, le=1048576)
+
+
+class MesaPublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_key: str = Field(default="default")
+    release_id: Optional[str] = None

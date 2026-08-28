@@ -20,6 +20,7 @@ SUPPORTED_OPERATION_TYPES = {
     "release_build",
     "integrity_audit",
     "harvest_collection",
+    "mesa_v4_delivery",
 }
 
 _cancelled_jobs: set[str] = set()
@@ -203,6 +204,41 @@ def _run_operation_task(operation_id: str):
                     progress_current=100,
                     result_json=json.dumps(res),
                 )
+        elif op_type == "mesa_v4_delivery":
+            from mesa_legal_data.publisher.engine import execute_publish_delivery
+
+            del_id = inp.get("delivery_id")
+            rel_id = inp.get("release_id")
+            target_key = inp.get("target_key", "default")
+
+            def progress_cb(prog: dict[str, Any]) -> None:
+                if not is_cancelled(operation_id):
+                    tot = max(1, prog.get("total", 1))
+                    proc = prog.get("processed", 0)
+                    pct = int((proc / tot) * 100)
+                    update_operation_job(
+                        conn,
+                        operation_id,
+                        status="running",
+                        progress_current=min(99, max(5, pct)),
+                    )
+
+            res = execute_publish_delivery(
+                delivery_id=del_id,
+                release_id=rel_id,
+                target_key=target_key,
+                progress_callback=progress_cb,
+            )
+
+            status_str = "succeeded" if res.get("status") in ("COMMITTED", "PARTIAL") else "failed"
+            update_operation_job(
+                conn,
+                operation_id,
+                status=status_str,
+                progress_current=100,
+                result_json=json.dumps(res),
+                error_summary=res.get("last_error"),
+            )
         else:
             raise ValueError(f"OPERATION_TYPE_NOT_SUPPORTED: Operation type '{op_type}' is not supported")
     except Exception as exc:

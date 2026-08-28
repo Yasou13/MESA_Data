@@ -846,6 +846,17 @@ async function viewDocDetail(documentId) {
       `;
     }
 
+    let mesaStatusBadge = `<span class="badge badge-neutral">MESA: Not Sent</span>`;
+    try {
+      const mesaRes = await apiRequest(`/api/documents/${encodeURIComponent(documentId)}/mesa-status`);
+      const st = mesaRes.status || "Not Sent";
+      if (st === "Committed") mesaStatusBadge = `<span class="badge badge-success">MESA: Committed</span>`;
+      else if (st === "Sending") mesaStatusBadge = `<span class="badge badge-info">MESA: Sending</span>`;
+      else if (st === "Partial") mesaStatusBadge = `<span class="badge badge-warning">MESA: Partial</span>`;
+      else if (st === "Failed") mesaStatusBadge = `<span class="badge badge-danger">MESA: Failed</span>`;
+      else mesaStatusBadge = `<span class="badge badge-neutral">MESA: Not Sent</span>`;
+    } catch (e) {}
+
     const modalBody = document.getElementById("doc-modal-body");
     modalBody.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
@@ -854,6 +865,7 @@ async function viewDocDetail(documentId) {
           <span style="font-size: 13px; color: var(--color-text-secondary);">${humanTerm(sourceId)} · ${humanTerm(doc.document_type)}</span>
         </div>
         <div style="display: flex; gap: 6px; align-items: center;">
+          ${mesaStatusBadge}
           ${statusBadge(docStatus)}
           <button class="btn btn-sm btn-primary" onclick="reprocessDocument('${escapeHtml(doc.document_id)}')">Yeniden İşle</button>
         </div>
@@ -1445,84 +1457,423 @@ async function handleVersionBulkDecision(decision) {
   }
 }
 
-// --- 5. EXPORT VIEW ---
+// --- 5. EXPORT / PUBLISH VIEW ---
+let activeMesaDeliveryId = null;
+let mesaDeliveryPollInterval = null;
+
 async function loadExportView() {
   setBusy(true);
   try {
-    const [exportsList, stats] = await Promise.all([
-      apiRequest("/api/exports"),
-      apiRequest("/api/dashboard/stats").catch(() => null),
+    const [targetSettings, readySummary, deliveriesRes, exportsList] = await Promise.all([
+      apiRequest("/api/publisher/settings").catch(() => null),
+      apiRequest("/api/publisher/ready-summary").catch(() => null),
+      apiRequest("/api/publisher/deliveries?page=1&page_size=20").catch(() => ({ items: [] })),
+      apiRequest("/api/exports").catch(() => []),
     ]);
 
-    const approvedCount = stats?.counts?.approved_records || 0;
-    const btnCreateExport = document.getElementById("btn-export-create");
-    const btnMesaTransfer = document.getElementById("btn-mesa-transfer");
+    // 1. Populate Target Settings
+    if (targetSettings) {
+      const elUrl = document.getElementById("mesa-target-url");
+      const elTenant = document.getElementById("mesa-target-tenant");
+      const elWs = document.getElementById("mesa-target-workspace");
+      const elDs = document.getElementById("mesa-target-dataset");
+      const elAgent = document.getElementById("mesa-target-agent");
+      const elLimit = document.getElementById("mesa-target-limit");
+      const badgeKey = document.getElementById("badge-mesa-key");
 
-    let emptyNotice = document.getElementById("export-empty-notice");
-    if (approvedCount === 0) {
-      if (!emptyNotice) {
-        emptyNotice = document.createElement("div");
-        emptyNotice.id = "export-empty-notice";
-        emptyNotice.style.cssText = "margin-bottom: 16px; padding: 14px 18px; border-left: 4px solid var(--color-warning); background: var(--color-surface-subtle); border-radius: 6px;";
-        const exportPanel = document.getElementById("view-export");
-        if (exportPanel) exportPanel.insertBefore(emptyNotice, exportPanel.firstChild);
-      }
-      emptyNotice.innerHTML = `
-        <h4 style="margin: 0 0 4px 0; font-size: 14px;">Henüz dışa aktarılabilecek hazır kayıt yok</h4>
-        <p style="margin: 0 0 10px 0; font-size: 13px; color: var(--color-text-secondary);">Dışa aktarma yapabilmek için önce veri toplayın ve gerekiyorsa inceleme adımını tamamlayın.</p>
-        <div style="display: flex; gap: 8px;">
-          <button type="button" class="btn btn-primary btn-sm" onclick="switchView('collect')">Veri Topla</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="switchView('review')">İncelemeye Git</button>
-        </div>
-      `;
-      if (btnCreateExport) {
-        btnCreateExport.disabled = true;
-        btnCreateExport.title = "Dışa aktarma oluşturmak için önce en az 1 onaylanmış kayıt gereklidir.";
-      }
-      if (btnMesaTransfer) {
-        btnMesaTransfer.disabled = true;
-        btnMesaTransfer.title = "MESA transferi için önce en az 1 onaylanmış kayıt gereklidir.";
-      }
-    } else {
-      if (emptyNotice) emptyNotice.remove();
-      if (btnCreateExport) {
-        btnCreateExport.disabled = false;
-        btnCreateExport.title = "";
-      }
-      if (btnMesaTransfer) {
-        btnMesaTransfer.disabled = false;
-        btnMesaTransfer.title = "";
+      if (elUrl && targetSettings.base_url) elUrl.value = targetSettings.base_url;
+      if (elTenant && targetSettings.tenant_id) elTenant.value = targetSettings.tenant_id;
+      if (elWs && targetSettings.workspace_id) elWs.value = targetSettings.workspace_id;
+      if (elDs && targetSettings.dataset_id) elDs.value = targetSettings.dataset_id;
+      if (elAgent && targetSettings.agent_id) elAgent.value = targetSettings.agent_id;
+      if (elLimit && targetSettings.content_limit_chars) elLimit.value = targetSettings.content_limit_chars;
+
+      if (badgeKey) {
+        if (targetSettings.api_key_configured) {
+          badgeKey.className = "badge badge-success";
+          badgeKey.textContent = "API Key: Yapılandırıldı ✅";
+        } else {
+          badgeKey.className = "badge badge-warning";
+          badgeKey.textContent = "API Key: Yapılandırılmadı ❌";
+        }
       }
     }
 
-    const tbody = document.getElementById("tbl-exports");
-    tbody.innerHTML = "";
+    // 2. Populate Ready Summary Cards
+    if (readySummary) {
+      const setTxt = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+      };
+      setTxt("stat-mesa-ready-docs", readySummary.ready_documents ?? 0);
+      setTxt("stat-mesa-ready-vers", readySummary.ready_versions ?? 0);
+      setTxt("stat-mesa-ready-chunks", readySummary.estimated_chunks ?? 0);
+      const kb = Math.round((readySummary.total_canonical_bytes || 0) / 1024);
+      setTxt("stat-mesa-ready-bytes", `${kb} KB`);
+      setTxt("stat-mesa-ready-committed", readySummary.already_committed_chunks ?? 0);
+      setTxt("stat-mesa-ready-new", readySummary.new_chunks_to_send ?? 0);
 
-    if (!exportsList || exportsList.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">Henüz oluşturulan dışa aktarma paketi yok.</td></tr>`;
-      return;
+      const btnPub = document.getElementById("btn-mesa-publish-trigger");
+      if (btnPub) {
+        if ((readySummary.new_chunks_to_send ?? 0) === 0 && (readySummary.ready_versions ?? 0) === 0) {
+          btnPub.disabled = true;
+          btnPub.title = "Aktarılacak hazır versiyon bulunmuyor.";
+        } else {
+          btnPub.disabled = false;
+          btnPub.title = "";
+        }
+      }
     }
 
-    exportsList.forEach((exp) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><code class="mono">${escapeHtml(exp.export_id)}</code></td>
-        <td>${humanTerm(exp.export_type)}</td>
-        <td>${statusBadge(exp.status)}</td>
-        <td>${exp.record_count ? `${exp.record_count} Kayıt` : "-"}</td>
-        <td>${friendlyDate(exp.created_at)}</td>
-        <td>
-          <a class="btn btn-sm btn-secondary" href="/api/exports/${encodeURIComponent(exp.export_id)}/download" target="_blank" download>İndir</a>
-        </td>
-      `;
-      tbody.appendChild(tr);
-    });
+    // 3. Render Deliveries History Table
+    const tblDeliveries = document.getElementById("tbl-mesa-deliveries");
+    if (tblDeliveries) {
+      tblDeliveries.innerHTML = "";
+      const deliveries = deliveriesRes.items || [];
+      if (deliveries.length === 0) {
+        tblDeliveries.innerHTML = `<tr><td colspan="9" class="empty-state">Henüz MESA aktarım kaydı bulunmuyor.</td></tr>`;
+      } else {
+        deliveries.forEach((del) => {
+          let sBadge = `<span class="badge badge-info">${del.status}</span>`;
+          if (del.status === "COMMITTED") sBadge = `<span class="badge badge-success">COMMITTED</span>`;
+          else if (del.status === "PARTIAL") sBadge = `<span class="badge badge-warning">PARTIAL</span>`;
+          else if (del.status === "FAILED") sBadge = `<span class="badge badge-danger">FAILED</span>`;
+
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><a href="javascript:void(0)" onclick="openDeliveryDetailModal('${escapeHtml(del.delivery_id)}')"><code class="mono">${escapeHtml(del.delivery_id)}</code></a></td>
+            <td><code class="mono">${escapeHtml(del.target_key)}</code></td>
+            <td>${sBadge}</td>
+            <td>${del.total_items}</td>
+            <td><strong style="color: var(--color-success, green);">${del.committed_items}</strong></td>
+            <td><strong style="color: var(--color-danger, red);">${del.failed_items}</strong></td>
+            <td>${del.skipped_items}</td>
+            <td>${friendlyDate(del.started_at)}</td>
+            <td>
+              <button class="btn btn-sm btn-secondary" onclick="openDeliveryDetailModal('${escapeHtml(del.delivery_id)}')">Detay</button>
+            </td>
+          `;
+          tblDeliveries.appendChild(tr);
+        });
+      }
+    }
+
+    // 4. Render File Exports Table
+    const tbodyExp = document.getElementById("tbl-exports");
+    if (tbodyExp) {
+      tbodyExp.innerHTML = "";
+      if (!exportsList || exportsList.length === 0) {
+        tbodyExp.innerHTML = `<tr><td colspan="6" class="empty-state">Henüz oluşturulan dışa aktarma paketi yok.</td></tr>`;
+      } else {
+        exportsList.forEach((exp) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><code class="mono">${escapeHtml(exp.export_id)}</code></td>
+            <td>${humanTerm(exp.export_type)}</td>
+            <td>${statusBadge(exp.status)}</td>
+            <td>${exp.record_count ? `${exp.record_count} Kayıt` : "-"}</td>
+            <td>${friendlyDate(exp.created_at)}</td>
+            <td>
+              <a class="btn btn-sm btn-secondary" href="/api/exports/${encodeURIComponent(exp.export_id)}/download" target="_blank" download>İndir</a>
+            </td>
+          `;
+          tbodyExp.appendChild(tr);
+        });
+      }
+    }
   } catch (err) {
     console.error("Export view error:", err);
   } finally {
     setBusy(false);
   }
 }
+
+async function handleMesaSaveSettings() {
+  const url = document.getElementById("mesa-target-url")?.value.trim();
+  const tenant = document.getElementById("mesa-target-tenant")?.value.trim();
+  const ws = document.getElementById("mesa-target-workspace")?.value.trim();
+  const ds = document.getElementById("mesa-target-dataset")?.value.trim();
+  const agent = document.getElementById("mesa-target-agent")?.value.trim();
+  const limit = parseInt(document.getElementById("mesa-target-limit")?.value || "32768", 10);
+
+  if (!url || !tenant || !ws || !ds || !agent) {
+    showToast("Lütfen tüm zorunlu hedef alanlarını doldurunuz.", "warning");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const res = await apiRequest("/api/publisher/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        base_url: url,
+        tenant_id: tenant,
+        workspace_id: ws,
+        dataset_id: ds,
+        agent_id: agent,
+        content_limit_chars: limit,
+      }),
+    });
+    showToast("MESA hedef ayarları kaydedildi.", "success");
+    await loadExportView();
+  } catch (err) {
+    showToast(`Ayar kaydetme hatası: ${err.message || err}`, "danger");
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function handleMesaTestConnection() {
+  const badgeConn = document.getElementById("badge-mesa-conn");
+  if (badgeConn) {
+    badgeConn.className = "badge badge-neutral";
+    badgeConn.textContent = "Bağlantı test ediliyor...";
+  }
+
+  try {
+    const res = await apiRequest("/api/publisher/test-connection", { method: "POST" });
+    if (res.connected) {
+      if (badgeConn) {
+        badgeConn.className = "badge badge-success";
+        badgeConn.textContent = `Bağlandı (${res.latency_ms}ms) ✅`;
+      }
+      showToast(`MESA sunucusuna başarıyla bağlanıldı (${res.latency_ms}ms).`, "success");
+    } else {
+      if (badgeConn) {
+        badgeConn.className = "badge badge-danger";
+        badgeConn.textContent = "Bağlantı Başarısız ❌";
+      }
+      showToast(`Bağlantı başarısız: ${res.details || 'Erişilemedi'}`, "danger");
+    }
+  } catch (err) {
+    if (badgeConn) {
+      badgeConn.className = "badge badge-danger";
+      badgeConn.textContent = "Hata ❌";
+    }
+    showToast(`Bağlantı testi hatası: ${err.message || err}`, "danger");
+  }
+}
+
+async function handleMesaPreflight() {
+  const boxResults = document.getElementById("box-mesa-preflight-results");
+  const listItems = document.getElementById("list-mesa-preflight-items");
+
+  if (listItems) listItems.innerHTML = "<em>Kontroller yapılıyor...</em>";
+  if (boxResults) boxResults.classList.remove("hidden");
+
+  try {
+    const report = await apiRequest("/api/publisher/preflight", { method: "POST" });
+    if (listItems) {
+      listItems.innerHTML = report.checks.map((c) => {
+        let icon = "✅";
+        let color = "var(--color-success, green)";
+        if (c.status === "FAIL") {
+          icon = "❌";
+          color = "var(--color-danger, red)";
+        } else if (c.status === "WARN") {
+          icon = "⚠️";
+          color = "var(--color-warning, orange)";
+        }
+        return `<div style="display: flex; gap: 8px; align-items: center;">
+          <span>${icon}</span>
+          <strong style="color: ${color}; text-transform: uppercase; font-size: 11px;">[${c.name}]</strong>
+          <span>${escapeHtml(c.message)}</span>
+        </div>`;
+      }).join("");
+    }
+    if (report.overall_status === "PASS") {
+      showToast("Ön kontrol başarılı (PASS). MESA aktarımına hazır.", "success");
+    } else {
+      showToast("Ön kontrol başarısız (FAIL). Lütfen uyarıları gideriniz.", "warning");
+    }
+  } catch (err) {
+    if (listItems) listItems.innerHTML = `<span style="color: var(--color-danger, red);">Hata: ${escapeHtml(err.message || err)}</span>`;
+    showToast(`Ön kontrol hatası: ${err.message || err}`, "danger");
+  }
+}
+
+async function handleMesaPublishTrigger() {
+  try {
+    const summary = await apiRequest("/api/publisher/ready-summary");
+    const settings = await apiRequest("/api/publisher/settings");
+
+    const elDocs = document.getElementById("confirm-mesa-docs");
+    const elVers = document.getElementById("confirm-mesa-versions");
+    const elChunks = document.getElementById("confirm-mesa-chunks");
+    const elTarget = document.getElementById("confirm-mesa-target");
+
+    if (elDocs) elDocs.textContent = `${summary.ready_documents} belge`;
+    if (elVers) elVers.textContent = `${summary.ready_versions} versiyon`;
+    if (elChunks) elChunks.textContent = `${summary.estimated_chunks} chunk (${summary.new_chunks_to_send} yeni gönderilecek)`;
+    if (elTarget) elTarget.textContent = `${settings.tenant_id} / ${settings.workspace_id} / ${settings.dataset_id} (${settings.base_url})`;
+
+    showModal("modal-mesa-confirm");
+  } catch (err) {
+    showToast(`Özet yükleme hatası: ${err.message || err}`, "danger");
+  }
+}
+
+async function handleMesaConfirmPublish() {
+  hideModal("modal-mesa-confirm");
+  const boxProg = document.getElementById("box-mesa-delivery-progress");
+  const boxPartial = document.getElementById("box-mesa-partial-failure");
+
+  if (boxProg) boxProg.classList.remove("hidden");
+  if (boxPartial) boxPartial.classList.add("hidden");
+
+  try {
+    const res = await apiRequest("/api/publisher/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_key: "default" }),
+    });
+
+    activeMesaDeliveryId = res.delivery_id;
+    showToast(`MESA aktarımı başlatıldı (Teslimat: ${activeMesaDeliveryId}).`, "info");
+    startMesaDeliveryPolling(activeMesaDeliveryId);
+  } catch (err) {
+    showToast(`Aktarım başlatılamadı: ${err.message || err}`, "danger");
+  }
+}
+
+function startMesaDeliveryPolling(deliveryId) {
+  if (mesaDeliveryPollInterval) clearInterval(mesaDeliveryPollInterval);
+
+  mesaDeliveryPollInterval = setInterval(async () => {
+    try {
+      const res = await apiRequest(`/api/publisher/deliveries/${deliveryId}`);
+      const del = res.delivery;
+      if (!del) return;
+
+      const elStat = document.getElementById("txt-mesa-delivery-status");
+      const badgeState = document.getElementById("badge-mesa-delivery-state");
+      const valPlanned = document.getElementById("prog-val-planned");
+      const valCommitted = document.getElementById("prog-val-committed");
+      const valSkipped = document.getElementById("prog-val-skipped");
+      const valFailed = document.getElementById("prog-val-failed");
+      const boxPartial = document.getElementById("box-mesa-partial-failure");
+      const txtPartial = document.getElementById("txt-mesa-partial-msg");
+
+      if (valPlanned) valPlanned.textContent = del.total_items;
+      if (valCommitted) valCommitted.textContent = del.committed_items;
+      if (valSkipped) valSkipped.textContent = del.skipped_items;
+      if (valFailed) valFailed.textContent = del.failed_items;
+
+      if (badgeState) {
+        badgeState.textContent = del.status;
+        if (del.status === "COMMITTED") badgeState.className = "badge badge-success";
+        else if (del.status === "PARTIAL") badgeState.className = "badge badge-warning";
+        else if (del.status === "FAILED") badgeState.className = "badge badge-danger";
+        else badgeState.className = "badge badge-info";
+      }
+
+      if (del.status === "COMMITTED") {
+        clearInterval(mesaDeliveryPollInterval);
+        if (elStat) elStat.textContent = `MESA Aktarımı Tamamlandı: ${del.committed_items} COMMITTED, ${del.skipped_items} Atlandı ✅`;
+        showToast("MESA aktarımı başarıyla tamamlandı.", "success");
+        await loadExportView();
+      } else if (del.status === "PARTIAL") {
+        clearInterval(mesaDeliveryPollInterval);
+        if (elStat) elStat.textContent = `MESA Aktarımı Kısmi Başarılı: ${del.committed_items} COMMITTED, ${del.failed_items} Başarısız ⚠️`;
+        if (boxPartial) boxPartial.classList.remove("hidden");
+        if (txtPartial) txtPartial.textContent = `${del.committed_items} COMMITTED, ${del.failed_items} FAILED. Başarısızlar yeniden denenebilir.`;
+        showToast("MESA aktarımı kısmi tamamlandı.", "warning");
+        await loadExportView();
+      } else if (del.status === "FAILED") {
+        clearInterval(mesaDeliveryPollInterval);
+        if (elStat) elStat.textContent = `MESA Aktarımı Başarısız Oldu ❌`;
+        if (boxPartial) boxPartial.classList.remove("hidden");
+        if (txtPartial) txtPartial.textContent = `Aktarım başarısız: ${del.last_error || 'Hata oluştu'}`;
+        showToast(`MESA aktarımı başarısız: ${del.last_error || 'Hata'}`, "danger");
+        await loadExportView();
+      }
+    } catch (e) {
+      console.error("Polling error:", e);
+    }
+  }, 1000);
+}
+
+async function handleMesaRetryFailed() {
+  if (!activeMesaDeliveryId) {
+    showToast("Aktif teslimat bulunamadı.", "warning");
+    return;
+  }
+  setBusy(true);
+  try {
+    const res = await apiRequest(`/api/publisher/deliveries/${activeMesaDeliveryId}/retry`, { method: "POST" });
+    showToast(`Yeniden deneme başlatıldı: ${res.retried_count} item deneniyor.`, "info");
+    startMesaDeliveryPolling(activeMesaDeliveryId);
+  } catch (err) {
+    showToast(`Yeniden deneme hatası: ${err.message || err}`, "danger");
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function openDeliveryDetailModal(deliveryId) {
+  setBusy(true);
+  try {
+    const res = await apiRequest(`/api/publisher/deliveries/${deliveryId}`);
+    const del = res.delivery;
+    const items = res.items || [];
+
+    const modalBody = document.getElementById("delivery-modal-body");
+    if (!modalBody) return;
+
+    modalBody.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div>
+          <h4>Teslimat: <code class="mono">${escapeHtml(del.delivery_id)}</code></h4>
+          <span style="font-size: 13px; color: var(--color-text-secondary);">Hedef: ${escapeHtml(del.target_key)} · Başlangıç: ${friendlyDate(del.started_at)}</span>
+        </div>
+        <span class="badge ${del.status === 'COMMITTED' ? 'badge-success' : del.status === 'PARTIAL' ? 'badge-warning' : 'badge-danger'}">${del.status}</span>
+      </div>
+
+      <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px;">
+        <div class="stat-card"><div class="stat-label">Toplam</div><div class="stat-value">${del.total_items}</div></div>
+        <div class="stat-card"><div class="stat-label">COMMITTED</div><div class="stat-value" style="color: var(--color-success, green);">${del.committed_items}</div></div>
+        <div class="stat-card"><div class="stat-label">Başarısız</div><div class="stat-value" style="color: var(--color-danger, red);">${del.failed_items}</div></div>
+        <div class="stat-card"><div class="stat-label">Atlanan</div><div class="stat-value">${del.skipped_items}</div></div>
+      </div>
+
+      <h5>Source Chunk Aktarım Detayları (${items.length} item)</h5>
+      <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Chunk ID</th>
+              <th>Belge</th>
+              <th>Durum</th>
+              <th>Mutation ID</th>
+              <th>Idempotency Key</th>
+              <th>Hata</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((it) => `
+              <tr>
+                <td><code class="mono" style="font-size: 11px;">${escapeHtml(it.chunk_id)}</code></td>
+                <td><code class="mono" style="font-size: 11px;">${escapeHtml(it.document_id)}</code></td>
+                <td><span class="badge ${it.remote_state === 'COMMITTED' ? 'badge-success' : it.remote_state === 'SKIPPED' ? 'badge-neutral' : 'badge-danger'}">${it.remote_state}</span></td>
+                <td><code class="mono" style="font-size: 11px;">${escapeHtml(it.remote_mutation_id || '-')}</code></td>
+                <td><code class="mono" style="font-size: 10px;">${escapeHtml(it.idempotency_key)}</code></td>
+                <td style="font-size: 12px; color: var(--color-danger, red);">${escapeHtml(it.last_error || '-')}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    showModal("modal-delivery-detail");
+  } catch (err) {
+    showToast(`Teslimat detayı yükleme hatası: ${err.message || err}`, "danger");
+  } finally {
+    setBusy(false);
+  }
+}
+
 
 async function createExportAction() {
   const sel = document.getElementById("sel-export-format");
@@ -2281,12 +2632,30 @@ document.addEventListener("DOMContentLoaded", () => {
     btnVersionReject.addEventListener("click", () => handleVersionBulkDecision("reject"));
   }
 
-  // 13. Export Handlers
+  // 13. Export & MESA Publisher Handlers
   const btnExportCreate = document.getElementById("btn-export-create");
   if (btnExportCreate) btnExportCreate.addEventListener("click", createExportAction);
 
   const btnMesaTransfer = document.getElementById("btn-mesa-transfer");
   if (btnMesaTransfer) btnMesaTransfer.addEventListener("click", runMesaTransferSequence);
+
+  const btnMesaSaveSettings = document.getElementById("btn-mesa-save-settings");
+  if (btnMesaSaveSettings) btnMesaSaveSettings.addEventListener("click", handleMesaSaveSettings);
+
+  const btnMesaTestConn = document.getElementById("btn-mesa-test-conn");
+  if (btnMesaTestConn) btnMesaTestConn.addEventListener("click", handleMesaTestConnection);
+
+  const btnMesaPreflight = document.getElementById("btn-mesa-preflight");
+  if (btnMesaPreflight) btnMesaPreflight.addEventListener("click", handleMesaPreflight);
+
+  const btnMesaPubTrigger = document.getElementById("btn-mesa-publish-trigger");
+  if (btnMesaPubTrigger) btnMesaPubTrigger.addEventListener("click", handleMesaPublishTrigger);
+
+  const btnMesaConfirmPub = document.getElementById("btn-mesa-confirm-publish");
+  if (btnMesaConfirmPub) btnMesaConfirmPub.addEventListener("click", handleMesaConfirmPublish);
+
+  const btnMesaRetryFailed = document.getElementById("btn-mesa-retry-failed");
+  if (btnMesaRetryFailed) btnMesaRetryFailed.addEventListener("click", handleMesaRetryFailed);
 
   // 14. Advanced Release Build
   const btnBuildRelease = document.getElementById("btn-build-release");

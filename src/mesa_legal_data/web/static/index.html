@@ -571,59 +571,199 @@
         <!-- View 5: Publish / Export (Yayınla) -->
         <section id="view-export" class="view-panel hidden">
           <div class="dashboard-sections">
-            <!-- Section A: File Export -->
-            <div class="panel-box">
-              <h3>Dosya Olarak İndir</h3>
-              <p style="font-size: 13px; color: var(--color-text-secondary);">Onaylanmış hukuk kayıtlarını doğrulanmış dosya biçiminde dışa aktarın.</p>
-              
-              <div class="form-group" style="margin-top: 10px;">
-                <label for="sel-export-format">Dışa Aktarma Biçimi</label>
-                <select id="sel-export-format">
-                  <option value="records_jsonl">JSONL — Veri işleme ve model eğitiminde önerilen</option>
-                  <option value="records_csv">CSV — Excel ve tablo araçları için</option>
-                </select>
+            <!-- 1. MESA Target Configuration Card -->
+            <div class="panel-box" id="card-mesa-target">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                <div>
+                  <h3 style="margin: 0;">MESA v4 Hedef Yapılandırması</h3>
+                  <p style="font-size: 13px; color: var(--color-text-secondary); margin: 4px 0 0 0;">Verilerin aktarılacağı MESA v4 sunucu ve veri kümesi parametreleri.</p>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <span id="badge-mesa-key" class="badge badge-neutral">API Key: Kontrol ediliyor...</span>
+                  <span id="badge-mesa-conn" class="badge badge-neutral">Bağlantı: Bilinmiyor</span>
+                </div>
               </div>
 
-              <div style="margin-top: 10px;">
-                <button id="btn-export-create" class="btn btn-primary">Dışa Aktarma Paketi Oluştur</button>
+              <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px;">
+                <div class="form-group">
+                  <label for="mesa-target-url">MESA Base URL</label>
+                  <input type="text" id="mesa-target-url" value="http://localhost:8000" placeholder="https://mesa.yourdomain.com">
+                </div>
+                <div class="form-group">
+                  <label for="mesa-target-tenant">Tenant ID</label>
+                  <input type="text" id="mesa-target-tenant" value="default">
+                </div>
+                <div class="form-group">
+                  <label for="mesa-target-workspace">Workspace ID</label>
+                  <input type="text" id="mesa-target-workspace" value="legal">
+                </div>
+                <div class="form-group">
+                  <label for="mesa-target-dataset">Dataset ID</label>
+                  <input type="text" id="mesa-target-dataset" value="tr_legislation">
+                </div>
+                <div class="form-group">
+                  <label for="mesa-target-agent">Agent ID</label>
+                  <input type="text" id="mesa-target-agent" value="mesa_data_publisher">
+                </div>
+                <div class="form-group">
+                  <label for="mesa-target-limit">Chunk Boyut Limiti (Karakter)</label>
+                  <input type="number" id="mesa-target-limit" value="32768" min="1024" max="1048576">
+                </div>
+              </div>
+
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <span style="font-size: 12px; color: var(--color-text-muted);">
+                  🔒 <em>API Key asla veritabanında saklanmaz. Ortam değişkeni <code>MESA_DATA_MESA_API_KEY</code> üzerinden güvenle okunur.</em>
+                </span>
+                <div style="display: flex; gap: 10px;">
+                  <button id="btn-mesa-test-conn" class="btn btn-secondary">Bağlantıyı Test Et</button>
+                  <button id="btn-mesa-save-settings" class="btn btn-primary">Ayarları Kaydet</button>
+                </div>
               </div>
             </div>
 
-            <!-- Section B: Local Staging Release -->
-            <div class="panel-box">
-              <div style="display: flex; align-items: center; justify-content: space-between;">
-                <h3 style="margin: 0;">Yerel Development Staging</h3>
-                <span class="badge badge-neutral">MESA Öncesi Yerel Alan</span>
+            <!-- 2. Ready Summary & Preflight Card -->
+            <div class="panel-box" id="card-mesa-ready">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                <div>
+                  <h3 style="margin: 0;">MESA'ya Gönderilmeye Hazır Veri Özeti</h3>
+                  <p style="font-size: 13px; color: var(--color-text-secondary); margin: 4px 0 0 0;">Kalite denetiminden geçmiş ve onaylanmış kayıtların MESA aktarım planı.</p>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                  <button id="btn-mesa-preflight" class="btn btn-secondary">Ön Kontrol (Preflight)</button>
+                  <button id="btn-mesa-publish-trigger" class="btn btn-primary" style="background: var(--color-primary); font-weight: 700;">MESA'ya Gönder</button>
+                </div>
               </div>
-              <p style="font-size: 13px; color: var(--color-text-secondary); margin-top: 6px;">Onaylanan kayıtları doğrulanmış bir release paketi haline getirir ve yerel staging ortamına yazar. Gerçek MESA v4 push entegrasyonu sonraki aşamada eklenecektir.</p>
 
-              <div id="mesa-transfer-progress-box" class="panel-box hidden" style="background: var(--color-surface-subtle); padding: 12px; margin: 10px 0;">
-                <span id="mesa-transfer-status-text" style="font-size: 13px; font-weight: 600;">Paket hazırlanıyor...</span>
+              <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 12px;">
+                <div class="stat-card">
+                  <div class="stat-label">Hazır Belgeler</div>
+                  <div id="stat-mesa-ready-docs" class="stat-value">0</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Hazır Versiyonlar</div>
+                  <div id="stat-mesa-ready-vers" class="stat-value">0</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Tahmini Chunk</div>
+                  <div id="stat-mesa-ready-chunks" class="stat-value">0</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Toplam Boyut</div>
+                  <div id="stat-mesa-ready-bytes" class="stat-value">0 KB</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">MESA'da Mevcut (Skip)</div>
+                  <div id="stat-mesa-ready-committed" class="stat-value" style="color: var(--color-text-muted);">0</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Gönderilecek Yeni</div>
+                  <div id="stat-mesa-ready-new" class="stat-value" style="color: var(--color-primary);">0</div>
+                </div>
               </div>
 
-              <div style="margin-top: 16px;">
-                <button id="btn-mesa-transfer" class="btn btn-secondary">Yerel Staging Release Paketi Oluştur</button>
+              <!-- Preflight Results Checklist Box -->
+              <div id="box-mesa-preflight-results" class="panel-box hidden" style="background: var(--color-surface-subtle); padding: 12px; margin-top: 10px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 13px;">Ön Kontrol Sonuçları</h4>
+                <div id="list-mesa-preflight-items" style="display: flex; flex-direction: column; gap: 6px; font-size: 13px;"></div>
+              </div>
+
+              <!-- Live Progress / Active Delivery Box -->
+              <div id="box-mesa-delivery-progress" class="panel-box hidden" style="background: var(--color-surface-subtle); padding: 14px; margin-top: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <span id="txt-mesa-delivery-status" style="font-weight: 700; font-size: 14px;">MESA Gönderimi Sürüyor...</span>
+                  <span id="badge-mesa-delivery-state" class="badge badge-info">SENDING</span>
+                </div>
+                <div style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px;">
+                  <div>Planlandı: <strong id="prog-val-planned">0</strong></div>
+                  <div>COMMITTED: <strong id="prog-val-committed" style="color: var(--color-success, green);">0</strong></div>
+                  <div>Atlandı (Dedup): <strong id="prog-val-skipped">0</strong></div>
+                  <div>Başarısız: <strong id="prog-val-failed" style="color: var(--color-danger, red);">0</strong></div>
+                </div>
+                <div id="box-mesa-partial-failure" class="hidden" style="margin-top: 10px; padding: 10px; background: rgba(239, 68, 68, 0.1); border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.3);">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span id="txt-mesa-partial-msg" style="color: var(--color-danger, red); font-size: 13px; font-weight: 600;">Bazı chunklar aktarılamadı.</span>
+                    <button id="btn-mesa-retry-failed" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Başarısızları Yeniden Dene</button>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- Export History -->
-          <div class="panel-box" style="margin-top: 14px;">
-            <h3>Dışa Aktarma Geçmişi</h3>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Paket ID</th>
-                    <th>Biçim</th>
-                    <th>Durum</th>
-                    <th>Kayıt Sayısı</th>
-                    <th>Oluşturulma</th>
-                    <th>İndir</th>
-                  </tr>
-                </thead>
-                <tbody id="tbl-exports"></tbody>
-              </table>
+            <!-- 3. MESA Delivery History Table -->
+            <div class="panel-box" id="card-mesa-history">
+              <h3>MESA Aktarım Geçmişi</h3>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Teslimat ID</th>
+                      <th>Hedef</th>
+                      <th>Durum</th>
+                      <th>Toplam Chunk</th>
+                      <th>COMMITTED</th>
+                      <th>Başarısız</th>
+                      <th>Atlanan (Dedup)</th>
+                      <th>Tarih</th>
+                      <th>İşlem</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-mesa-deliveries"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- 4. Section: File Export & Local Staging -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px;">
+              <!-- File Export -->
+              <div class="panel-box">
+                <h3>Dosya Olarak İndir</h3>
+                <p style="font-size: 13px; color: var(--color-text-secondary);">Onaylanmış hukuk kayıtlarını doğrulanmış dosya biçiminde dışa aktarın.</p>
+                <div class="form-group" style="margin-top: 10px;">
+                  <label for="sel-export-format">Dışa Aktarma Biçimi</label>
+                  <select id="sel-export-format">
+                    <option value="records_jsonl">JSONL — Veri işleme ve model eğitiminde önerilen</option>
+                    <option value="records_csv">CSV — Excel ve tablo araçları için</option>
+                  </select>
+                </div>
+                <div style="margin-top: 10px;">
+                  <button id="btn-export-create" class="btn btn-primary">Dışa Aktarma Paketi Oluştur</button>
+                </div>
+              </div>
+
+              <!-- Local Staging Release -->
+              <div class="panel-box">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <h3 style="margin: 0;">Yerel Development Staging</h3>
+                  <span class="badge badge-neutral">MESA Öncesi Yerel Alan</span>
+                </div>
+                <p style="font-size: 13px; color: var(--color-text-secondary); margin-top: 6px;">Onaylanan kayıtları doğrulanmış bir release paketi haline getirir ve yerel SQLite staging ortamına yazar.</p>
+                <div id="mesa-transfer-progress-box" class="panel-box hidden" style="background: var(--color-surface-subtle); padding: 12px; margin: 10px 0;">
+                  <span id="mesa-transfer-status-text" style="font-size: 13px; font-weight: 600;">Paket hazırlanıyor...</span>
+                </div>
+                <div style="margin-top: 16px;">
+                  <button id="btn-mesa-transfer" class="btn btn-secondary">Yerel Staging Release Paketi Oluştur</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Export History -->
+            <div class="panel-box">
+              <h3>Dışa Aktarma Dosyaları Geçmişi</h3>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Paket ID</th>
+                      <th>Biçim</th>
+                      <th>Durum</th>
+                      <th>Kayıt Sayısı</th>
+                      <th>Oluşturulma</th>
+                      <th>İndir</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-exports"></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </section>
@@ -834,6 +974,43 @@
         <button id="btn-confirm-resolve-issue" class="btn btn-warning">Manuel Çözüldü Olarak Onayla</button>
         <button class="btn btn-secondary" data-close="modal-resolve-issue">İptal</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal: MESA Publish Confirmation (Consequential Action) -->
+  <div id="modal-mesa-confirm" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="mesa-confirm-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="mesa-confirm-title">MESA'ya Aktarımı Onayla</h3>
+        <button class="btn-close" data-close="modal-mesa-confirm" aria-label="Kapat">×</button>
+      </div>
+      <div class="modal-body" style="padding: 16px 0;">
+        <p style="font-size: 14px; margin-bottom: 12px;">Aşağıdaki kapsam MESA v4 sunucusuna aktarılmak üzere planlanacaktır:</p>
+        <div style="background: var(--color-surface-subtle); padding: 14px; border-radius: 8px; font-size: 13px; line-height: 1.6;">
+          <div>• <strong>Hazır Belge:</strong> <span id="confirm-mesa-docs">0</span></div>
+          <div>• <strong>Hazır Versiyon:</strong> <span id="confirm-mesa-versions">0</span></div>
+          <div>• <strong>Tahmini Source Chunk:</strong> <span id="confirm-mesa-chunks">0</span></div>
+          <div>• <strong>Hedef:</strong> <span id="confirm-mesa-target">default / legal / tr_legislation</span></div>
+        </div>
+        <p style="font-size: 12px; color: var(--color-text-muted); margin-top: 12px;">
+          Aktarım sırasında deduplikasyon uygulanır; daha önce COMMITTED durumuna ulaşmış değişmeyen chunklar tekrar gönderilmez.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-mesa-confirm-publish" class="btn btn-primary" style="background: var(--color-primary); font-weight: 700;">Onayla ve MESA'ya Gönder</button>
+        <button class="btn btn-secondary" data-close="modal-mesa-confirm">İptal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Delivery Detail & Items Breakdown -->
+  <div id="modal-delivery-detail" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title">
+    <div class="modal-card large">
+      <div class="modal-header">
+        <h3 id="delivery-modal-title">Teslimat Detayı</h3>
+        <button class="btn-close" data-close="modal-delivery-detail" aria-label="Kapat">×</button>
+      </div>
+      <div id="delivery-modal-body" class="modal-body"></div>
     </div>
   </div>
 

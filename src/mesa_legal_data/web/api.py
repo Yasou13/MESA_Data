@@ -31,6 +31,20 @@ from mesa_legal_data.catalog import (
 from mesa_legal_data.config import load_settings, load_sources
 from mesa_legal_data.parsers import decode_source_bytes
 from mesa_legal_data.pipeline import process_artifact_pipeline
+from mesa_legal_data.publisher.client import MesaClient
+from mesa_legal_data.publisher.engine import (
+    build_delivery_plan,
+    retry_delivery_failures,
+)
+from mesa_legal_data.publisher.ledger import (
+    get_delivery,
+    get_document_mesa_status,
+    get_mesa_target_settings,
+    list_deliveries,
+    list_delivery_items,
+    upsert_mesa_target_settings,
+)
+from mesa_legal_data.publisher.models import MesaTargetSettings
 from mesa_legal_data.release import build_release, verify_release
 from mesa_legal_data.release.importer import (
     ReleaseNotFound,
@@ -46,6 +60,8 @@ from mesa_legal_data.sources import import_manual_file, import_manual_url
 from mesa_legal_data.web.schemas import (
     HarvestStartRequest,
     IssueResolveRequest,
+    MesaPublishRequest,
+    MesaTargetSettingsUpdateRequest,
     ParserCertifyRequest,
     ReleaseCreateRequest,
     ReviewRequest,
@@ -1050,6 +1066,18 @@ def get_document_versions(document_id: str):
     return ok_response({"document_id": document_id, "versions": versions})
 
 
+@router.get("/documents/{document_id:path}/mesa-status")
+def get_document_mesa_status_endpoint(document_id: str):
+    conn = get_connection()
+    doc = get_document(conn, document_id)
+    if not doc:
+        conn.close()
+        error_response("DOCUMENT_NOT_FOUND", f"Document {document_id} not found", status_code=404)
+    status_data = get_document_mesa_status(conn, document_id)
+    conn.close()
+    return ok_response(status_data)
+
+
 @router.get("/documents/{document_id:path}")
 def get_document_detail(document_id: str):
     conn = get_connection()
@@ -2046,3 +2074,141 @@ def explorer_facets_endpoint():
             "validation_statuses": validation_statuses,
         }
     )
+
+
+# -------------------------------------------------------------
+# MESA v4 Publisher Endpoints
+# -------------------------------------------------------------
+
+
+@router.get("/publisher/settings")
+def get_publisher_settings_endpoint(target_key: str = "default"):
+    conn = get_connection()
+    settings = get_mesa_target_settings(conn, target_key)
+    conn.close()
+    client = MesaClient(settings=settings)
+    data = settings.model_dump()
+    data["api_key_configured"] = client.is_api_key_configured
+    return ok_response(data)
+
+
+@router.post("/publisher/settings")
+def update_publisher_settings_endpoint(req: MesaTargetSettingsUpdateRequest, target_key: str = "default"):
+    conn = get_connection()
+    new_settings = MesaTargetSettings(
+        target_key=target_key,
+        base_url=req.base_url,
+        tenant_id=req.tenant_id,
+        workspace_id=req.workspace_id,
+        dataset_id=req.dataset_id,
+        agent_id=req.agent_id,
+        content_limit_chars=req.content_limit_chars,
+    )
+    upsert_mesa_target_settings(conn, new_settings)
+    conn.close()
+    client = MesaClient(settings=new_settings)
+    data = new_settings.model_dump()
+    data["api_key_configured"] = client.is_api_key_configured
+    return ok_response(data)
+
+
+@router.post("/publisher/test-connection")
+def test_publisher_connection_endpoint(target_key: str = "default"):
+    conn = get_connection()
+    settings = get_mesa_target_settings(conn, target_key)
+    conn.close()
+    client = MesaClient(settings=settings)
+    res = client.test_connection()
+    return ok_response(res)
+
+
+@router.post("/publisher/preflight")
+def run_publisher_preflight_endpoint(target_key: str = "default"):
+    conn = get_connection()
+    settings = get_mesa_target_settings(conn, target_key)
+    _, summary = build_delivery_plan(target_key=target_key)
+    client = MesaClient(settings=settings)
+    report = client.run_preflight_checks(
+        ready_documents_count=summary.ready_documents,
+        ready_versions_count=summary.ready_versions,
+        estimated_chunks_count=summary.estimated_chunks,
+        total_canonical_bytes=summary.total_canonical_bytes,
+        blocked_versions_count=summary.blocked_versions_excluded,
+    )
+    conn.close()
+    return ok_response(report.model_dump())
+
+
+@router.get("/publisher/ready-summary")
+def get_publisher_ready_summary_endpoint(target_key: str = "default"):
+    _, summary = build_delivery_plan(target_key=target_key)
+    return ok_response(summary.model_dump())
+
+
+@router.post("/publisher/publish")
+def start_publisher_delivery_endpoint(req: MesaPublishRequest):
+    from mesa_legal_data.operations import submit_operation
+
+    conn = get_connection()
+    target_settings = get_mesa_target_settings(conn, req.target_key)
+    client = MesaClient(settings=target_settings)
+    _, summary = build_delivery_plan(target_key=req.target_key)
+
+    report = client.run_preflight_checks(
+        ready_documents_count=summary.ready_documents,
+        ready_versions_count=summary.ready_versions,
+        estimated_chunks_count=summary.estimated_chunks,
+        total_canonical_bytes=summary.total_canonical_bytes,
+        blocked_versions_count=summary.blocked_versions_excluded,
+    )
+    if report.overall_status == "FAIL":
+        conn.close()
+        failed_msgs = [c.message for c in report.checks if c.status == "FAIL"]
+        error_response("PREFLIGHT_FAILED", f"Preflight checks failed: {'; '.join(failed_msgs)}", status_code=400)
+
+    delivery_id = f"del-{uuid.uuid4().hex[:12]}"
+    op_id = submit_operation(
+        conn,
+        operation_type="mesa_v4_delivery",
+        requested_by="web-user",
+        input_dict={
+            "delivery_id": delivery_id,
+            "release_id": req.release_id,
+            "target_key": req.target_key,
+        },
+    )
+    conn.close()
+    return ok_response({"operation_id": op_id, "delivery_id": delivery_id, "summary": summary.model_dump()})
+
+
+@router.get("/publisher/deliveries")
+def list_publisher_deliveries_endpoint(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    conn = get_connection()
+    offset = (page - 1) * page_size
+    items = list_deliveries(conn, limit=page_size, offset=offset)
+    c = conn.cursor()
+    c.execute("SELECT count(*) FROM mesa_deliveries")
+    total = c.fetchone()[0]
+    conn.close()
+    return ok_response({"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/publisher/deliveries/{delivery_id}")
+def get_publisher_delivery_endpoint(delivery_id: str):
+    conn = get_connection()
+    delivery = get_delivery(conn, delivery_id)
+    if not delivery:
+        conn.close()
+        error_response("DELIVERY_NOT_FOUND", f"Delivery {delivery_id} not found", status_code=404)
+    items = list_delivery_items(conn, delivery_id, limit=200)
+    conn.close()
+    return ok_response({"delivery": delivery, "items": items})
+
+
+@router.post("/publisher/deliveries/{delivery_id}/retry")
+def retry_publisher_delivery_endpoint(delivery_id: str):
+    res = retry_delivery_failures(delivery_id)
+    return ok_response(res)
