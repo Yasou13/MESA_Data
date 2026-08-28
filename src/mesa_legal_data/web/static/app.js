@@ -1038,8 +1038,26 @@ async function openRecordReviewModal(recordId) {
   setBusy(true);
   try {
     const rec = await apiRequest(`/api/records/${encodeURIComponent(recordId)}`);
+    state.currentRecord = rec;
     state.currentRecordId = recordId;
     state.currentVersionId = rec.version_id;
+    state.currentDocTitle = rec.document_title || rec.document_id || "Belge";
+
+    let rawContent = "Ham kaynak içeriği yüklenemedi.";
+    let rawCharset = "";
+    try {
+      const docTextRes = await apiRequest(`/api/documents/${encodeURIComponent(rec.document_id)}/text`);
+      if (docTextRes && docTextRes.content) {
+        rawContent = docTextRes.content;
+      }
+      if (docTextRes && docTextRes.charset) {
+        rawCharset = ` · Charset: ${escapeHtml(docTextRes.charset)}`;
+      }
+    } catch (e) {
+      console.warn("Failed to load raw document text for comparison:", e);
+    }
+
+    const canonicalPreview = rec.text_preview || (typeof rec.data_json === "string" ? rec.data_json : JSON.stringify(rec.data_json, null, 2));
 
     const modalBody = document.getElementById("record-modal-body");
     modalBody.innerHTML = `
@@ -1054,9 +1072,21 @@ async function openRecordReviewModal(recordId) {
         </div>
       </div>
 
-      <div style="margin-top: 10px;">
-        <label style="font-size: 12px; font-weight: 700; color: var(--color-text-muted);">Kayıt İçeriği</label>
-        <pre class="code-box" style="margin-top: 4px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">${escapeHtml(rec.text_preview || (typeof rec.data_json === "string" ? rec.data_json : JSON.stringify(rec.data_json, null, 2)))}</pre>
+      <div class="review-split-view">
+        <div class="review-panel">
+          <div class="review-panel-header">
+            <span>Ham Kaynak (HTML)</span>
+            <span style="font-weight: normal; font-size: 11px; color: var(--color-text-muted);">${escapeHtml(rec.source_url || "")}${rawCharset}</span>
+          </div>
+          <pre class="review-panel-body code-box">${escapeHtml(rawContent)}</pre>
+        </div>
+        <div class="review-panel">
+          <div class="review-panel-header">
+            <span>Canonical Kayıt</span>
+            <span style="font-weight: normal; font-size: 11px; color: var(--color-text-muted);">${escapeHtml(rec.record_id)}</span>
+          </div>
+          <pre class="review-panel-body code-box">${escapeHtml(canonicalPreview)}</pre>
+        </div>
       </div>
 
       <details class="technical-details">
@@ -1122,6 +1152,81 @@ async function handleRecordDecision(decision) {
           </div>
         `;
       }
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function handleVersionBulkDecision(decision) {
+  if (!state.currentVersionId) return;
+  const versionId = state.currentVersionId;
+  const docTitle = state.currentDocTitle || "bu belgenin";
+  const note = document.getElementById("txt-reviewer-note")?.value.trim() || "";
+  const actionVerb = decision === "approve" ? "onaylayacaktır" : "reddedecektir";
+  const actionPast = decision === "approve" ? "onaylandı" : "reddedildi";
+
+  let recordCountText = "tüm";
+  try {
+    const docId = state.currentRecord?.document_id;
+    if (docId) {
+      const recsRes = await apiRequest(`/api/records?document_id=${encodeURIComponent(docId)}`);
+      const items = recsRes?.items || [];
+      const count = items.filter(r => r.version_id === versionId).length || recsRes?.total || "";
+      if (count) recordCountText = `${count}`;
+    }
+  } catch (e) {
+    // Non-critical count lookup fallback
+  }
+
+  const confirmMsg = `Bu işlem '${docTitle}' belgesinin bu sürümündeki ${recordCountText} kaydın tamamını ${actionVerb}.\n\nDevam etmek istiyor musunuz?`;
+  if (!window.confirm(confirmMsg)) {
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const endpoint = `/api/versions/${encodeURIComponent(versionId)}/${decision}`;
+    const res = await apiRequest(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reviewer: sessionStorage.getItem("mesa_actor") || "web-user",
+        note: note || null,
+      }),
+    });
+
+    const affectedCount = res?.approved_records ?? res?.rejected_records ?? "";
+    showToast(`Belge sürümü (${affectedCount} kayıt) başarıyla ${actionPast}.`, "success");
+    closeModal("modal-record-detail");
+    await loadReviewView();
+  } catch (err) {
+    console.error("Bulk version decision error:", err);
+    const errStr = String(err.message || "");
+    const isBlocker = errStr.includes("blocking") || errStr.includes("blocker") || errStr.includes("BLOCKING_ISSUES_EXIST") || errStr.includes("çözülmesi gereken") || errStr.includes("VERSION_APPROVE_FAILED");
+    if (isBlocker && decision === "approve") {
+      showToast("Bu belge toplu olarak onaylanamaz. Belge içindeki çözülmemiş kritik kayıt sorunları bulunmaktadır.", "danger");
+      const modalBody = document.getElementById("record-modal-body");
+      if (modalBody) {
+        let blockerNotice = document.getElementById("record-blocker-notice");
+        if (!blockerNotice) {
+          blockerNotice = document.createElement("div");
+          blockerNotice.id = "record-blocker-notice";
+          blockerNotice.style.cssText = "margin-top: 12px; padding: 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid var(--color-danger); border-radius: 6px;";
+          modalBody.appendChild(blockerNotice);
+        }
+        blockerNotice.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+            <div>
+              <strong style="color: var(--color-danger);">Bu belge toplu olarak onaylanamaz.</strong>
+              <div style="font-size: 13px; color: var(--color-text-secondary); margin-top: 2px;">Belge içindeki çözülmemiş kritik kayıt sorunları bulunmaktadır.</div>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" onclick="showRecordIssues('${escapeHtml(state.currentRecordId)}')">Sorunları Gör</button>
+          </div>
+        `;
+      }
+    } else {
+      showToast(`İşlem gerçekleştirilemedi: ${err.message || "Bilinmeyen hata"}`, "danger");
     }
   } finally {
     setBusy(false);
@@ -1867,6 +1972,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnRecordReject = document.getElementById("btn-record-reject");
   if (btnRecordReject) {
     btnRecordReject.addEventListener("click", () => handleRecordDecision("reject"));
+  }
+
+  const btnVersionApprove = document.getElementById("btn-version-approve");
+  if (btnVersionApprove) {
+    btnVersionApprove.addEventListener("click", () => handleVersionBulkDecision("approve"));
+  }
+
+  const btnVersionReject = document.getElementById("btn-version-reject");
+  if (btnVersionReject) {
+    btnVersionReject.addEventListener("click", () => handleVersionBulkDecision("reject"));
   }
 
   // 13. Export Handlers
