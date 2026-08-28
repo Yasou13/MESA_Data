@@ -1132,9 +1132,11 @@ def get_record_detail(record_id: str):
         FROM records r
         JOIN versions v ON r.version_id = v.version_id
         LEFT JOIN documents d ON v.document_id = d.document_id
-        WHERE r.record_id = ?
+        WHERE r.record_id = ? OR r.record_instance_id = ?
+        ORDER BY r.created_at DESC
+        LIMIT 1
         """,
-        (record_id,),
+        (record_id, record_id),
     )
     row = c.fetchone()
     if not row:
@@ -1273,13 +1275,13 @@ def list_issues(
                    COALESCE(
                        (SELECT d.title FROM documents d WHERE d.document_id = v.subject_id),
                        (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id WHERE ver.version_id = v.subject_id),
-                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id),
+                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id OR rec.record_instance_id = v.subject_id LIMIT 1),
                        (SELECT d.title FROM documents d JOIN artifacts a ON a.document_id = d.document_id WHERE a.artifact_id = v.subject_id)
                    ) AS document_title,
                    COALESCE(
                        (CASE WHEN v.subject_type = 'document' THEN v.subject_id ELSE NULL END),
                        (SELECT ver.document_id FROM versions ver WHERE ver.version_id = v.subject_id),
-                       (SELECT ver.document_id FROM versions ver JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id),
+                       (SELECT ver.document_id FROM versions ver JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id OR rec.record_instance_id = v.subject_id LIMIT 1),
                        (SELECT a.document_id FROM artifacts a WHERE a.artifact_id = v.subject_id)
                    ) AS document_id,
                    (SELECT a.source_id FROM artifacts a WHERE a.artifact_id = v.subject_id) AS source_id,

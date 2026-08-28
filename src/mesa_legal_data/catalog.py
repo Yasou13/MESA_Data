@@ -367,16 +367,65 @@ def insert_version(
     validation_status: str,
     privacy_status: str,
     approval_status: str,
+    revision_number: int | None = None,
+    supersedes_version_id: str | None = None,
+    quality_status: str | None = "PASS",
+    quality_json: str | None = None,
 ):
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT revision_number, supersedes_version_id, approval_status FROM versions WHERE version_id = ?",
+            (version_id,),
+        )
+        existing_ver = cur.fetchone()
+
+        if existing_ver:
+            rev_num = existing_ver[0] if existing_ver[0] is not None else (revision_number or 1)
+            super_id = supersedes_version_id or existing_ver[1]
+            if existing_ver[2] == "approved" and approval_status == "pending":
+                final_approval = "approved"
+            else:
+                final_approval = approval_status
+        else:
+            if revision_number is not None:
+                rev_num = revision_number
+            else:
+                cur.execute(
+                    "SELECT COALESCE(MAX(revision_number), 0) + 1 FROM versions WHERE document_id = ?",
+                    (document_id,),
+                )
+                rev_num = cur.fetchone()[0]
+
+            if supersedes_version_id is not None:
+                super_id = supersedes_version_id
+            else:
+                cur.execute(
+                    "SELECT version_id FROM versions WHERE document_id = ? AND version_id != ? ORDER BY revision_number DESC, created_at DESC LIMIT 1",
+                    (document_id, version_id),
+                )
+                super_row = cur.fetchone()
+                super_id = super_row[0] if super_row else None
+
+            final_approval = approval_status
+
         conn.execute(
-            """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, snapshot_date, effective_from, effective_to, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO versions (
+                   version_id, document_id, artifact_id, version_kind, snapshot_date,
+                   effective_from, effective_to, canonical_path, canonical_line,
+                   canonical_sha256, parser_name, parser_version, schema_version,
+                   validation_status, privacy_status, approval_status, created_at,
+                   revision_number, supersedes_version_id, quality_status, quality_json
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(version_id) DO UPDATE SET
                    document_id = excluded.document_id,
                    artifact_id = excluded.artifact_id,
                    version_kind = excluded.version_kind,
+                   snapshot_date = excluded.snapshot_date,
+                   effective_from = excluded.effective_from,
+                   effective_to = excluded.effective_to,
                    canonical_path = excluded.canonical_path,
                    canonical_line = excluded.canonical_line,
                    canonical_sha256 = excluded.canonical_sha256,
@@ -385,7 +434,11 @@ def insert_version(
                    schema_version = excluded.schema_version,
                    validation_status = excluded.validation_status,
                    privacy_status = excluded.privacy_status,
-                   approval_status = excluded.approval_status""",
+                   approval_status = ?,
+                   revision_number = excluded.revision_number,
+                   supersedes_version_id = excluded.supersedes_version_id,
+                   quality_status = excluded.quality_status,
+                   quality_json = excluded.quality_json""",
             (
                 version_id,
                 document_id,
@@ -402,8 +455,13 @@ def insert_version(
                 schema_version,
                 validation_status,
                 privacy_status,
-                approval_status,
+                final_approval,
                 now,
+                rev_num,
+                super_id,
+                quality_status,
+                quality_json,
+                final_approval,
             ),
         )
 
@@ -411,7 +469,12 @@ def insert_version(
 def get_version(conn: sqlite3.Connection, version_id: str) -> dict[str, Any] | None:
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT version_id, document_id, artifact_id, version_kind, snapshot_date, effective_from, effective_to, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at FROM versions WHERE version_id = ?",
+        """SELECT version_id, document_id, artifact_id, version_kind, snapshot_date,
+                  effective_from, effective_to, canonical_path, canonical_line,
+                  canonical_sha256, parser_name, parser_version, schema_version,
+                  validation_status, privacy_status, approval_status, created_at,
+                  revision_number, supersedes_version_id, quality_status, quality_json
+           FROM versions WHERE version_id = ?""",
         (version_id,),
     )
     row = cursor.fetchone()
@@ -435,6 +498,10 @@ def get_version(conn: sqlite3.Connection, version_id: str) -> dict[str, Any] | N
         "privacy_status": row[14],
         "approval_status": row[15],
         "created_at": row[16],
+        "revision_number": row[17] if len(row) > 17 and row[17] is not None else 1,
+        "supersedes_version_id": row[18] if len(row) > 18 else None,
+        "quality_status": row[19] if len(row) > 19 else None,
+        "quality_json": row[20] if len(row) > 20 else None,
     }
 
 
@@ -448,21 +515,27 @@ def insert_record(
     record_sha256: str,
     validation_status: str = "valid",
     approval_status: str = "pending",
+    record_instance_id: str | None = None,
 ):
     now = datetime.now(UTC).isoformat()
+    instance_id = record_instance_id or f"{version_id}:{record_id}"
     with transaction(conn):
         conn.execute(
-            """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(record_id) DO UPDATE SET
-                   version_id = excluded.version_id,
+            """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(version_id, record_id) DO UPDATE SET
+                   record_instance_id = excluded.record_instance_id,
                    record_type = excluded.record_type,
                    canonical_path = excluded.canonical_path,
                    canonical_line = excluded.canonical_line,
                    record_sha256 = excluded.record_sha256,
                    validation_status = excluded.validation_status,
-                   approval_status = excluded.approval_status""",
+                   approval_status = CASE 
+                       WHEN records.approval_status = 'approved' THEN records.approval_status 
+                       ELSE excluded.approval_status 
+                   END""",
             (
+                instance_id,
                 record_id,
                 version_id,
                 record_type,
@@ -476,12 +549,38 @@ def insert_record(
         )
 
 
-def get_record(conn: sqlite3.Connection, record_id: str) -> dict[str, Any] | None:
+def get_record(conn: sqlite3.Connection, record_id: str, version_id: str | None = None) -> dict[str, Any] | None:
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at FROM records WHERE record_id = ?",
-        (record_id,),
-    )
+    if version_id:
+        cursor.execute(
+            "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at, record_instance_id FROM records WHERE record_id = ? AND version_id = ?",
+            (record_id, version_id),
+        )
+    else:
+        cursor.execute(
+            "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at, record_instance_id FROM records WHERE record_instance_id = ?",
+            (record_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return {
+                "record_id": row[0],
+                "version_id": row[1],
+                "record_type": row[2],
+                "canonical_path": row[3],
+                "canonical_line": row[4],
+                "record_sha256": row[5],
+                "validation_status": row[6],
+                "approval_status": row[7],
+                "created_at": row[8],
+                "record_instance_id": row[9],
+            }
+
+        cursor.execute(
+            "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at, record_instance_id FROM records WHERE record_id = ? ORDER BY created_at DESC LIMIT 1",
+            (record_id,),
+        )
+
     row = cursor.fetchone()
     if not row:
         return None
@@ -495,6 +594,7 @@ def get_record(conn: sqlite3.Connection, record_id: str) -> dict[str, Any] | Non
         "validation_status": row[6],
         "approval_status": row[7],
         "created_at": row[8],
+        "record_instance_id": row[9] if len(row) > 9 else f"{row[1]}:{row[0]}",
     }
 
 
@@ -555,6 +655,7 @@ def iter_records_for_release(
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
           AND v.validation_status = 'valid'
+          AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
           AND v.privacy_status IN ('clean', 'approved')
         ORDER BY r.canonical_path ASC, r.canonical_line ASC
         """
@@ -983,6 +1084,9 @@ def approve_version_streaming(
     if not ver:
         raise CatalogError(f"Version {version_id} not found")
 
+    if ver.get("quality_status") == "BLOCK":
+        raise BlockingValidationIssueExists(f"Cannot approve version {version_id}: quality gate status is BLOCK")
+
     blockers = list_open_blocking_issues_for_version(conn, version_id=version_id)
     if blockers:
         raise BlockingValidationIssueExists(
@@ -1131,11 +1235,11 @@ def approve_version_streaming(
                     "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
                     rows,
                 )
-                id_tuples = [(r[0],) for r in rows]
-                conn.executemany(
-                    "UPDATE records SET approval_status = 'approved' WHERE record_id = ?",
-                    id_tuples,
-                )
+
+            conn.execute(
+                "UPDATE records SET approval_status = 'approved' WHERE version_id = ?",
+                (version_id,),
+            )
 
             conn.execute(
                 "UPDATE versions SET approval_status = 'approved', privacy_status = CASE WHEN privacy_status = 'flagged' THEN 'approved' ELSE privacy_status END WHERE version_id = ?",
