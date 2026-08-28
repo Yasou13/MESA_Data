@@ -1,5 +1,6 @@
 from bs4 import BeautifulSoup
 
+from mesa_legal_data.parsers.encoding import decode_source_bytes
 from mesa_legal_data.parsers.text_normalizer import normalize_text
 
 
@@ -18,11 +19,16 @@ def parse_html(html_content: str | bytes) -> str:
     if not html_content:
         return ""
 
+    if isinstance(html_content, bytes):
+        text, _ = decode_source_bytes(html_content, is_html=True)
+    else:
+        text = html_content
+
     try:
-        soup = BeautifulSoup(html_content, "lxml")
+        soup = BeautifulSoup(text, "lxml")
     except Exception:
         # Fallback parser if lxml fails
-        soup = BeautifulSoup(html_content, "html.parser")
+        soup = BeautifulSoup(text, "html.parser")
 
     # Remove non-content tags
     for tag in soup(["script", "style", "noscript", "iframe", "svg", "head", "meta"]):

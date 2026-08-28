@@ -2,6 +2,7 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from mesa_legal_data.canonical import write_canonical_part
@@ -26,6 +27,7 @@ from mesa_legal_data.ids import (
     build_legislation_version_id,
 )
 from mesa_legal_data.parsers import (
+    decode_source_bytes,
     extract_citations,
     parse_decision_text,
     parse_html,
@@ -155,12 +157,12 @@ def process_artifact_pipeline(
         if "pdf" in mime:
             parsed_text = parse_pdf(full_path)
         else:
-            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
+            raw_bytes = Path(full_path).read_bytes()
             if "html" in mime:
-                parsed_text = parse_html(content)
+                parsed_text = parse_html(raw_bytes)
             else:
-                parsed_text = content
+                decoded_content, _ = decode_source_bytes(raw_bytes, is_html=False)
+                parsed_text = decoded_content
 
         if not parsed_text or not parsed_text.strip():
             raise ValueError("Parsed text is empty")
