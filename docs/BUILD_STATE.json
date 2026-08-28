@@ -38,9 +38,9 @@
     "BLOCKER-3-RUN-SCOPED-REQUEST-BUDGET"
   ],
   "last_test_command": "uv run pytest -m \"not scale\" -ra && uv run pytest -m \"scale\" -ra",
-  "last_test_result": "passed (275 passed: 271 fast, 4 scale)",
+  "last_test_result": "passed (295 passed: 291 fast, 4 scale)",
   "polish_status": "completed",
   "polish_current_task": "CLOSED",
-  "updated_at": "2026-08-29T02:08:00Z"
+  "updated_at": "2026-08-29T02:24:00Z"
 }
 
