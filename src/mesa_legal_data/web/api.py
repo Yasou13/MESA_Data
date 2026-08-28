@@ -20,6 +20,7 @@ from mesa_legal_data.catalog import (
     get_release,
     list_open_blocking_issues,
     reject_record_with_checks,
+    reject_version,
     resolve_issue,
 )
 from mesa_legal_data.config import load_settings, load_sources
@@ -1223,6 +1224,19 @@ async def approve_version(version_id: str, req: ReviewRequest):
             return ok_response(res)
         except Exception as e:
             error_response("VERSION_APPROVE_FAILED", str(e), status_code=400)
+        finally:
+            conn.close()
+
+
+@router.post("/versions/{version_id:path}/reject")
+async def reject_version_endpoint(version_id: str, req: ReviewRequest):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            res = reject_version(conn, version_id=version_id, reviewer=req.reviewer, note=req.note)
+            return ok_response(res)
+        except Exception as e:
+            error_response("VERSION_REJECT_FAILED", str(e), status_code=400)
         finally:
             conn.close()
 
