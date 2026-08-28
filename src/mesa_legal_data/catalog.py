@@ -813,10 +813,7 @@ def reject_version(
         records = cur.fetchall()
 
         if records:
-            review_rows = [
-                (r[0], r[1], reviewer, "rejected", note, now_iso)
-                for r in records
-            ]
+            review_rows = [(r[0], r[1], reviewer, "rejected", note, now_iso) for r in records]
             conn.executemany(
                 "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
                 review_rows,

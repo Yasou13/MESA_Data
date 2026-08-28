@@ -79,7 +79,9 @@ def test_pipeline_cp1254_turkish_encoding_preservation(tmp_path, monkeypatch):
     # Verify canonical jsonl content
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT record_id, canonical_path FROM records WHERE record_id = 'tr:legislation:communique:rg-20260826-4:article:9'")
+    cur.execute(
+        "SELECT record_id, canonical_path FROM records WHERE record_id = 'tr:legislation:communique:rg-20260826-4:article:9'"
+    )
     row = cur.fetchone()
     assert row is not None, "Article record was not created in records table"
     art_record_id, canonical_rel_path = row
