@@ -49,7 +49,7 @@
         </button>
         <button class="nav-btn" data-view="export">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-          Dışa Aktar
+          Yayınla
         </button>
 
         <div class="nav-group-title" style="margin-top: 12px;">YÖNETİM</div>
@@ -58,11 +58,11 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </button>
         <div id="advanced-subnav" class="advanced-subnav hidden">
-          <button class="nav-btn" data-view="sources">Kaynaklar</button>
-          <button class="nav-btn" data-view="explorer">Veri Gezgini</button>
+          <button class="nav-btn" data-view="sources">Kaynaklar & Otomasyon</button>
+          <button class="nav-btn" data-view="operations">Operasyonlar</button>
           <button class="nav-btn" data-view="releases">Release Geçmişi</button>
-          <button class="nav-btn" data-view="operations">Arka Plan İşlemleri</button>
           <button class="nav-btn" data-view="audit">İşlem Geçmişi</button>
+          <button class="nav-btn" data-view="explorer">Veri Gezgini</button>
           <button class="nav-btn" data-view="system">Sistem</button>
         </div>
       </nav>
@@ -152,23 +152,44 @@
               <button id="btn-next-action" class="btn btn-primary">İşleme Git</button>
             </div>
 
-            <!-- Top 4 Metrics -->
-            <div class="stats-grid">
+            <!-- Honest MESA Status Banner -->
+            <div id="home-mesa-status-card" class="panel-box" style="display: flex; justify-content: space-between; align-items: center; background: var(--color-surface-subtle); border-left: 4px solid var(--color-info); margin-bottom: 16px; padding: 14px 18px;">
+              <div>
+                <strong style="font-size: 14px;">MESA Entegrasyon Durumu:</strong>
+                <span id="lbl-home-mesa-status" style="margin-left: 6px; font-size: 13px; color: var(--color-text-secondary);">MESA entegrasyonu yapılandırılmadı (Yerel Development Staging Aktif)</span>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn btn-sm btn-primary" onclick="switchView('collect')">Veri Topla</button>
+                <button class="btn btn-sm btn-secondary" onclick="switchView('review')">İncelemeye Git</button>
+                <button class="btn btn-sm btn-secondary" onclick="switchView('export')">Yayınla</button>
+              </div>
+            </div>
+
+            <!-- 6 System Health Metrics -->
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
               <div class="stat-card">
-                <span class="stat-label">Toplam Belge</span>
-                <span class="stat-val" id="stat-docs">0</span>
+                <span class="stat-label">Bugün Bulunan</span>
+                <span class="stat-val" id="stat-discovered-today">0</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">İşlenen (Bugün)</span>
+                <span class="stat-val" id="stat-processed-today">0</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Otomatik Onaylanan</span>
+                <span class="stat-val" id="stat-auto-approved-today">0</span>
               </div>
               <div class="stat-card">
                 <span class="stat-label">İnceleme Bekleyen</span>
-                <span class="stat-val" id="stat-pending">0</span>
+                <span class="stat-val" id="stat-needs-review">0</span>
               </div>
               <div class="stat-card">
-                <span class="stat-label">Açık Sorunlar</span>
-                <span class="stat-val" id="stat-issues">0</span>
+                <span class="stat-label">Engellenen (Blocked)</span>
+                <span class="stat-val" id="stat-blocked">0</span>
               </div>
               <div class="stat-card">
-                <span class="stat-label">Son Toplama</span>
-                <span class="stat-val text-sm" id="stat-last-harvest">-</span>
+                <span class="stat-label">MESA'ya Hazır</span>
+                <span class="stat-val" id="stat-mesa-ready">0</span>
               </div>
             </div>
 
@@ -547,13 +568,13 @@
           </div>
         </section>
 
-        <!-- View 5: Export (Dışa Aktar) -->
+        <!-- View 5: Publish / Export (Yayınla) -->
         <section id="view-export" class="view-panel hidden">
           <div class="dashboard-sections">
             <!-- Section A: File Export -->
             <div class="panel-box">
-              <h3>Dosya olarak indir</h3>
-              <p style="font-size: 13px; color: var(--color-text-secondary);">Onaylanmış hukuk kayıtlarını istediğiniz dosya biçiminde dışa aktarın.</p>
+              <h3>Dosya Olarak İndir</h3>
+              <p style="font-size: 13px; color: var(--color-text-secondary);">Onaylanmış hukuk kayıtlarını doğrulanmış dosya biçiminde dışa aktarın.</p>
               
               <div class="form-group" style="margin-top: 10px;">
                 <label for="sel-export-format">Dışa Aktarma Biçimi</label>
@@ -564,21 +585,24 @@
               </div>
 
               <div style="margin-top: 10px;">
-                <button id="btn-export-create" class="btn btn-primary">Dışa aktarmayı oluştur</button>
+                <button id="btn-export-create" class="btn btn-primary">Dışa Aktarma Paketi Oluştur</button>
               </div>
             </div>
 
-            <!-- Section B: MESA Transfer -->
+            <!-- Section B: Local Staging Release -->
             <div class="panel-box">
-              <h3>MESA’ya aktar</h3>
-              <p style="font-size: 13px; color: var(--color-text-secondary);">Onaylanan kayıtları doğrulanmış bir veri paketi halinde MESA aktarım alanına gönderir.</p>
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <h3 style="margin: 0;">Yerel Development Staging</h3>
+                <span class="badge badge-neutral">MESA Öncesi Yerel Alan</span>
+              </div>
+              <p style="font-size: 13px; color: var(--color-text-secondary); margin-top: 6px;">Onaylanan kayıtları doğrulanmış bir release paketi haline getirir ve yerel staging ortamına yazar. Gerçek MESA v4 push entegrasyonu sonraki aşamada eklenecektir.</p>
 
               <div id="mesa-transfer-progress-box" class="panel-box hidden" style="background: var(--color-surface-subtle); padding: 12px; margin: 10px 0;">
                 <span id="mesa-transfer-status-text" style="font-size: 13px; font-weight: 600;">Paket hazırlanıyor...</span>
               </div>
 
               <div style="margin-top: 16px;">
-                <button id="btn-mesa-transfer" class="btn btn-success">MESA’ya Aktar</button>
+                <button id="btn-mesa-transfer" class="btn btn-secondary">Yerel Staging Release Paketi Oluştur</button>
               </div>
             </div>
           </div>

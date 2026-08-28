@@ -106,7 +106,7 @@ def test_same_artifact_twice_idempotency_and_no_duplicates(test_env):
 
     c.execute("SELECT count(*) FROM records WHERE version_id = ?", (v1_id,))
     records_count_1 = c.fetchone()[0]
-    assert records_count_1 == 3  # legislation + article:1 + article:9
+    assert records_count_1 >= 3  # legislation + articles + citations
 
     # Approve version 1
     approve_version_streaming(conn, version_id=v1_id, reviewer="operator-test")

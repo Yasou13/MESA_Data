@@ -18,10 +18,15 @@ from mesa_legal_data.catalog import (
     get_export_package,
     get_record,
     get_release,
+    get_source_operational_settings,
     list_open_blocking_issues,
+    list_parser_certifications,
+    list_source_operational_settings,
     reject_record_with_checks,
     reject_version,
     resolve_issue,
+    set_parser_certification,
+    upsert_source_operational_settings,
 )
 from mesa_legal_data.config import load_settings, load_sources
 from mesa_legal_data.parsers import decode_source_bytes
@@ -41,9 +46,11 @@ from mesa_legal_data.sources import import_manual_file, import_manual_url
 from mesa_legal_data.web.schemas import (
     HarvestStartRequest,
     IssueResolveRequest,
+    ParserCertifyRequest,
     ReleaseCreateRequest,
     ReviewRequest,
     RevokeRequest,
+    SourceSettingsUpdateRequest,
     UrlImportRequest,
 )
 from mesa_legal_data.web.security import verify_security, write_lock
@@ -113,6 +120,34 @@ def get_dashboard():
     c.execute("SELECT count(*) FROM releases WHERE status = 'published'")
     published_releases = c.fetchone()[0]
 
+    # Health & Operational Metrics
+    c.execute("SELECT count(*) FROM artifacts WHERE retrieved_at >= date('now')")
+    discovered_today = c.fetchone()[0]
+
+    c.execute("SELECT count(*) FROM processing_runs WHERE started_at >= date('now')")
+    processed_today = c.fetchone()[0]
+
+    c.execute("SELECT count(*) FROM versions WHERE auto_approved = 1 AND created_at >= date('now')")
+    auto_approved_today = c.fetchone()[0]
+
+    c.execute(
+        "SELECT count(*) FROM versions WHERE approval_status = 'pending' AND (quality_status IS NULL OR quality_status != 'BLOCK')"
+    )
+    needs_review_count = c.fetchone()[0]
+
+    c.execute("SELECT count(*) FROM versions WHERE quality_status = 'BLOCK' OR validation_status = 'failed'")
+    blocked_count = c.fetchone()[0]
+
+    c.execute("""
+        SELECT count(DISTINCT r.record_instance_id) FROM records r
+        JOIN versions v ON r.version_id = v.version_id
+        WHERE r.approval_status = 'approved'
+          AND r.validation_status = 'valid'
+          AND v.validation_status = 'valid'
+          AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+    """)
+    mesa_ready_count = c.fetchone()[0]
+
     c.execute(
         "SELECT document_id, family, document_type, title, lifecycle_status, updated_at FROM documents ORDER BY updated_at DESC LIMIT 10"
     )
@@ -159,6 +194,16 @@ def get_dashboard():
                 "open_errors": open_errors,
                 "published_releases": published_releases,
                 "active_release_id": active_release_id,
+            },
+            "health": {
+                "discovered_today": discovered_today,
+                "processed_today": processed_today,
+                "auto_approved_today": auto_approved_today,
+                "needs_review_count": needs_review_count,
+                "blocked_count": blocked_count,
+                "mesa_ready_count": mesa_ready_count,
+                "mesa_status": "not_configured",
+                "mesa_status_label": "MESA entegrasyonu yapılandırılmadı (Yerel Staging Aktif)",
             },
             "recent_documents": recent_docs,
             "recent_runs": recent_runs,
@@ -460,6 +505,53 @@ def list_sources_endpoint():
                 }
             )
     return ok_response(sources_list)
+
+
+@router.get("/sources/settings")
+def get_sources_settings():
+    conn = get_connection()
+    try:
+        sources_settings = list_source_operational_settings(conn)
+        return ok_response(sources_settings)
+    finally:
+        conn.close()
+
+
+@router.post("/sources/{source_id}/settings")
+async def update_source_settings(source_id: str, req: SourceSettingsUpdateRequest):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            upsert_source_operational_settings(
+                conn,
+                source_id=source_id,
+                enabled=req.enabled,
+                auto_approval_enabled=req.auto_approval_enabled,
+                weekly_sample_count=req.weekly_sample_count,
+            )
+            settings = get_source_operational_settings(conn, source_id)
+            return ok_response(settings)
+        finally:
+            conn.close()
+
+
+@router.post("/sources/{source_id}/certify-parser")
+async def certify_parser_endpoint(source_id: str, req: ParserCertifyRequest):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            set_parser_certification(
+                conn,
+                source_id=source_id,
+                parser_name=req.parser_name,
+                parser_version=req.parser_version,
+                certified=req.certified,
+                certified_by=req.certified_by or "operator",
+            )
+            certs = list_parser_certifications(conn, source_id=source_id)
+            return ok_response(certs)
+        finally:
+            conn.close()
 
 
 # 8.4 Documents
@@ -909,6 +1001,55 @@ SOURCE_FAMILY_MAP = {
 }
 
 
+@router.post("/documents/{document_id:path}/reprocess")
+async def reprocess_document(document_id: str):
+    return await process_document_pipeline(document_id=document_id)
+
+
+@router.get("/documents/{document_id:path}/versions")
+def get_document_versions(document_id: str):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        """SELECT version_id, document_id, artifact_id, version_kind, snapshot_date,
+                  revision_number, supersedes_version_id, quality_status, quality_json,
+                  validation_status, privacy_status, approval_status, created_at,
+                  is_audit_sample, audit_sample_reason, auto_approved
+           FROM versions WHERE document_id = ? ORDER BY revision_number DESC, created_at DESC""",
+        (document_id,),
+    )
+    versions = []
+    for r in c.fetchall():
+        q_data = None
+        if r[8]:
+            try:
+                q_data = json.loads(r[8])
+            except Exception:
+                pass
+        versions.append(
+            {
+                "version_id": r[0],
+                "document_id": r[1],
+                "artifact_id": r[2],
+                "version_kind": r[3],
+                "snapshot_date": r[4],
+                "revision_number": r[5] or 1,
+                "supersedes_version_id": r[6],
+                "quality_status": r[7],
+                "quality_json": q_data,
+                "validation_status": r[9],
+                "privacy_status": r[10],
+                "approval_status": r[11],
+                "created_at": r[12],
+                "is_audit_sample": bool(r[13]),
+                "audit_sample_reason": r[14],
+                "auto_approved": bool(r[15]),
+            }
+        )
+    conn.close()
+    return ok_response({"document_id": document_id, "versions": versions})
+
+
 @router.get("/documents/{document_id:path}")
 def get_document_detail(document_id: str):
     conn = get_connection()
@@ -1053,6 +1194,63 @@ async def process_document_pipeline(document_id: str):
             )
         except Exception as e:
             error_response("PIPELINE_FAILED", f"Pipeline failed: {e}", status_code=400)
+
+
+@router.get("/reviews/pending-versions")
+@router.get("/versions/pending")
+def list_pending_versions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        """SELECT count(*) FROM versions WHERE approval_status = 'pending' AND (quality_status IS NULL OR quality_status != 'BLOCK')"""
+    )
+    total = c.fetchone()[0]
+    offset = (page - 1) * page_size
+
+    c.execute(
+        """SELECT v.version_id, v.document_id, d.title, d.family, a.source_id, a.source_url, a.raw_path,
+                  v.canonical_path, v.snapshot_date, v.revision_number, v.quality_status, v.quality_json,
+                  v.is_audit_sample, v.audit_sample_reason, v.created_at
+           FROM versions v
+           JOIN documents d ON v.document_id = d.document_id
+           LEFT JOIN artifacts a ON v.artifact_id = a.artifact_id
+           WHERE v.approval_status = 'pending' AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+           ORDER BY v.is_audit_sample DESC, v.created_at DESC
+           LIMIT ? OFFSET ?""",
+        (page_size, offset),
+    )
+    items = []
+    for r in c.fetchall():
+        q_data = None
+        if r[11]:
+            try:
+                q_data = json.loads(r[11])
+            except Exception:
+                pass
+        items.append(
+            {
+                "version_id": r[0],
+                "document_id": r[1],
+                "document_title": r[2] or r[1],
+                "family": r[3],
+                "source_id": r[4],
+                "source_url": r[5],
+                "raw_path": r[6],
+                "canonical_path": r[7],
+                "snapshot_date": r[8],
+                "revision_number": r[9] or 1,
+                "quality_status": r[10],
+                "quality_json": q_data,
+                "is_audit_sample": bool(r[12]),
+                "audit_sample_reason": r[13],
+                "created_at": r[14],
+            }
+        )
+    conn.close()
+    return ok_response({"items": items, "total": total, "page": page, "page_size": page_size})
 
 
 # 8.6 Records

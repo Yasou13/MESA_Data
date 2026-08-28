@@ -473,7 +473,8 @@ def get_version(conn: sqlite3.Connection, version_id: str) -> dict[str, Any] | N
                   effective_from, effective_to, canonical_path, canonical_line,
                   canonical_sha256, parser_name, parser_version, schema_version,
                   validation_status, privacy_status, approval_status, created_at,
-                  revision_number, supersedes_version_id, quality_status, quality_json
+                  revision_number, supersedes_version_id, quality_status, quality_json,
+                  is_audit_sample, audit_sample_reason, auto_approved
            FROM versions WHERE version_id = ?""",
         (version_id,),
     )
@@ -502,6 +503,9 @@ def get_version(conn: sqlite3.Connection, version_id: str) -> dict[str, Any] | N
         "supersedes_version_id": row[18] if len(row) > 18 else None,
         "quality_status": row[19] if len(row) > 19 else None,
         "quality_json": row[20] if len(row) > 20 else None,
+        "is_audit_sample": bool(row[21]) if len(row) > 21 and row[21] is not None else False,
+        "audit_sample_reason": row[22] if len(row) > 22 else None,
+        "auto_approved": bool(row[23]) if len(row) > 23 and row[23] is not None else False,
     }
 
 
@@ -1947,3 +1951,267 @@ def list_export_packages(conn: sqlite3.Connection, limit: int = 50) -> list[dict
             }
         )
     return items
+
+
+# ==========================================
+# Operational Source Settings & Certifications
+# ==========================================
+
+
+def get_source_operational_settings(conn: sqlite3.Connection, source_id: str) -> dict[str, Any]:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT source_id, enabled, auto_approval_enabled, weekly_sample_count, updated_at, updated_by FROM source_operational_settings WHERE source_id = ?",
+        (source_id,),
+    )
+    row = cursor.fetchone()
+    if row:
+        return {
+            "source_id": row[0],
+            "enabled": bool(row[1]),
+            "auto_approval_enabled": bool(row[2]),
+            "weekly_sample_count": row[3],
+            "updated_at": row[4],
+            "updated_by": row[5],
+        }
+    return {
+        "source_id": source_id,
+        "enabled": True,
+        "auto_approval_enabled": False,
+        "weekly_sample_count": 10,
+        "updated_at": datetime.now(UTC).isoformat(),
+        "updated_by": "default",
+    }
+
+
+def upsert_source_operational_settings(
+    conn: sqlite3.Connection,
+    source_id: str,
+    *,
+    enabled: bool = True,
+    auto_approval_enabled: bool = False,
+    weekly_sample_count: int = 10,
+    updated_by: str = "operator",
+) -> None:
+    now_iso = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO source_operational_settings (source_id, enabled, auto_approval_enabled, weekly_sample_count, updated_at, updated_by)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_id) DO UPDATE SET
+               enabled = excluded.enabled,
+               auto_approval_enabled = excluded.auto_approval_enabled,
+               weekly_sample_count = excluded.weekly_sample_count,
+               updated_at = excluded.updated_at,
+               updated_by = excluded.updated_by""",
+            (
+                source_id,
+                1 if enabled else 0,
+                1 if auto_approval_enabled else 0,
+                weekly_sample_count,
+                now_iso,
+                updated_by,
+            ),
+        )
+
+
+def list_source_operational_settings(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    cursor.execute("SELECT source_id, name, authority, base_url, enabled FROM sources ORDER BY source_id ASC")
+    sources = cursor.fetchall()
+
+    results = []
+    for s_id, s_name, s_auth, s_url, s_enabled in sources:
+        settings = get_source_operational_settings(conn, s_id)
+        certs = list_parser_certifications(conn, source_id=s_id)
+        results.append(
+            {
+                "source_id": s_id,
+                "name": s_name,
+                "authority": s_auth,
+                "base_url": s_url,
+                "source_enabled": bool(s_enabled) and settings["enabled"],
+                "auto_approval_enabled": settings["auto_approval_enabled"],
+                "weekly_sample_count": settings["weekly_sample_count"],
+                "updated_at": settings["updated_at"],
+                "certifications": certs,
+            }
+        )
+    return results
+
+
+def get_parser_certification(
+    conn: sqlite3.Connection,
+    source_id: str,
+    parser_name: str,
+    parser_version: str,
+) -> bool:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT certified FROM parser_certifications WHERE source_id = ? AND parser_name = ? AND parser_version = ?",
+        (source_id, parser_name, parser_version),
+    )
+    row = cursor.fetchone()
+    if row:
+        return bool(row[0])
+    return False
+
+
+def set_parser_certification(
+    conn: sqlite3.Connection,
+    source_id: str,
+    parser_name: str,
+    parser_version: str,
+    certified: bool,
+    certified_by: str = "operator",
+) -> None:
+    now_iso = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO parser_certifications (source_id, parser_name, parser_version, certified, certified_at, certified_by)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_id, parser_name, parser_version) DO UPDATE SET
+               certified = excluded.certified,
+               certified_at = excluded.certified_at,
+               certified_by = excluded.certified_by""",
+            (
+                source_id,
+                parser_name,
+                parser_version,
+                1 if certified else 0,
+                now_iso,
+                certified_by,
+            ),
+        )
+
+
+def list_parser_certifications(
+    conn: sqlite3.Connection,
+    source_id: str | None = None,
+) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    if source_id:
+        cursor.execute(
+            "SELECT source_id, parser_name, parser_version, certified, certified_at, certified_by FROM parser_certifications WHERE source_id = ? ORDER BY parser_name, parser_version",
+            (source_id,),
+        )
+    else:
+        cursor.execute(
+            "SELECT source_id, parser_name, parser_version, certified, certified_at, certified_by FROM parser_certifications ORDER BY source_id, parser_name, parser_version"
+        )
+    return [
+        {
+            "source_id": r[0],
+            "parser_name": r[1],
+            "parser_version": r[2],
+            "certified": bool(r[3]),
+            "certified_at": r[4],
+            "certified_by": r[5],
+        }
+        for r in cursor.fetchall()
+    ]
+
+
+def should_audit_sample(conn: sqlite3.Connection, source_id: str, version_id: str) -> bool:
+    """
+    Determines if a version should be selected for manual quality audit sampling.
+    Enforces that:
+      - Already sampled versions maintain their sampling state.
+      - Sampling rate obeys weekly_sample_count.
+    """
+    ver = get_version(conn, version_id)
+    if ver and ver.get("is_audit_sample"):
+        return True
+
+    settings = get_source_operational_settings(conn, source_id)
+    weekly_limit = settings.get("weekly_sample_count", 10)
+    if weekly_limit <= 0:
+        return False
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT count(*) FROM versions v
+           JOIN artifacts a ON v.artifact_id = a.artifact_id
+           WHERE a.source_id = ?
+             AND v.is_audit_sample = 1
+             AND v.created_at >= datetime('now', '-7 days')""",
+        (source_id,),
+    )
+    current_weekly_samples = cursor.fetchone()[0]
+
+    if current_weekly_samples < weekly_limit:
+        # Deterministic sample rate modulo on version ID hash
+        int_hash = int(hashlib.sha256(version_id.encode("utf-8")).hexdigest(), 16)
+        rate = min(100, max(1, weekly_limit))
+        if (int_hash % 100) < rate:
+            return True
+
+    return False
+
+
+def evaluate_auto_approval(
+    conn: sqlite3.Connection,
+    *,
+    version_id: str,
+    source_id: str,
+    parser_name: str,
+    parser_version: str,
+    quality_decision: str,
+    has_privacy_blocker: bool,
+    schema_valid: bool,
+) -> tuple[bool, str]:
+    """
+    Evaluates strict auto-approval conditions for a version:
+      1. quality_decision == 'PASS'
+      2. No privacy blockers
+      3. Schema valid
+      4. Source operationally enabled
+      5. Auto-approval enabled for source
+      6. Parser name and version certified for this source
+      7. Not selected for audit sampling
+
+    Returns (is_approved, explanation_reason).
+    """
+    if quality_decision != "PASS":
+        return False, f"Quality Gate decision is {quality_decision} (requires PASS)"
+
+    if has_privacy_blocker:
+        return False, "Privacy blocker detected in content"
+
+    if not schema_valid:
+        return False, "Schema validation failed"
+
+    settings = get_source_operational_settings(conn, source_id)
+    if not settings.get("enabled", True):
+        return False, f"Source {source_id} is operationally disabled"
+
+    if not settings.get("auto_approval_enabled", False):
+        return False, "Auto-approval is disabled for source"
+
+    is_certified = get_parser_certification(conn, source_id, parser_name, parser_version)
+    if not is_certified:
+        return False, f"Parser {parser_name} v{parser_version} is not certified for source {source_id}"
+
+    is_sampled = should_audit_sample(conn, source_id, version_id)
+    if is_sampled:
+        with transaction(conn):
+            conn.execute(
+                "UPDATE versions SET is_audit_sample = 1, audit_sample_reason = 'quality_audit_sample' WHERE version_id = ?",
+                (version_id,),
+            )
+        return False, "Selected for audit quality sampling (requires manual review)"
+
+    # All safety gates passed: Execute streaming auto-approval
+    approve_version_streaming(
+        conn,
+        version_id=version_id,
+        reviewer="system:auto-approval",
+        note="Safe auto-approval: quality PASS, parser certified, not sampled",
+    )
+    with transaction(conn):
+        conn.execute(
+            "UPDATE versions SET auto_approved = 1, approval_status = 'approved' WHERE version_id = ?",
+            (version_id,),
+        )
+
+    return True, "Auto-approved successfully"

@@ -60,3 +60,18 @@ class IssueResolveRequest(BaseModel):
     status: str = Field(default="resolved")
     resolved_by: str = Field(default="web-user")
     resolution_note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class SourceSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    auto_approval_enabled: bool = False
+    weekly_sample_count: int = Field(default=10, ge=0, le=1000)
+
+
+class ParserCertifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    parser_name: str = Field(min_length=1, max_length=100)
+    parser_version: str = Field(min_length=1, max_length=50)
+    certified: bool = True
+    certified_by: Optional[str] = Field(default="operator", max_length=100)

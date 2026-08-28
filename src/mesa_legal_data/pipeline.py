@@ -8,6 +8,7 @@ from typing import Any
 from mesa_legal_data.canonical import write_canonical_part
 from mesa_legal_data.catalog import (
     create_run,
+    evaluate_auto_approval,
     finish_run,
     get_artifact,
     get_connection,
@@ -357,9 +358,11 @@ def process_artifact_pipeline(
                     "target_legislation_id": c.target_legislation_id,
                     "target_article_id": c.target_article_id,
                     "raw_text": c.raw_text,
+                    "citation_status": c.citation_status,
+                    "relation_hint": c.relation_hint,
                     "source_span": {"char_start": c.char_start, "char_end": c.char_end},
                     "extraction_method": "deterministic_regex",
-                    "validation_status": "validated",
+                    "validation_status": "unvalidated",
                     "schema_version": "1.0.0",
                     "created_at": now_iso,
                     "source": source_obj,
@@ -413,9 +416,11 @@ def process_artifact_pipeline(
                     "target_legislation_id": c.target_legislation_id,
                     "target_article_id": c.target_article_id,
                     "raw_text": c.raw_text,
+                    "citation_status": c.citation_status,
+                    "relation_hint": c.relation_hint,
                     "source_span": {"char_start": c.char_start, "char_end": c.char_end},
                     "extraction_method": "deterministic_regex",
-                    "validation_status": "validated",
+                    "validation_status": "unvalidated",
                     "schema_version": "1.0.0",
                     "created_at": now_iso,
                     "source": source_obj,
@@ -551,6 +556,28 @@ def process_artifact_pipeline(
         if doc_id:
             update_document_status(conn, doc_id, final_status, current_version_id=version_id)
 
+        # Step 9b: Safe Auto-Approval Evaluation
+        auto_approved = False
+        auto_reason = ""
+        if quality_status != "BLOCK" and val_status == "valid":
+            try:
+                auto_approved, auto_reason = evaluate_auto_approval(
+                    conn,
+                    version_id=version_id,
+                    source_id=art_row.get("source_id", "manual"),
+                    parser_name=f"{fam}_parser",
+                    parser_version="1.0.0",
+                    quality_decision=quality_status,
+                    has_privacy_blocker=(privacy_status == "flagged"),
+                    schema_valid=True,
+                )
+                if auto_approved:
+                    final_status = "approved"
+                    if doc_id:
+                        update_document_status(conn, doc_id, "approved", current_version_id=version_id)
+            except Exception:
+                pass
+
     # Step 10: Finish Run with Real Counters
     counters = {
         "artifacts_processed": 1,
@@ -560,6 +587,8 @@ def process_artifact_pipeline(
         "citation_records": cit_count,
         "issues": issues_count,
         "quality_decision": quality_status,
+        "auto_approved": auto_approved,
+        "auto_reason": auto_reason,
         "coverage_ratio": coverage_result.coverage_ratio if coverage_result else None,
     }
     finish_run(conn, run_id, "succeeded" if quality_status != "BLOCK" else "failed", json.dumps(counters))

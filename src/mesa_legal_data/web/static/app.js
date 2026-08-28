@@ -430,14 +430,23 @@ async function loadHomeView() {
     if (welcomeCard) welcomeCard.classList.add("hidden");
     if (normalContainer) normalContainer.classList.remove("hidden");
 
-    // Metrics
-    document.getElementById("stat-docs").textContent = totalDocs;
-    document.getElementById("stat-pending").textContent = dash.counts?.pending_reviews || 0;
-    document.getElementById("stat-issues").textContent = (dash.counts?.open_blockers || 0) + (dash.counts?.open_errors || 0);
+    // Health Metrics
+    const h = dash.health || {};
+    const setElemText = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    };
 
-    const lastHarvestEl = document.getElementById("stat-last-harvest");
-    if (lastHarvestEl) {
-      lastHarvestEl.textContent = harvest.last_discovery_at ? friendlyDate(harvest.last_discovery_at) : (harvest.state === "running" ? "Şu anda çalışıyor" : "-");
+    setElemText("stat-discovered-today", h.discovered_today ?? 0);
+    setElemText("stat-processed-today", h.processed_today ?? 0);
+    setElemText("stat-auto-approved-today", h.auto_approved_today ?? 0);
+    setElemText("stat-needs-review", h.needs_review_count ?? (dash.counts?.pending_reviews || 0));
+    setElemText("stat-blocked", h.blocked_count ?? (dash.counts?.open_blockers || 0));
+    setElemText("stat-mesa-ready", h.mesa_ready_count ?? (dash.counts?.approved_records || 0));
+
+    const mesaLabelEl = document.getElementById("lbl-home-mesa-status");
+    if (mesaLabelEl) {
+      mesaLabelEl.textContent = h.mesa_status_label || "MESA entegrasyonu yapılandırılmadı (Yerel Development Staging Aktif)";
     }
 
     // Recommended Next Action Card
@@ -770,9 +779,10 @@ async function loadLibraryView() {
 async function viewDocDetail(documentId) {
   setBusy(true);
   try {
-    const [doc, textRes] = await Promise.all([
+    const [doc, textRes, verRes] = await Promise.all([
       apiRequest(`/api/documents/${encodeURIComponent(documentId)}`),
       apiRequest(`/api/documents/${encodeURIComponent(documentId)}/text`).catch(() => ({ content: null })),
+      apiRequest(`/api/documents/${encodeURIComponent(documentId)}/versions`).catch(() => ({ versions: [] })),
     ]);
     state.currentDocId = documentId;
 
@@ -794,6 +804,48 @@ async function viewDocDetail(documentId) {
       `;
     }
 
+    const versions = verRes?.versions || [];
+    let versionsTableHtml = "";
+    if (versions.length > 0) {
+      versionsTableHtml = `
+        <div style="margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 12px; font-weight: 700; color: var(--color-text-muted);">Versiyon Geçmişi (${versions.length})</label>
+            <button class="btn btn-sm btn-outline" onclick="reprocessDocument('${escapeHtml(doc.document_id)}')">Yeniden İşle</button>
+          </div>
+          <table class="data-table" style="font-size: 12px;">
+            <thead>
+              <tr>
+                <th>Revizyon</th>
+                <th>Tarih</th>
+                <th>Kalite</th>
+                <th>Onay</th>
+                <th>Etiketler</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${versions.map((v) => {
+                const qBadge = v.quality_status === "PASS" ? `<span class="badge badge-success">PASS</span>` : v.quality_status === "BLOCK" ? `<span class="badge badge-danger">BLOCK</span>` : `<span class="badge badge-warning">REVIEW</span>`;
+                const aBadge = v.approval_status === "approved" ? `<span class="badge badge-success">Onaylı</span>` : `<span class="badge badge-warning">Bekliyor</span>`;
+                const tags = [];
+                if (v.auto_approved) tags.push(`<span class="badge badge-info" style="font-size: 10px;">Otomatik</span>`);
+                if (v.is_audit_sample) tags.push(`<span class="badge badge-warning" style="font-size: 10px;">Örnek Kontrol</span>`);
+                return `
+                  <tr>
+                    <td><strong>v${v.revision_number || 1}</strong></td>
+                    <td>${friendlyDate(v.created_at)}</td>
+                    <td>${qBadge}</td>
+                    <td>${aBadge}</td>
+                    <td>${tags.join(" ") || "-"}</td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     const modalBody = document.getElementById("doc-modal-body");
     modalBody.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
@@ -801,14 +853,19 @@ async function viewDocDetail(documentId) {
           <h4>${escapeHtml(doc.title || doc.document_id)}</h4>
           <span style="font-size: 13px; color: var(--color-text-secondary);">${humanTerm(sourceId)} · ${humanTerm(doc.document_type)}</span>
         </div>
-        ${statusBadge(docStatus)}
+        <div style="display: flex; gap: 6px; align-items: center;">
+          ${statusBadge(docStatus)}
+          <button class="btn btn-sm btn-primary" onclick="reprocessDocument('${escapeHtml(doc.document_id)}')">Yeniden İşle</button>
+        </div>
       </div>
 
       ${openIssuesHtml}
 
+      ${versionsTableHtml}
+
       <div style="margin-top: 10px;">
         <label style="font-size: 12px; font-weight: 700; color: var(--color-text-muted);">Belge Metni</label>
-        <pre class="code-box" style="margin-top: 4px; max-height: 280px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">${escapeHtml(textContent)}</pre>
+        <pre class="code-box" style="margin-top: 4px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">${escapeHtml(textContent)}</pre>
       </div>
 
       <details class="technical-details">
@@ -831,6 +888,24 @@ async function viewDocDetail(documentId) {
   }
 }
 
+async function reprocessDocument(documentId) {
+  if (!confirm(`"${documentId}" belgesi mevcut ham veri kullanılarak yeniden işlensin mi?`)) return;
+  setBusy(true);
+  try {
+    const res = await apiRequest(`/api/documents/${encodeURIComponent(documentId)}/reprocess`, {
+      method: "POST",
+    });
+    showToast(`Yeniden işleme tamamlandı: ${res.pipeline_status || 'başarılı'}`, "success");
+    await viewDocDetail(documentId);
+    if (state.currentView === "library") await loadLibraryView();
+  } catch (err) {
+    showToast(`Yeniden işleme hatası: ${err.message || err}`, "danger");
+  } finally {
+    setBusy(false);
+  }
+}
+
+
 // --- 4. REVIEW VIEW ---
 async function loadReviewView() {
   setBusy(true);
@@ -845,12 +920,17 @@ async function loadReviewView() {
       document.getElementById("review-tab-pending").classList.remove("hidden");
       document.getElementById("review-tab-issues").classList.add("hidden");
 
-      const res = await apiRequest("/api/records?page=1&page_size=50&approval_status=pending");
-      const items = res.items || [];
+      const [verRes, recRes] = await Promise.all([
+        apiRequest("/api/reviews/pending-versions?page=1&page_size=50").catch(() => ({ items: [] })),
+        apiRequest("/api/records?page=1&page_size=50&approval_status=pending").catch(() => ({ items: [] })),
+      ]);
+
+      const versionItems = verRes.items || [];
+      const recordItems = recRes.items || [];
       const tbody = document.getElementById("tbl-reviews");
       tbody.innerHTML = "";
 
-      if (items.length === 0) {
+      if (versionItems.length === 0 && recordItems.length === 0) {
         tbody.innerHTML = `
           <tr>
             <td colspan="6" class="empty-state">
@@ -858,7 +938,7 @@ async function loadReviewView() {
                 <h4 style="margin: 0 0 6px 0; font-size: 15px;">Şu anda inceleme bekleyen kayıt yok</h4>
                 <p style="margin: 0 0 14px 0; color: var(--color-text-secondary); font-size: 13px;">Hazır verilerinizi dışa aktarabilir veya yeni veri toplamaya devam edebilirsiniz.</p>
                 <div style="display: flex; gap: 10px; justify-content: center;">
-                  <button type="button" class="btn btn-primary btn-sm" onclick="switchView('export')">Dışa Aktar</button>
+                  <button type="button" class="btn btn-primary btn-sm" onclick="switchView('export')">Yayınla</button>
                   <button type="button" class="btn btn-secondary btn-sm" onclick="switchView('collect')">Veri Topla</button>
                 </div>
               </div>
@@ -868,20 +948,41 @@ async function loadReviewView() {
         return;
       }
 
-      items.forEach((rec) => {
+      // Render pending versions first (document-first review)
+      versionItems.forEach((v) => {
         const tr = document.createElement("tr");
+        const qBadge = v.quality_status === "PASS" ? `<span class="badge badge-success">PASS</span>` : v.quality_status === "BLOCK" ? `<span class="badge badge-danger">BLOCK</span>` : `<span class="badge badge-warning">REVIEW</span>`;
+        const auditBadge = v.is_audit_sample ? `<span class="badge badge-warning" style="margin-left: 4px;">Örnek Kontrol</span>` : "";
         tr.innerHTML = `
-          <td><strong>${escapeHtml(rec.document_title || rec.document_id || "Belge")}</strong></td>
-          <td>${humanTerm(rec.record_type)}</td>
-          <td>${statusBadge(rec.validation_status || "valid")}</td>
-          <td>${statusBadge(rec.approval_status || "pending")}</td>
-          <td>${friendlyDate(rec.created_at)}</td>
+          <td><strong>${escapeHtml(v.document_title || v.document_id || "Belge")}</strong> <small class="mono">v${v.revision_number || 1}</small></td>
+          <td>${humanTerm(v.family || "legislation")}</td>
+          <td>${qBadge} ${auditBadge}</td>
+          <td><span class="badge badge-warning">İnceleme Bekliyor</span></td>
+          <td>${friendlyDate(v.created_at)}</td>
           <td>
-            <button class="btn btn-sm btn-primary" onclick="openRecordReviewModal('${escapeHtml(rec.record_id)}')">İncele</button>
+            <button class="btn btn-sm btn-primary" onclick="openVersionReviewModal('${escapeHtml(v.version_id)}')">Belgeyi İncele</button>
           </td>
         `;
         tbody.appendChild(tr);
       });
+
+      // Render individual pending records if any exist without version parent
+      if (versionItems.length === 0) {
+        recordItems.forEach((rec) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><strong>${escapeHtml(rec.document_title || rec.document_id || "Belge")}</strong></td>
+            <td>${humanTerm(rec.record_type)}</td>
+            <td>${statusBadge(rec.validation_status || "valid")}</td>
+            <td>${statusBadge(rec.approval_status || "pending")}</td>
+            <td>${friendlyDate(rec.created_at)}</td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="openRecordReviewModal('${escapeHtml(rec.record_id)}')">İncele</button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
     } else {
       document.getElementById("review-tab-pending").classList.add("hidden");
       document.getElementById("review-tab-issues").classList.remove("hidden");
@@ -1108,25 +1209,136 @@ async function openRecordReviewModal(recordId) {
   }
 }
 
-async function handleRecordDecision(decision) {
-  if (!state.currentRecordId) return;
-  const note = document.getElementById("txt-reviewer-note")?.value.trim() || "";
-
+async function openVersionReviewModal(versionId) {
   setBusy(true);
   try {
-    const endpoint = `/api/reviews/records/${encodeURIComponent(state.currentRecordId)}/${decision}`;
-    await apiRequest(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reviewer: sessionStorage.getItem("mesa_actor") || "web-user",
-        note: note || null,
+    const [ver, docTextRes] = await Promise.all([
+      apiRequest(`/api/reviews/pending-versions?page=1&page_size=100`).then((res) => {
+        return (res.items || []).find((v) => v.version_id === versionId) || { version_id: versionId };
       }),
-    });
+      apiRequest(`/api/documents/${encodeURIComponent(versionId.split(':')[0])}/text`).catch(() => ({ content: null })),
+    ]);
 
-    showToast(`Kayıt ${decision === "approve" ? "onaylandı" : "reddedildi"}.`, "success");
-    closeModal("modal-record-detail");
-    await loadReviewView();
+    state.currentVersionId = versionId;
+    state.currentRecordId = null;
+
+    const qJson = ver.quality_json || {};
+    const checks = qJson.checks || [];
+    const cov = qJson.coverage || {};
+    const covPct = cov.coverage_ratio != null ? `${Math.round(cov.coverage_ratio * 100)}%` : "N/A";
+
+    let auditBannerHtml = "";
+    if (ver.is_audit_sample) {
+      auditBannerHtml = `
+        <div class="alert alert-warning" style="margin-bottom: 12px; font-size: 13px;">
+          <strong>Kalite Örnek Denetimi:</strong> Bu belge otomatik kalite sistemini doğrulamak için örnek kontrole seçildi.
+        </div>
+      `;
+    }
+
+    let qualityChecksHtml = "";
+    if (checks.length > 0) {
+      qualityChecksHtml = `
+        <div style="margin: 10px 0; padding: 10px; background: var(--color-surface-subtle); border-radius: 6px; font-size: 12px;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+            <strong>Kalite Değerlendirmesi: ${ver.quality_status || 'PASS'}</strong>
+            <span>Kapsam Oranı: <strong>${covPct}</strong></span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px;">
+            ${checks.map((c) => {
+              const icon = c.status === "PASS" ? "✅" : c.status === "BLOCK" ? "❌" : "⚠️";
+              return `<div>${icon} <strong>${escapeHtml(c.name || c.check_group || 'Kontrol')}:</strong> ${c.status}</div>`;
+            }).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    const rawContent = (docTextRes && docTextRes.content) ? docTextRes.content : "Ham kaynak metni yüklenemedi.";
+
+    const modalBody = document.getElementById("record-modal-body");
+    modalBody.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+        <div>
+          <h4>${escapeHtml(ver.document_title || ver.document_id || "Belge Versiyonu")}</h4>
+          <span style="font-size: 13px; color: var(--color-text-secondary);">${humanTerm(ver.source_id || "resmi_gazete")} · Revizyon v${ver.revision_number || 1}</span>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <span class="badge ${ver.quality_status === "PASS" ? "badge-success" : ver.quality_status === "BLOCK" ? "badge-danger" : "badge-warning"}">${ver.quality_status || 'REVIEW'}</span>
+          <span class="badge badge-warning">İnceleme Bekliyor</span>
+        </div>
+      </div>
+
+      ${auditBannerHtml}
+      ${qualityChecksHtml}
+
+      <div class="review-split-view">
+        <div class="review-panel">
+          <div class="review-panel-header">
+            <span>Ham Kaynak İçeriği</span>
+            <span style="font-weight: normal; font-size: 11px; color: var(--color-text-muted);">${escapeHtml(ver.source_url || "")}</span>
+          </div>
+          <pre class="review-panel-body code-box">${escapeHtml(rawContent)}</pre>
+        </div>
+        <div class="review-panel">
+          <div class="review-panel-header">
+            <span>Canonical Versiyon</span>
+            <span style="font-weight: normal; font-size: 11px; color: var(--color-text-muted);">${escapeHtml(ver.version_id)}</span>
+          </div>
+          <pre class="review-panel-body code-box">${escapeHtml(rawContent)}</pre>
+        </div>
+      </div>
+
+      <details class="technical-details">
+        <summary>Teknik ayrıntılar</summary>
+        <div class="technical-details-content">
+          <div><strong>Version ID:</strong> <code class="mono">${escapeHtml(ver.version_id)}</code></div>
+          <div><strong>Document ID:</strong> <code class="mono">${escapeHtml(ver.document_id || "-")}</code></div>
+          <div><strong>Canonical Path:</strong> <code>${escapeHtml(ver.canonical_path || "-")}</code></div>
+        </div>
+      </details>
+    `;
+
+    document.getElementById("txt-reviewer-note").value = "";
+    showModal("modal-record-detail");
+  } catch (err) {
+    console.error("Open version review modal error:", err);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function handleRecordDecision(decision) {
+  const note = document.getElementById("txt-reviewer-note")?.value.trim() || "";
+  setBusy(true);
+  try {
+    if (state.currentVersionId && !state.currentRecordId) {
+      const endpoint = `/api/versions/${encodeURIComponent(state.currentVersionId)}/${decision}`;
+      await apiRequest(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reviewer: sessionStorage.getItem("mesa_actor") || "web-user",
+          note: note || null,
+        }),
+      });
+      showToast(`Belge versiyonu ${decision === "approve" ? "onaylandı" : "reddedildi"}.`, "success");
+      closeModal("modal-record-detail");
+      await loadReviewView();
+    } else if (state.currentRecordId) {
+      const endpoint = `/api/reviews/records/${encodeURIComponent(state.currentRecordId)}/${decision}`;
+      await apiRequest(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reviewer: sessionStorage.getItem("mesa_actor") || "web-user",
+          note: note || null,
+        }),
+      });
+      showToast(`Kayıt ${decision === "approve" ? "onaylandı" : "reddedildi"}.`, "success");
+      closeModal("modal-record-detail");
+      await loadReviewView();
+    }
   } catch (err) {
     console.error("Record decision error:", err);
     const errStr = String(err.message || "");
@@ -1356,19 +1568,19 @@ async function runMesaTransferSequence() {
     await apiRequest(`/api/releases/${releaseId}/verify`, { method: "POST" });
 
     // Step 3: Publish
-    statusText.textContent = "3/4 Yayına alınıyor...";
+    statusText.textContent = "3/4 Release paketi onaylanıyor...";
     await apiRequest(`/api/releases/${releaseId}/publish`, { method: "POST" });
 
     // Step 4: Import Staging
-    statusText.textContent = "4/4 MESA aktarım alanına aktarılıyor...";
+    statusText.textContent = "4/4 Yerel Development Staging alanına aktarılıyor...";
     await apiRequest(`/api/releases/${releaseId}/import-staging`, { method: "POST" });
 
-    statusText.textContent = "✓ MESA'ya aktarım başarıyla tamamlandı.";
-    showToast("Onaylı kayıtlar MESA aktarım alanına başarıyla gönderildi.", "success");
+    statusText.textContent = "✓ Yerel Development Staging release paketi oluşturuldu.";
+    showToast("Onaylı kayıtlar yerel development staging ortamına aktarıldı. (MESA v4 publisher entegrasyonu sonraki aşamada tamamlanacaktır)", "success");
   } catch (err) {
-    console.error("MESA transfer error:", err);
-    statusText.textContent = `Aktarım tamamlanamadı: ${err.message}`;
-    showToast("MESA aktarımı tamamlanamadı. Oluşturulan paket korundu.", "danger");
+    console.error("Staging release error:", err);
+    statusText.textContent = `İşlem tamamlanamadı: ${err.message}`;
+    showToast("Yerel release oluşturulamadı. Oluşturulan paket korundu.", "danger");
   } finally {
     transferBtn.disabled = false;
     setTimeout(() => {
@@ -1381,29 +1593,114 @@ async function runMesaTransferSequence() {
 async function loadSourcesView() {
   setBusy(true);
   try {
-    const sources = await apiRequest("/api/sources");
+    const [sources, settingsList] = await Promise.all([
+      apiRequest("/api/sources"),
+      apiRequest("/api/sources/settings").catch(() => []),
+    ]);
+
+    const settingsMap = {};
+    (settingsList || []).forEach((item) => {
+      settingsMap[item.source_id] = item;
+    });
+
     const container = document.getElementById("sources-list");
     container.innerHTML = "";
 
     sources.forEach((s) => {
+      const opt = settingsMap[s.source_id] || {
+        enabled: s.enabled !== false,
+        auto_approval_enabled: false,
+        weekly_sample_count: 10,
+        parsers: [],
+      };
+
+      const parsers = opt.parsers || [];
+
       const card = document.createElement("div");
-      card.className = "source-card";
+      card.className = "source-card panel-box";
+      card.style.marginBottom = "16px";
       card.innerHTML = `
-        <div class="source-card-header">
+        <div class="source-card-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
           <div class="source-title-group">
-            <h3>${escapeHtml(s.name)}</h3>
-            <p>${escapeHtml(s.authority || "-")}</p>
+            <h3 style="margin: 0 0 4px 0;">${escapeHtml(s.name)}</h3>
+            <p style="margin: 0; font-size: 13px; color: var(--color-text-secondary);">${escapeHtml(s.authority || "-")}</p>
           </div>
-          <span class="badge ${s.automation === "supported" ? "badge-success" : s.automation === "manual" ? "badge-info" : "badge-neutral"}">${escapeHtml(s.automation === "supported" ? "Otomatik Toplama" : s.automation === "manual" ? "Manuel Ekleme" : "Devre Dışı")}</span>
+          <span class="badge ${opt.enabled ? "badge-success" : "badge-neutral"}">${opt.enabled ? "Kaynak Aktif" : "Devre Dışı"}</span>
         </div>
-        <div style="font-size: 13px; color: var(--color-text-secondary);">
-          <strong>Kaynak ID:</strong> <code>${escapeHtml(s.source_id)}</code>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--color-border);">
+          <div>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;">
+              <input type="checkbox" id="chk-src-enabled-${s.source_id}" ${opt.enabled ? "checked" : ""}>
+              Kaynak Veri Alımına İzin Ver
+            </label>
+            <small style="display: block; color: var(--color-text-muted); margin-top: 2px;">Kaynaktan otomatik ve manuel veri alımını denetler.</small>
+          </div>
+
+          <div>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;">
+              <input type="checkbox" id="chk-src-auto-${s.source_id}" ${opt.auto_approval_enabled ? "checked" : ""}>
+              Güvenli Otomatik Onay
+            </label>
+            <small style="display: block; color: var(--color-text-muted); margin-top: 2px;">Sadece PASS alan ve sertifikalı parser belgeleri otomatik onaylanır.</small>
+          </div>
+
+          <div>
+            <label style="font-size: 13px; font-weight: 600; display: block;">Haftalık Örnek Denetim Sayısı</label>
+            <input type="number" id="num-src-sample-${s.source_id}" value="${opt.weekly_sample_count ?? 10}" min="0" max="1000" style="width: 100px; margin-top: 4px; padding: 4px 8px;">
+            <small style="display: block; color: var(--color-text-muted); margin-top: 2px;">Otomasyonu doğrulamak için seçilen audit örnekleri.</small>
+          </div>
+        </div>
+
+        ${parsers.length > 0 ? `
+          <div style="margin-top: 12px; padding: 8px 12px; background: var(--color-surface-subtle); border-radius: 6px; font-size: 12px;">
+            <strong>Sertifikalı Parser Sürümleri:</strong>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;">
+              ${parsers.map(p => `
+                <span class="badge ${p.certified ? 'badge-success' : 'badge-neutral'}">
+                  ${escapeHtml(p.parser_name)} v${escapeHtml(p.parser_version)}: ${p.certified ? 'Sertifikalı' : 'Sertifikasız'}
+                </span>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="font-size: 12px; color: var(--color-text-muted);">
+            <strong>Güvenlik Politikası:</strong> ${escapeHtml(s.base_url || "-")} · ${humanTerm(s.access_mode || "official_web")}
+          </div>
+          <button class="btn btn-sm btn-primary" onclick="saveSourceOperationalSettings('${escapeHtml(s.source_id)}')">Ayarları Kaydet</button>
         </div>
       `;
       container.appendChild(card);
     });
   } catch (err) {
     console.error("Sources view error:", err);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function saveSourceOperationalSettings(sourceId) {
+  const enabled = document.getElementById(`chk-src-enabled-${sourceId}`)?.checked ?? true;
+  const autoApproval = document.getElementById(`chk-src-auto-${sourceId}`)?.checked ?? false;
+  const sampleCount = parseInt(document.getElementById(`num-src-sample-${sourceId}`)?.value || "10", 10);
+
+  setBusy(true);
+  try {
+    await apiRequest(`/api/sources/${encodeURIComponent(sourceId)}/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: enabled,
+        auto_approval_enabled: autoApproval,
+        weekly_sample_count: isNaN(sampleCount) ? 10 : sampleCount,
+      }),
+    });
+    showToast(`"${sourceId}" ayarları güncellendi.`, "success");
+    await loadSourcesView();
+  } catch (err) {
+    showToast(`Ayar kaydedilemedi: ${err.message || err}`, "danger");
   } finally {
     setBusy(false);
   }
