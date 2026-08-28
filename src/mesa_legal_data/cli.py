@@ -358,6 +358,29 @@ def review_reject(
         conn.close()
 
 
+@review_app.command("reject-version")
+def review_reject_version(
+    version_id: str = typer.Argument(..., help="Version ID to reject completely"),
+    reviewer: str = typer.Option("reviewer", "--reviewer", help="Reviewer name"),
+    note: str | None = typer.Option(None, "--note", help="Rejection note"),
+):
+    """Rejects all records under a version."""
+    from mesa_legal_data.catalog import get_connection, reject_version
+
+    conn = get_connection()
+    try:
+        res = reject_version(conn, version_id=version_id, reviewer=reviewer, note=note)
+        typer.secho(
+            f"Successfully REJECTED version {version_id} ({res['rejected_records']} records)",
+            fg=typer.colors.YELLOW,
+        )
+    except Exception as e:
+        typer.secho(f"Error rejecting version: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    finally:
+        conn.close()
+
+
 release_app = typer.Typer(help="Manage release packages for MESA consumption.")
 app.add_typer(release_app, name="release")
 

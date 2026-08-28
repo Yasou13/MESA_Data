@@ -769,16 +769,22 @@
 
   <!-- Modal: Record Review Detail -->
   <div id="modal-record-detail" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="record-modal-title">
-    <div class="modal-card large">
+    <div class="modal-card large extra-large">
       <div class="modal-header">
         <h3 id="record-modal-title">Kayıt İnceleme</h3>
         <button class="btn-close" data-close="modal-record-detail" aria-label="Kapat">×</button>
       </div>
       <div id="record-modal-body" class="modal-body"></div>
-      <div class="modal-footer" style="align-items: center;">
-        <input type="text" id="txt-reviewer-note" placeholder="İnceleme Notu (opsiyonel)" style="flex: 1;">
-        <button id="btn-record-approve" class="btn btn-success">Onayla</button>
-        <button id="btn-record-reject" class="btn btn-danger">Reddet</button>
+      <div class="modal-footer" style="display: flex; flex-direction: column; gap: 10px; align-items: stretch;">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input type="text" id="txt-reviewer-note" placeholder="İnceleme Notu (opsiyonel)" style="flex: 1;">
+          <button id="btn-record-approve" class="btn btn-success">Onayla</button>
+          <button id="btn-record-reject" class="btn btn-danger">Reddet</button>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; border-top: 1px dashed var(--color-border); padding-top: 8px;">
+          <button id="btn-version-approve" class="btn btn-primary">Belgenin Bu Sürümünü Onayla</button>
+          <button id="btn-version-reject" class="btn btn-secondary">Belgenin Bu Sürümünü Reddet</button>
+        </div>
       </div>
     </div>
   </div>

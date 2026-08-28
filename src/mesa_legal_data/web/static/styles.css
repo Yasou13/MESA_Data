@@ -660,6 +660,62 @@ input:focus, select:focus, textarea:focus {
   max-height: 85vh;
 }
 
+.modal-card.extra-large {
+  width: 1040px;
+  max-width: calc(100vw - 32px);
+  max-height: 90vh;
+}
+
+.review-split-view {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 6px;
+  min-height: 0;
+}
+
+.review-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.review-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+
+.review-panel-body {
+  padding: 10px 12px;
+  flex: 1;
+  overflow-y: auto;
+  max-height: 320px;
+  margin: 0;
+  background: transparent;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .review-split-view {
+    grid-template-columns: 1fr;
+  }
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;

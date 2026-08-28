@@ -646,6 +646,38 @@ def list_open_blocking_issues(conn: sqlite3.Connection, subject_id: str | None =
     ]
 
 
+def list_open_blocking_issues_for_version(conn: sqlite3.Connection, version_id: str) -> list[dict[str, Any]]:
+    """Lists open blocking issues on the version itself or any child records under that version."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT issue_id, subject_type, subject_id, severity, code, message 
+           FROM validation_issues 
+           WHERE status = 'open' AND severity IN ('blocker', 'error') 
+             AND (
+                 subject_id = ? 
+                 OR (subject_type = 'record' AND subject_id IN (SELECT record_id FROM records WHERE version_id = ?))
+             )""",
+        (version_id, version_id),
+    )
+    rows = []
+    while True:
+        batch = cursor.fetchmany(1000)
+        if not batch:
+            break
+        rows.extend(batch)
+    return [
+        {
+            "issue_id": r[0],
+            "subject_type": r[1],
+            "subject_id": r[2],
+            "severity": r[3],
+            "code": r[4],
+            "message": r[5],
+        }
+        for r in rows
+    ]
+
+
 def resolve_issue(
     conn: sqlite3.Connection,
     issue_id: str,
@@ -760,6 +792,75 @@ def reject_record_with_checks(
     review_id = f"rev-{uuid.uuid4().hex[:8]}"
     add_record_review(conn, review_id, record_id, rec["record_sha256"], "rejected", reviewer, note)
     return {"status": "rejected", "record_id": record_id, "review_id": review_id}
+
+
+def reject_version(
+    conn: sqlite3.Connection,
+    *,
+    version_id: str,
+    reviewer: str,
+    note: str | None = None,
+) -> dict[str, Any]:
+    ver = get_version(conn, version_id)
+    if not ver:
+        raise CatalogError(f"Version {version_id} not found")
+
+    now_iso = datetime.now(UTC).isoformat()
+
+    with transaction(conn):
+        cur = conn.cursor()
+        cur.execute("SELECT record_id, record_sha256 FROM records WHERE version_id = ?", (version_id,))
+        records = cur.fetchall()
+
+        if records:
+            review_rows = [(r[0], r[1], reviewer, "rejected", note, now_iso) for r in records]
+            conn.executemany(
+                "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                review_rows,
+            )
+            conn.execute(
+                "UPDATE records SET approval_status = 'rejected' WHERE version_id = ?",
+                (version_id,),
+            )
+
+        conn.execute(
+            "UPDATE versions SET approval_status = 'rejected' WHERE version_id = ?",
+            (version_id,),
+        )
+        conn.execute(
+            "UPDATE documents SET lifecycle_status = 'rejected', updated_at = ? WHERE document_id = ?",
+            (now_iso, ver["document_id"]),
+        )
+
+        log_audit_event(
+            conn,
+            actor=reviewer,
+            action="version_reject",
+            subject_type="version",
+            subject_id=version_id,
+            reason=note,
+            details_json=json.dumps({"rejected_records": len(records)}),
+        )
+
+        try:
+            from mesa_legal_data.harvest.queue import reconcile_harvest_review_status
+
+            reconcile_harvest_review_status(version_id)
+        except Exception:
+            pass
+
+    return {
+        "status": "rejected",
+        "version_id": version_id,
+        "rejected_records": len(records),
+        "approval_status": "rejected",
+    }
+
+
+def reject_version_with_checks(
+    conn: sqlite3.Connection, version_id: str, reviewer: str, note: str | None = None
+) -> dict[str, Any]:
+    return reject_version(conn, version_id=version_id, reviewer=reviewer, note=note)
 
 
 def get_latest_valid_review(conn: sqlite3.Connection, record_id: str, record_sha256: str) -> dict[str, Any] | None:
@@ -882,7 +983,7 @@ def approve_version_streaming(
     if not ver:
         raise CatalogError(f"Version {version_id} not found")
 
-    blockers = list_open_blocking_issues(conn, subject_id=version_id)
+    blockers = list_open_blocking_issues_for_version(conn, version_id=version_id)
     if blockers:
         raise BlockingValidationIssueExists(
             f"Cannot approve version {version_id}: open blocking issues exist: {blockers}"

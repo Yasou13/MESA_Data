@@ -639,7 +639,10 @@ def fetch_discovery_html(
     if ct and not ("html" in ct or "text" in ct or "xml" in ct):
         raise SourcePolicyError(f"Discovery page returned invalid Content-Type: {ct}")
 
+    from mesa_legal_data.parsers.encoding import decode_source_bytes
+
     try:
-        return raw_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw_bytes.decode("iso-8859-9", errors="ignore")
+        decoded_text, _ = decode_source_bytes(raw_bytes, is_html=True)
+        return decoded_text
+    except Exception:
+        return raw_bytes.decode("utf-8", errors="replace")

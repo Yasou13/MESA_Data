@@ -20,9 +20,11 @@ from mesa_legal_data.catalog import (
     get_release,
     list_open_blocking_issues,
     reject_record_with_checks,
+    reject_version,
     resolve_issue,
 )
 from mesa_legal_data.config import load_settings, load_sources
+from mesa_legal_data.parsers import decode_source_bytes
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.release import build_release, verify_release
 from mesa_legal_data.release.importer import (
@@ -854,11 +856,14 @@ def get_document_text_content(document_id: str):
     data_root = load_settings().data_root_path
     content_text = ""
     source_type = "raw"
+    detected_charset = "utf-8"
 
     if raw_path_rel:
         try:
             safe_p = validate_file_download(data_root, raw_path_rel)
-            content_text = safe_p.read_text(encoding="utf-8", errors="ignore")
+            raw_bytes = safe_p.read_bytes()
+            is_html = raw_path_rel.lower().endswith((".html", ".htm"))
+            content_text, detected_charset = decode_source_bytes(raw_bytes, is_html=is_html)
         except Exception:
             pass
 
@@ -871,7 +876,8 @@ def get_document_text_content(document_id: str):
         if v_row and v_row[0]:
             try:
                 safe_can = validate_file_download(data_root, v_row[0])
-                content_text = safe_can.read_text(encoding="utf-8", errors="ignore")
+                raw_bytes = safe_can.read_bytes()
+                content_text, detected_charset = decode_source_bytes(raw_bytes, is_html=False)
                 source_type = "canonical"
             except Exception:
                 pass
@@ -888,6 +894,7 @@ def get_document_text_content(document_id: str):
             "document_id": document_id,
             "title": dict(doc).get("title"),
             "source_type": source_type,
+            "charset": detected_charset,
             "truncated": truncated,
             "content": content_text or "Metin içeriği bulunamadı.",
         }
@@ -1217,6 +1224,19 @@ async def approve_version(version_id: str, req: ReviewRequest):
             return ok_response(res)
         except Exception as e:
             error_response("VERSION_APPROVE_FAILED", str(e), status_code=400)
+        finally:
+            conn.close()
+
+
+@router.post("/versions/{version_id:path}/reject")
+async def reject_version_endpoint(version_id: str, req: ReviewRequest):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            res = reject_version(conn, version_id=version_id, reviewer=req.reviewer, note=req.note)
+            return ok_response(res)
+        except Exception as e:
+            error_response("VERSION_REJECT_FAILED", str(e), status_code=400)
         finally:
             conn.close()
 
