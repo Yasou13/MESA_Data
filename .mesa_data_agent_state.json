@@ -2,10 +2,10 @@
   "schema_version": 1,
   "project": "MESA_Data",
   "workflow": "mesa_data_autonomy",
-  "branch": "feat/mesa-data-autonomous-pipeline",
+  "branch": "audit/mesa-data-autonomy-final",
   "baseline_commit": "84c61db716c10cb4110b673f9a976215afe71cd3",
-  "current_phase": "prompt_5_final_adversarial_audit",
-  "overall_status": "ready_for_final_audit",
+  "current_phase": "complete",
+  "overall_status": "partially_ready",
   "phases": {
     "prompt_1": {
       "status": "completed",
@@ -65,7 +65,7 @@
       "started_at": "2026-08-29T02:00:00Z",
       "completed_at": "2026-08-29T02:08:00Z",
       "commits": [
-        "feat: citation semantics, safe auto-approval engine, and web panel completion"
+        "390f6ecdc002d351bb356737799e2b2d0b888558 feat: citation semantics, safe auto-approval engine, and web panel completion"
       ],
       "files_changed": [
         "migrations/0006_citations_certifications_and_panel.sql",
@@ -109,7 +109,7 @@
       "started_at": "2026-08-29T02:08:00Z",
       "completed_at": "2026-08-29T02:17:00Z",
       "commits": [
-        "feat: MESA v4 Publisher, delivery ledger, cross-release deduplication, and manual web push"
+        "59a822d3b5d1187fec4683c71ad1da831745b318 feat: implement real MESA v4 publisher, legal chunker, delivery ledger, cross-release deduplication, and web push panel"
       ],
       "files_changed": [
         "migrations/0007_mesa_v4_publisher_and_deliveries.sql",
@@ -166,7 +166,9 @@
       "status": "completed",
       "started_at": "2026-08-29T02:18:00Z",
       "completed_at": "2026-08-29T02:24:00Z",
-      "commits": [],
+      "commits": [
+        "7f958f0ac6592f8e0f6bd2c4697a15ca626993b4 test: integration audit and verification suite for Prompt 4 Kontrol 1-11"
+      ],
       "files_changed": [
         "tests/integration/test_prompt4_integration_audit.py",
         ".mesa_data_agent_state.json",
@@ -188,17 +190,59 @@
         "Full test suite: 295 tests passed (291 non-scale + 4 scale, 0 failed, 100% pass rate)"
       ],
       "blockers": []
+    },
+    "prompt_5": {
+      "status": "completed",
+      "completed_at": "2026-08-29T15:13:48Z",
+      "commits": [
+        "1baa2c2642684a24aead899c3d53873c60298342 fix: harden final autonomy audit invariants"
+      ],
+      "migrations": [
+        "0008_final_audit_hardening.sql"
+      ],
+      "findings": [
+        "Publisher routes were guessed rather than documented or explicitly configured, and unknown remote states could be misreported as COMMITTED.",
+        "Publisher payload assembly mixed citation text into canonical document text and could release multiple approved historical versions of one document.",
+        "Auto-approval trusted caller-supplied parser/source/quality facts instead of the stored version and artifact facts.",
+        "Exact artifact reprocessing could rewrite immutable version pointers, and predecessor links were inferred without authoritative evidence.",
+        "Quality checks accepted shifted spans and did not reliably block severe replacement loss or missing middle sections.",
+        "Numbered but unregistered legislation citations were incorrectly promoted directly to RESOLVED.",
+        "The sync item limit was not a total-run bound and could process more backlog items than requested.",
+        "Browser execution found a collect-view JavaScript scope regression not covered by the prior static UI tests.",
+        "No live MESA endpoint or MESA source code was available; the remote contract and server-side deduplication remain unverified."
+      ],
+      "decisions": [
+        "Removed all guessed MESA routes and required an explicit configured contract before connectivity or publication.",
+        "Made COMMITTED fail closed: missing, accepted, received, queued, processing, timeout, rejected, and unknown states cannot become success.",
+        "Bound approvals, releases, canonical reads, and reprocessing to exact stored version/artifact identities.",
+        "Hardened deterministic quality, citation lifecycle, retry/idempotency, partial delivery, and total sync-limit behavior.",
+        "Verified the primary panel journey in a real local browser and added a regression guard for collect-view helper scope."
+      ],
+      "tests": [
+        "uv run pytest -ra: 304 passed in 71.01s",
+        "uv run ruff check src tests: passed",
+        "uv run mypy src/mesa_legal_data --ignore-missing-imports --explicit-package-bases --follow-imports=skip: passed (77 source files)",
+        "python -m compileall -q src/mesa_legal_data: passed",
+        "node --check src/mesa_legal_data/web/static/app.js: passed",
+        "Live browser journey: Ana Sayfa, Veri Topla, Kütüphane, İnceleme, Yayınla, advanced navigation and explicit MESA contract fields verified",
+        "Two bounded real Resmi Gazete sync runs in isolated storage: one item per run, zero MESA deliveries"
+      ],
+      "blockers": [
+        "Live MESA HTTP contract and server-side idempotency could not be verified because no endpoint or MESA source access was available."
+      ]
     }
   },
   "mesa_contract": {
-    "source": "mesa_v4_http_spec",
+    "source": "explicit_configuration_and_local_mock_contract",
     "verified_by_live_http": "LIVE_MESA_NOT_VERIFIED",
-    "assumptions": [
-      "MESA accepts canonical source evidence with text chunks, metadata, and idempotency keys via POST /v4/sources/chunks.",
-      "MESA exposes GET /v4/health for connectivity test and GET /v4/mutations/{id} for mutation status polling.",
-      "MESA server-side deduplication honors idempotency_key."
+    "assumptions": [],
+    "unknowns": [
+      "Live MESA health, publish, and mutation-status paths",
+      "Live MESA request and response schemas",
+      "Live MESA asynchronous mutation state semantics",
+      "Live MESA server-side idempotency and duplicate suppression behavior"
     ],
-    "unknowns": []
+    "policy": "Unknown routes are never guessed; all three routes must be explicitly configured from a documented or live-verified contract."
   },
   "invariants": {
     "immutable_artifacts": true,
@@ -210,15 +254,17 @@
     "mesa_v4_publisher_ledger": true,
     "mesa_cross_release_dedup": true,
     "mesa_api_key_secret_isolation": true,
-    "manual_push_gate_enforced": true
+    "manual_push_gate_enforced": true,
+    "explicit_mesa_contract_required": true,
+    "mesa_live_contract_verified": false
   },
   "handoff": {
-    "next_phase": "prompt_5_final_adversarial_audit",
-    "summary": "Prompt 4 Integration Audit and Verification completed: Verified versioning isolation, canonical spans, quality gate, citation semantics, safe auto-approval, web panel user journey, MESA publisher ledger, manual push invariant, committed truth, secret isolation, and clean architecture without overengineering. 295/295 tests passing.",
+    "next_phase": null,
+    "summary": "Prompt 5 final adversarial audit is complete. Local MESA_Data behavior is hardened and 304/304 tests pass; overall status remains partially_ready because the live external MESA contract is unavailable and was not fabricated.",
     "must_verify": [
       "Ensure live deployment environment configures MESA_DATA_MESA_API_KEY securely.",
-      "Verify MESA target URL and network route when live endpoint becomes available."
+      "Configure documented MESA routes and verify health, publish, polling, COMMITTED truth, and server-side idempotency against a live endpoint."
     ]
   },
-  "last_updated_at": "2026-08-29T02:24:00Z"
+  "last_updated_at": "2026-08-29T15:13:48Z"
 }
