@@ -214,6 +214,7 @@ def run_collection_until_pause(
     is_cancelled_cb: Callable[[], bool] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     max_loops: int = 50,
+    max_processed_items: int | None = None,
 ) -> dict[str, Any]:
     """
     Loops through discovery and worker batches safely until a stopping/pause condition is met.
@@ -238,6 +239,10 @@ def run_collection_until_pause(
     stopped_reason = None
 
     for _ in range(max_loops):
+        if max_processed_items is not None and total_processed >= max_processed_items:
+            status = "paused_item_limit"
+            stopped_reason = "ITEM_LIMIT_REACHED"
+            break
         # 1. Cancellation check before discovery
         if is_cancelled_cb and is_cancelled_cb():
             status = "cancelled"
@@ -294,6 +299,11 @@ def run_collection_until_pause(
             total_duplicate += dup
             batch_loop_processed += p
 
+            if max_processed_items is not None and total_processed >= max_processed_items:
+                status = "paused_item_limit"
+                stopped_reason = "ITEM_LIMIT_REACHED"
+                break
+
             if progress_cb and p > 0:
                 progress_cb(
                     {
@@ -345,6 +355,7 @@ def run_collection_until_pause(
             "target_reached",
             "paused_daily_limit",
             "paused_safety",
+            "paused_item_limit",
         ):
             break
 

@@ -1,3 +1,8 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+
 import pytest
 
 from mesa_legal_data.catalog import (
@@ -5,6 +10,7 @@ from mesa_legal_data.catalog import (
     get_connection,
     get_version,
     insert_artifact,
+    insert_record,
     insert_version,
     migrate,
     set_parser_certification,
@@ -14,8 +20,9 @@ from mesa_legal_data.catalog import (
 
 
 @pytest.fixture
-def db_conn(tmp_path):
-    db_path = tmp_path / "test_catalog.sqlite"
+def db_conn(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    db_path = tmp_path / "catalog.sqlite"
     migrate(None, db_path)
     conn = get_connection(db_path)
     upsert_document(
@@ -53,8 +60,20 @@ def db_conn(tmp_path):
 
 
 def _add_version(
-    conn, version_id, revision_number=1, quality_status="PASS", validation_status="valid", parser_version="1.0.0"
+    conn,
+    version_id,
+    revision_number=1,
+    quality_status="PASS",
+    validation_status="valid",
+    parser_version="1.0.0",
+    privacy_status="clean",
 ):
+    relative_path = f"canonical/{hashlib.sha256(version_id.encode()).hexdigest()[:12]}.jsonl"
+    canonical_path = Path(os.environ["MESA_DATA_DATA_ROOT"]) / relative_path
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps({"id": "rec-1", "record_type": "article"}, sort_keys=True) + "\n"
+    canonical_path.write_text(line, encoding="utf-8")
+    line_hash = hashlib.sha256(line.encode()).hexdigest()
     insert_version(
         conn=conn,
         version_id=version_id,
@@ -64,17 +83,26 @@ def _add_version(
         snapshot_date="2026-01-01",
         effective_from=None,
         effective_to=None,
-        canonical_path="canonical/test.jsonl",
+        canonical_path=relative_path,
         canonical_line=1,
-        canonical_sha256="2222222222222222222222222222222222222222222222222222222222222222",
+        canonical_sha256=line_hash,
         parser_name="resmi_gazete_parser",
         parser_version=parser_version,
         schema_version="1.0.0",
         validation_status=validation_status,
-        privacy_status="clean",
+        privacy_status=privacy_status,
         approval_status="pending",
         revision_number=revision_number,
         quality_status=quality_status,
+    )
+    insert_record(
+        conn,
+        record_id="rec-1",
+        version_id=version_id,
+        record_type="article",
+        canonical_path=relative_path,
+        canonical_line=1,
+        record_sha256=line_hash,
     )
 
 
@@ -144,6 +172,37 @@ def test_auto_approval_uncertified_parser_stays_in_review(db_conn):
     assert v is not None
     assert v["approval_status"] == "pending"
     assert v["auto_approved"] == 0
+
+
+def test_auto_approval_cannot_bypass_stored_parser_version(db_conn):
+    upsert_source_operational_settings(
+        db_conn, source_id="resmi_gazete", enabled=True, auto_approval_enabled=True, weekly_sample_count=0
+    )
+    set_parser_certification(
+        db_conn, source_id="resmi_gazete", parser_name="resmi_gazete_parser", parser_version="1.4", certified=True
+    )
+    _add_version(
+        db_conn,
+        "doc-test-1:v-parser-1.5",
+        quality_status="PASS",
+        validation_status="valid",
+        parser_version="1.5",
+    )
+
+    approved, reason = evaluate_auto_approval(
+        conn=db_conn,
+        version_id="doc-test-1:v-parser-1.5",
+        source_id="resmi_gazete",
+        parser_name="resmi_gazete_parser",
+        parser_version="1.4",
+        quality_decision="PASS",
+        has_privacy_blocker=False,
+        schema_valid=True,
+    )
+
+    assert approved is False
+    assert "stored version provenance" in reason
+    assert get_version(db_conn, "doc-test-1:v-parser-1.5")["approval_status"] == "pending"
 
 
 def test_auto_approval_audit_sample_routes_to_review(db_conn):
@@ -216,7 +275,14 @@ def test_auto_approval_privacy_blocker_stops_approval(db_conn):
         db_conn, source_id="resmi_gazete", parser_name="resmi_gazete_parser", parser_version="1.0.0", certified=True
     )
 
-    _add_version(db_conn, "doc-test-1:v5", revision_number=5, quality_status="PASS", validation_status="valid")
+    _add_version(
+        db_conn,
+        "doc-test-1:v5",
+        revision_number=5,
+        quality_status="PASS",
+        validation_status="valid",
+        privacy_status="flagged",
+    )
 
     approved, reason = evaluate_auto_approval(
         conn=db_conn,

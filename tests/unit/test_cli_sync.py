@@ -21,10 +21,25 @@ def test_cli_sync_stops_before_mesa_push(tmp_path, monkeypatch):
     # Verify the explicit warning / notice that it stops before MESA push
     assert "stopped before MESA push" in result.output
 
-    # Verify no deliveries were automatically pushed into mesa_deliveries
+    # Capture local state, then run the exact same sync command again.
     conn = get_connection(db_path)
     c = conn.cursor()
     c.execute("SELECT count(*) FROM mesa_deliveries")
     del_count = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM artifacts")
+    artifact_count = c.fetchone()[0]
     conn.close()
     assert del_count == 0
+    assert artifact_count <= 5
+
+    second = runner.invoke(app, ["sync", "--source", "resmi_gazete", "--max-items", "5"])
+    assert second.exit_code == 0
+    assert "stopped before MESA push" in second.output
+
+    conn = get_connection(db_path)
+    c = conn.cursor()
+    c.execute("SELECT count(*) FROM mesa_deliveries")
+    assert c.fetchone()[0] == 0
+    c.execute("SELECT count(*) FROM artifacts")
+    assert c.fetchone()[0] == artifact_count
+    conn.close()

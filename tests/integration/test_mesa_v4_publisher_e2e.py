@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import httpx
@@ -37,6 +38,10 @@ def setup_publisher_env(tmp_path, monkeypatch):
         workspace_id="legal",
         dataset_id="tr_legislation",
         agent_id="publisher",
+        contract_source="configured",
+        health_path="/v4/health",
+        publish_path="/v4/sources/chunks",
+        mutation_status_path_template="/v4/mutations/{mutation_id}",
     )
     upsert_mesa_target_settings(conn, settings)
 
@@ -65,35 +70,36 @@ def setup_publisher_env(tmp_path, monkeypatch):
         metadata_json="{}",
     )
 
-    # Write canonical file with 2 article records
+    # Write canonical file with one authoritative document record and 2 articles.
     c_rel_path = "canonical/legislation/5237.jsonl"
     c_abs_path = data_root / c_rel_path
     c_abs_path.parent.mkdir(parents=True, exist_ok=True)
+    article_1 = "MADDE 1- Ceza kanununun amacı adaleti sağlamaktır."
+    article_2 = "MADDE 2- Kanunsuz suç olmaz."
+    full_text = f"{article_1}\n\n{article_2}"
+    records = [
+        {"id": doc_id, "record_type": "legislation", "full_text": full_text},
+        {
+            "id": "art-1",
+            "record_type": "article",
+            "article_number": "1",
+            "heading": "Madde 1",
+            "text": article_1,
+            "source_span": {"char_start": 0, "char_end": len(article_1)},
+        },
+        {
+            "id": "art-2",
+            "record_type": "article",
+            "article_number": "2",
+            "heading": "Madde 2",
+            "text": article_2,
+            "source_span": {"char_start": len(article_1) + 2, "char_end": len(full_text)},
+        },
+    ]
+    lines = [json.dumps(record, sort_keys=True) + "\n" for record in records]
     with open(c_abs_path, "w", encoding="utf-8") as f:
-        f.write(
-            json.dumps(
-                {
-                    "id": "art-1",
-                    "type": "article",
-                    "article_number": "1",
-                    "title": "Madde 1",
-                    "content": "MADDE 1- Ceza kanununun amacı adaleti sağlamaktır.",
-                }
-            )
-            + "\n"
-        )
-        f.write(
-            json.dumps(
-                {
-                    "id": "art-2",
-                    "type": "article",
-                    "article_number": "2",
-                    "title": "Madde 2",
-                    "content": "MADDE 2- Kanunsuz suç olmaz.",
-                }
-            )
-            + "\n"
-        )
+        f.writelines(lines)
+    hashes = [hashlib.sha256(line.encode()).hexdigest() for line in lines]
 
     v_id = f"{doc_id}:v1"
     insert_version(
@@ -107,7 +113,7 @@ def setup_publisher_env(tmp_path, monkeypatch):
         effective_to=None,
         canonical_path=c_rel_path,
         canonical_line=1,
-        canonical_sha256="2222222222222222222222222222222222222222222222222222222222222222",
+        canonical_sha256=hashes[0],
         parser_name="legislation_parser",
         parser_version="1.0.0",
         schema_version="1.0.0",
@@ -118,29 +124,18 @@ def setup_publisher_env(tmp_path, monkeypatch):
         quality_status="PASS",
     )
 
-    insert_record(
-        conn=conn,
-        record_id="art-1",
-        version_id=v_id,
-        record_type="article",
-        canonical_path=c_rel_path,
-        canonical_line=1,
-        record_sha256="3333333333333333333333333333333333333333333333333333333333333333",
-        validation_status="valid",
-        approval_status="approved",
-    )
-
-    insert_record(
-        conn=conn,
-        record_id="art-2",
-        version_id=v_id,
-        record_type="article",
-        canonical_path=c_rel_path,
-        canonical_line=1,
-        record_sha256="4444444444444444444444444444444444444444444444444444444444444444",
-        validation_status="valid",
-        approval_status="approved",
-    )
+    for line_number, record in enumerate(records, start=1):
+        insert_record(
+            conn=conn,
+            record_id=record["id"],
+            version_id=v_id,
+            record_type=record["record_type"],
+            canonical_path=c_rel_path,
+            canonical_line=line_number,
+            record_sha256=hashes[line_number - 1],
+            validation_status="valid",
+            approval_status="approved",
+        )
 
     conn.close()
     return db_path
@@ -204,3 +199,30 @@ def test_partial_failure_and_retry_workflow(setup_publisher_env):
     assert retry_res["retried_count"] == 1
     assert retry_res["retried_success"] == 1
     assert retry_res["retried_failed"] == 0
+
+
+@respx.mock
+def test_response_loss_retry_reuses_exact_idempotency_key(setup_publisher_env):
+    respx.get("https://mock-mesa.internal/v4/health").respond(200, json={"status": "ok"})
+    seen_keys = []
+    call_count = 0
+
+    def response_loss_then_commit(request):
+        nonlocal call_count
+        call_count += 1
+        seen_keys.append(request.headers["Idempotency-Key"])
+        if call_count == 1:
+            raise httpx.ReadTimeout("response lost after request was sent", request=request)
+        return httpx.Response(200, json={"mutation_id": "mut-after-loss", "state": "COMMITTED"})
+
+    respx.post("https://mock-mesa.internal/v4/sources/chunks").mock(side_effect=response_loss_then_commit)
+
+    first = execute_publish_delivery(delivery_id="del-response-loss")
+    assert first["status"] == "PARTIAL"
+    assert first["failed_items"] == 1
+
+    retried = retry_delivery_failures("del-response-loss")
+    assert retried["status"] == "COMMITTED"
+    assert retried["retried_count"] == 1
+    assert len(seen_keys) == 3
+    assert seen_keys[0] == seen_keys[2]

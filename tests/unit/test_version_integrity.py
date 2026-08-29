@@ -11,6 +11,7 @@ from mesa_legal_data.catalog import (
     get_record,
     get_version,
     insert_artifact,
+    iter_records_for_release,
     migrate,
     upsert_document,
     upsert_source,
@@ -114,8 +115,15 @@ def test_same_artifact_twice_idempotency_and_no_duplicates(test_env):
     assert v1_after_approval["approval_status"] == "approved"
 
     # Second pipeline run on the SAME artifact (e.g. daily reprocessing)
+    before_reprocess = get_version(conn, v1_id)
+    c.execute(
+        "SELECT record_id, canonical_path, record_sha256 FROM records WHERE version_id = ? ORDER BY record_id",
+        (v1_id,),
+    )
+    record_evidence_before = c.fetchall()
+
     status2 = process_artifact_pipeline(artifact_id=art_id, document_id=doc_id)
-    assert status2 == "needs_review"
+    assert status2 == "approved"
 
     # Verify no new fake version was created
     c.execute("SELECT count(*) FROM versions WHERE document_id = ?", (doc_id,))
@@ -131,6 +139,13 @@ def test_same_artifact_twice_idempotency_and_no_duplicates(test_env):
     v1_after_reprocess = get_version(conn, v1_id)
     assert v1_after_reprocess["approval_status"] == "approved"
     assert v1_after_reprocess["revision_number"] == 1
+    assert v1_after_reprocess["canonical_path"] == before_reprocess["canonical_path"]
+    assert v1_after_reprocess["canonical_sha256"] == before_reprocess["canonical_sha256"]
+    c.execute(
+        "SELECT record_id, canonical_path, record_sha256 FROM records WHERE version_id = ? ORDER BY record_id",
+        (v1_id,),
+    )
+    assert c.fetchall() == record_evidence_before
     conn.close()
 
 
@@ -220,7 +235,7 @@ def test_two_real_versions_same_document_isolation(test_env):
 
     assert v1_rev == 1
     assert v2_rev == 2
-    assert v2_super == v1_id  # Predecessor connection
+    assert v2_super is None  # No source provenance explicitly identified a predecessor.
 
     # Check Article 9 in both versions
     logical_art9_id = "tr:legislation:law:6698:article:9"
@@ -237,6 +252,62 @@ def test_two_real_versions_same_document_isolation(test_env):
     assert rec_v2["version_id"] == v2_id
     assert rec_v2["approval_status"] == "pending"
     assert rec_v1["record_sha256"] != rec_v2["record_sha256"]  # Content changed
+
+    # When both versions are approved, a release selects only the latest eligible
+    # physical version and does not accidentally re-release Version A.
+    approve_version_streaming(conn, version_id=v2_id, reviewer="operator-2")
+    release_refs = list(iter_records_for_release(conn))
+    assert release_refs
+    assert {ref.version_id for ref in release_refs} == {v2_id}
+
+    # Version C has the same source date as B but distinct source content. It is
+    # a real third version, not an overwrite or a fabricated predecessor link.
+    content_v3 = """<!DOCTYPE html><html><body>
+    <h1>KİŞİSEL VERİLERİN KORUNMASI KANUNU</h1>
+    <p><b>MADDE 1-</b> Amaç metni v1.</p>
+    <p><b>MADDE 9-</b> Aynı gün yayımlanan düzeltilmiş üçüncü kaynak metni.</p>
+    </body></html>"""
+    raw_file_3 = raw_dir / "kvkk_2024_correction.html"
+    raw_bytes_3 = content_v3.encode("utf-8")
+    raw_file_3.write_bytes(raw_bytes_3)
+    sha3 = hashlib.sha256(raw_bytes_3).hexdigest()
+    art_id_3 = f"art-{sha3[:12]}"
+    insert_artifact(
+        conn,
+        art_id_3,
+        doc_id,
+        "mevzuat",
+        "https://example.com/kvkk_2024_correction.html",
+        "2026-08-02T00:00:00Z",
+        "manual",
+        200,
+        "text/html",
+        "text/html",
+        len(raw_bytes_3),
+        sha3,
+        str(raw_file_3.relative_to(test_env)),
+        None,
+        None,
+        "fetched",
+        None,
+        json.dumps({"publication_date": "2024-03-12", "source_role": "consolidated_snapshot"}),
+    )
+    conn.close()
+
+    process_artifact_pipeline(artifact_id=art_id_3, document_id=doc_id)
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT version_id, revision_number, snapshot_date, supersedes_version_id FROM versions WHERE document_id = ? ORDER BY revision_number",
+        (doc_id,),
+    )
+    three_versions = c.fetchall()
+    assert len(three_versions) == 3
+    assert [row[1] for row in three_versions] == [1, 2, 3]
+    assert three_versions[1][2] == three_versions[2][2] == "2024-03-12"
+    assert three_versions[2][3] is None
+    assert get_record(conn, logical_art9_id, version_id=v1_id)["record_sha256"] == rec_v1["record_sha256"]
+    assert get_record(conn, logical_art9_id, version_id=v2_id)["record_sha256"] == rec_v2["record_sha256"]
 
     conn.close()
 

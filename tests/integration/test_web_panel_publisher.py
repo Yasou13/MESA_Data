@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -37,6 +38,10 @@ def client(tmp_path, monkeypatch):
             workspace_id="legal",
             dataset_id="tr_legislation",
             agent_id="publisher",
+            contract_source="configured",
+            health_path="/v4/health",
+            publish_path="/v4/sources/chunks",
+            mutation_status_path_template="/v4/mutations/{mutation_id}",
         ),
     )
 
@@ -67,8 +72,16 @@ def client(tmp_path, monkeypatch):
     c_rel_path = "canonical/legislation/6100.jsonl"
     c_abs_path = data_root / c_rel_path
     c_abs_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(c_abs_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps({"content": "MADDE 1- Görev kamu düzenine ilişkindir."}) + "\n")
+    canonical_line = json.dumps(
+        {
+            "id": doc_id,
+            "record_type": "legislation",
+            "full_text": "MADDE 1- Görev kamu düzenine ilişkindir.",
+        },
+        sort_keys=True,
+    ) + "\n"
+    c_abs_path.write_text(canonical_line, encoding="utf-8")
+    canonical_hash = hashlib.sha256(canonical_line.encode()).hexdigest()
 
     v_id = f"{doc_id}:v1"
     insert_version(
@@ -82,7 +95,7 @@ def client(tmp_path, monkeypatch):
         effective_to=None,
         canonical_path=c_rel_path,
         canonical_line=1,
-        canonical_sha256="6666666666666666666666666666666666666666666666666666666666666666",
+        canonical_sha256=canonical_hash,
         parser_name="legislation_parser",
         parser_version="1.0.0",
         schema_version="1.0.0",
@@ -95,12 +108,12 @@ def client(tmp_path, monkeypatch):
 
     insert_record(
         conn=conn,
-        record_id="art-1",
+        record_id=doc_id,
         version_id=v_id,
-        record_type="article",
+        record_type="legislation",
         canonical_path=c_rel_path,
         canonical_line=1,
-        record_sha256="7777777777777777777777777777777777777777777777777777777777777777",
+        record_sha256=canonical_hash,
         validation_status="valid",
         approval_status="approved",
     )
@@ -131,6 +144,9 @@ def test_publisher_settings_and_preflight_endpoints(client):
             "dataset_id": "tr_legislation",
             "agent_id": "publisher_v4",
             "content_limit_chars": 65536,
+            "health_path": "/v4/health",
+            "publish_path": "/v4/sources/chunks",
+            "mutation_status_path_template": "/v4/mutations/{mutation_id}",
         },
     )
     assert res_post.status_code == 200

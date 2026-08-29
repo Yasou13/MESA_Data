@@ -52,6 +52,8 @@ for name, alias, num, kind in LEGAL_CODES:
     if alias:
         ALIAS_MAP[alias.upper()] = (num, kind)
 
+KNOWN_LEGISLATION_NUMBERS = {num for _, _, num, _ in LEGAL_CODES}
+
 
 class Citation(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -149,7 +151,11 @@ def extract_citations(text: str) -> list[Citation]:
                 target_article_id=art_id,
                 char_start=start,
                 char_end=end,
-                citation_status="RESOLVED",
+                # A syntactically valid number is only a resolution candidate
+                # unless it belongs to the deterministic legislation registry.
+                citation_status=(
+                    "RESOLVED" if law_num in KNOWN_LEGISLATION_NUMBERS else "EXTRACTED"
+                ),
                 relation_hint=relation,
             )
         )
@@ -163,6 +169,10 @@ def extract_citations(text: str) -> list[Citation]:
 
         raw = text[start:end]
         alias_key = match.group("alias").strip().upper()
+        raw_alias = match.group("alias").strip()
+        if len(raw_alias) <= 3 and raw_alias != raw_alias.upper():
+            # Avoid resolving ordinary Turkish words such as "ay" as the AY alias.
+            continue
         law_tuple = ALIAS_MAP.get(alias_key)
         if not law_tuple:
             continue

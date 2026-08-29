@@ -28,12 +28,16 @@ class MutationState(str, Enum):
 class MesaTargetSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_key: str = Field(default="default")
-    base_url: str = Field(default="http://localhost:8000")
+    base_url: str = Field(default="")
     tenant_id: str = Field(default="default")
     workspace_id: str = Field(default="legal")
     dataset_id: str = Field(default="tr_legislation")
     agent_id: str = Field(default="mesa_data_publisher")
     content_limit_chars: int = Field(default=32768, ge=1024, le=1048576)
+    contract_source: Literal["unknown", "configured", "live_verified"] = "unknown"
+    health_path: str = ""
+    publish_path: str = ""
+    mutation_status_path_template: str = ""
     api_key_configured: bool = Field(default=False)
     updated_at: str | None = None
 
@@ -79,3 +83,4 @@ class DeliveryPlanSummary(BaseModel):
     already_committed_chunks: int
     new_chunks_to_send: int
     blocked_versions_excluded: int
+    unreadable_versions_excluded: int = 0

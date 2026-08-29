@@ -578,6 +578,9 @@ def sync_cmd(
     from mesa_legal_data.harvest.migrations import apply_harvest_migrations
     from mesa_legal_data.harvest.service import run_collection_until_pause
 
+    if max_items < 1:
+        raise typer.BadParameter("--max-items must be at least 1")
+
     migrate_catalog()
     apply_harvest_migrations()
 
@@ -589,7 +592,11 @@ def sync_cmd(
         cfg.sources[source_id].budget.new_urls_per_run = max_items
     cfg.runner.batch_size = max_items
 
-    res = run_collection_until_pause(source_id=source_id, harvest_cfg=cfg)
+    res = run_collection_until_pause(
+        source_id=source_id,
+        harvest_cfg=cfg,
+        max_processed_items=max_items,
+    )
 
     # Compute summary
     conn = get_connection()
@@ -603,7 +610,7 @@ def sync_cmd(
     conn.close()
 
     typer.secho("\n=== Sync Summary ===", fg=typer.colors.GREEN, bold=True)
-    typer.echo(f"Items processed in batch : {res.get('processed_items', 0)}")
+    typer.echo(f"Items processed in batch : {res.get('processed', 0)}")
     typer.echo(f"Auto-approved (all-time) : {auto_approved_count}")
     typer.echo(f"Ready for MESA (approved): {approved_count}")
     typer.echo(f"Needs Review             : {pending_count}")

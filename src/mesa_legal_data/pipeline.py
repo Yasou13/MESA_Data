@@ -1,7 +1,7 @@
+import hashlib
 import json
 import re
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,7 @@ from mesa_legal_data.catalog import (
     get_artifact,
     get_connection,
     get_document,
+    get_version,
     insert_record,
     insert_version,
     open_issue,
@@ -94,7 +95,6 @@ def process_artifact_pipeline(
 
     # Step 1: Create processing run
     run_id = f"run-{uuid.uuid4().hex[:12]}"
-    now_iso = datetime.now(UTC).isoformat()
     create_run(
         conn=conn,
         run_id=run_id,
@@ -240,8 +240,28 @@ def process_artifact_pipeline(
     provenance_obj = {
         "parser_name": f"{fam}_parser",
         "parser_version": "1.0.0",
-        "pipeline_run_id": run_id,
+        "pipeline_run_id": f"artifact:{artifact_id}:{fam}_parser:1.0.0",
     }
+
+    existing_version = get_version(conn, version_id)
+    if existing_version:
+        if existing_version["artifact_id"] != artifact_id or existing_version["document_id"] != doc_id:
+            finish_run(
+                conn,
+                run_id,
+                "failed",
+                json.dumps({"issues": 1}),
+                error_summary=f"Immutable version collision for {version_id}",
+            )
+            conn.close()
+            raise ValueError(f"Immutable version collision for {version_id}")
+        finish_run(conn, run_id, "succeeded", json.dumps({"idempotent_reprocess": True}))
+        conn.close()
+        if existing_version.get("quality_status") == "BLOCK":
+            return "rejected"
+        if existing_version.get("approval_status") == "approved":
+            return "approved"
+        return "needs_review"
 
     canonical_records: list[dict[str, Any]] = []
     leg_count = 0
@@ -296,7 +316,7 @@ def process_artifact_pipeline(
                 },
                 "full_text": canonical_text,
                 "schema_version": "1.0.0",
-                "created_at": now_iso,
+                "created_at": art_row["retrieved_at"],
                 "source": source_obj,
                 "provenance": provenance_obj,
             }
@@ -331,7 +351,7 @@ def process_artifact_pipeline(
                     "effective_to": None,
                     "source_span": span_obj,
                     "schema_version": "1.0.0",
-                    "created_at": now_iso,
+                    "created_at": art_row["retrieved_at"],
                     "source": source_obj,
                     "provenance": provenance_obj,
                 }
@@ -364,7 +384,7 @@ def process_artifact_pipeline(
                     "extraction_method": "deterministic_regex",
                     "validation_status": "unvalidated",
                     "schema_version": "1.0.0",
-                    "created_at": now_iso,
+                    "created_at": art_row["retrieved_at"],
                     "source": source_obj,
                     "provenance": provenance_obj,
                 }
@@ -396,7 +416,7 @@ def process_artifact_pipeline(
                 "text": canonical_text,
                 "verdict": dec_parsed.verdict,
                 "schema_version": "1.0.0",
-                "created_at": now_iso,
+                "created_at": art_row["retrieved_at"],
                 "source": source_obj,
                 "provenance": provenance_obj,
             }
@@ -422,7 +442,7 @@ def process_artifact_pipeline(
                     "extraction_method": "deterministic_regex",
                     "validation_status": "unvalidated",
                     "schema_version": "1.0.0",
-                    "created_at": now_iso,
+                    "created_at": art_row["retrieved_at"],
                     "source": source_obj,
                     "provenance": provenance_obj,
                 }
@@ -508,8 +528,9 @@ def process_artifact_pipeline(
         records_by_type.setdefault(rt, []).append(r)
 
     canonical_locations = []
+    canonical_write_id = "version-" + hashlib.sha256(f"{version_id}:parser:1.0.0".encode()).hexdigest()[:20]
     for rt, r_list in records_by_type.items():
-        locs = write_canonical_part(r_list, rt, run_id)
+        locs = write_canonical_part(r_list, rt, canonical_write_id)
         canonical_locations.extend(locs)
 
     # Step 9: Atomic Catalog Write for Version & Version-Aware Records
@@ -538,6 +559,7 @@ def process_artifact_pipeline(
             approval_status="pending",
             quality_status=quality_status,
             quality_json=quality_json,
+            supersedes_version_id=meta_dict.get("supersedes_version_id"),
         )
 
         for loc in canonical_locations:

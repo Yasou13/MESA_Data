@@ -2103,6 +2103,14 @@ def update_publisher_settings_endpoint(req: MesaTargetSettingsUpdateRequest, tar
         dataset_id=req.dataset_id,
         agent_id=req.agent_id,
         content_limit_chars=req.content_limit_chars,
+        contract_source=(
+            "configured"
+            if req.health_path and req.publish_path and "{mutation_id}" in req.mutation_status_path_template
+            else "unknown"
+        ),
+        health_path=req.health_path,
+        publish_path=req.publish_path,
+        mutation_status_path_template=req.mutation_status_path_template,
     )
     upsert_mesa_target_settings(conn, new_settings)
     conn.close()
@@ -2134,6 +2142,7 @@ def run_publisher_preflight_endpoint(target_key: str = "default"):
         estimated_chunks_count=summary.estimated_chunks,
         total_canonical_bytes=summary.total_canonical_bytes,
         blocked_versions_count=summary.blocked_versions_excluded,
+        unreadable_versions_count=summary.unreadable_versions_excluded,
     )
     conn.close()
     return ok_response(report.model_dump())
@@ -2160,6 +2169,7 @@ def start_publisher_delivery_endpoint(req: MesaPublishRequest):
         estimated_chunks_count=summary.estimated_chunks,
         total_canonical_bytes=summary.total_canonical_bytes,
         blocked_versions_count=summary.blocked_versions_excluded,
+        unreadable_versions_count=summary.unreadable_versions_excluded,
     )
     if report.overall_status == "FAIL":
         conn.close()

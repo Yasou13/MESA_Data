@@ -56,6 +56,36 @@ const SOURCE_CAPABILITIES = {
   },
 };
 
+function updateDocTypesForSource(sourceSelectId, typeSelectId) {
+  const sourceSelect = document.getElementById(sourceSelectId);
+  const typeSelect = document.getElementById(typeSelectId);
+  if (!sourceSelect || !typeSelect) return;
+
+  const selectedSource = sourceSelect.value;
+  const currentVal = typeSelect.value;
+  const cap = SOURCE_CAPABILITIES[selectedSource];
+
+  typeSelect.innerHTML = `<option value="" disabled selected>— Belge türünü seçin —</option>`;
+  if (cap && cap.docTypes) {
+    let currentStillValid = false;
+    cap.docTypes.forEach((dt) => {
+      const opt = document.createElement("option");
+      opt.value = dt.id;
+      opt.textContent = dt.label;
+      if (dt.id === currentVal) {
+        opt.selected = true;
+        currentStillValid = true;
+      }
+      typeSelect.appendChild(opt);
+    });
+
+    if (currentVal && !currentStillValid) {
+      typeSelect.value = "";
+      showToast("Kaynak değiştirildi. Bu kaynak için belge türünü yeniden seçin.", "info");
+    }
+  }
+}
+
 // --- Terminology & Presentation Helpers ---
 function humanTerm(term) {
   if (!term) return "";
@@ -75,6 +105,7 @@ function humanTerm(term) {
     yargitay: "Yargıtay",
     danistay: "Danıştay",
     idle: "Hazır",
+    not_started: "Henüz başlanmadı",
     running: "Çalışıyor",
     paused: "Duraklatıldı",
     up_to_date: "Güncel",
@@ -1479,6 +1510,9 @@ async function loadExportView() {
       const elDs = document.getElementById("mesa-target-dataset");
       const elAgent = document.getElementById("mesa-target-agent");
       const elLimit = document.getElementById("mesa-target-limit");
+      const elHealthPath = document.getElementById("mesa-health-path");
+      const elPublishPath = document.getElementById("mesa-publish-path");
+      const elMutationPath = document.getElementById("mesa-mutation-path");
       const badgeKey = document.getElementById("badge-mesa-key");
 
       if (elUrl && targetSettings.base_url) elUrl.value = targetSettings.base_url;
@@ -1487,6 +1521,9 @@ async function loadExportView() {
       if (elDs && targetSettings.dataset_id) elDs.value = targetSettings.dataset_id;
       if (elAgent && targetSettings.agent_id) elAgent.value = targetSettings.agent_id;
       if (elLimit && targetSettings.content_limit_chars) elLimit.value = targetSettings.content_limit_chars;
+      if (elHealthPath) elHealthPath.value = targetSettings.health_path || "";
+      if (elPublishPath) elPublishPath.value = targetSettings.publish_path || "";
+      if (elMutationPath) elMutationPath.value = targetSettings.mutation_status_path_template || "";
 
       if (badgeKey) {
         if (targetSettings.api_key_configured) {
@@ -1595,6 +1632,9 @@ async function handleMesaSaveSettings() {
   const ds = document.getElementById("mesa-target-dataset")?.value.trim();
   const agent = document.getElementById("mesa-target-agent")?.value.trim();
   const limit = parseInt(document.getElementById("mesa-target-limit")?.value || "32768", 10);
+  const healthPath = document.getElementById("mesa-health-path")?.value.trim() || "";
+  const publishPath = document.getElementById("mesa-publish-path")?.value.trim() || "";
+  const mutationPath = document.getElementById("mesa-mutation-path")?.value.trim() || "";
 
   if (!url || !tenant || !ws || !ds || !agent) {
     showToast("Lütfen tüm zorunlu hedef alanlarını doldurunuz.", "warning");
@@ -1613,6 +1653,9 @@ async function handleMesaSaveSettings() {
         dataset_id: ds,
         agent_id: agent,
         content_limit_chars: limit,
+        health_path: healthPath,
+        publish_path: publishPath,
+        mutation_status_path_template: mutationPath,
       }),
     });
     showToast("MESA hedef ayarları kaydedildi.", "success");
@@ -2375,36 +2418,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnCollectStop) btnCollectStop.addEventListener("click", stopHarvestAction);
 
   // 10. Manual Ingestion Tabs & Forms
-  function updateDocTypesForSource(sourceSelectId, typeSelectId) {
-    const sourceSelect = document.getElementById(sourceSelectId);
-    const typeSelect = document.getElementById(typeSelectId);
-    if (!sourceSelect || !typeSelect) return;
-
-    const selectedSource = sourceSelect.value;
-    const currentVal = typeSelect.value;
-    const cap = SOURCE_CAPABILITIES[selectedSource];
-
-    typeSelect.innerHTML = `<option value="" disabled selected>— Belge türünü seçin —</option>`;
-    if (cap && cap.docTypes) {
-      let currentStillValid = false;
-      cap.docTypes.forEach((dt) => {
-        const opt = document.createElement("option");
-        opt.value = dt.id;
-        opt.textContent = dt.label;
-        if (dt.id === currentVal) {
-          opt.selected = true;
-          currentStillValid = true;
-        }
-        typeSelect.appendChild(opt);
-      });
-
-      if (currentVal && !currentStillValid) {
-        typeSelect.value = "";
-        showToast("Kaynak değiştirildi. Bu kaynak için belge türünü yeniden seçin.", "info");
-      }
-    }
-  }
-
   const fileSourceEl = document.getElementById("file-source");
   if (fileSourceEl) {
     fileSourceEl.addEventListener("change", () => {

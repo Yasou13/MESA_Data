@@ -14,7 +14,8 @@ def get_mesa_target_settings(conn: sqlite3.Connection, target_key: str = "defaul
     """Fetches non-secret MESA target settings."""
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT target_key, base_url, tenant_id, workspace_id, dataset_id, agent_id, content_limit_chars, updated_at
+        """SELECT target_key, base_url, tenant_id, workspace_id, dataset_id, agent_id, content_limit_chars, updated_at,
+                  contract_source, health_path, publish_path, mutation_status_path_template
            FROM mesa_target_settings WHERE target_key = ?""",
         (target_key,),
     )
@@ -29,6 +30,10 @@ def get_mesa_target_settings(conn: sqlite3.Connection, target_key: str = "defaul
             agent_id=row[5],
             content_limit_chars=row[6] or 32768,
             updated_at=row[7],
+            contract_source=row[8],
+            health_path=row[9],
+            publish_path=row[10],
+            mutation_status_path_template=row[11],
         )
     # Return sensible default
     return MesaTargetSettings(target_key=target_key)
@@ -39,8 +44,12 @@ def upsert_mesa_target_settings(conn: sqlite3.Connection, settings: MesaTargetSe
     now_iso = datetime.now(UTC).isoformat()
     with transaction(conn):
         conn.execute(
-            """INSERT INTO mesa_target_settings (target_key, base_url, tenant_id, workspace_id, dataset_id, agent_id, content_limit_chars, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO mesa_target_settings (
+                   target_key, base_url, tenant_id, workspace_id, dataset_id, agent_id,
+                   content_limit_chars, updated_at, contract_source, health_path,
+                   publish_path, mutation_status_path_template
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(target_key) DO UPDATE SET
                    base_url = excluded.base_url,
                    tenant_id = excluded.tenant_id,
@@ -48,7 +57,11 @@ def upsert_mesa_target_settings(conn: sqlite3.Connection, settings: MesaTargetSe
                    dataset_id = excluded.dataset_id,
                    agent_id = excluded.agent_id,
                    content_limit_chars = excluded.content_limit_chars,
-                   updated_at = excluded.updated_at""",
+                   updated_at = excluded.updated_at,
+                   contract_source = excluded.contract_source,
+                   health_path = excluded.health_path,
+                   publish_path = excluded.publish_path,
+                   mutation_status_path_template = excluded.mutation_status_path_template""",
             (
                 settings.target_key,
                 settings.base_url,
@@ -58,6 +71,10 @@ def upsert_mesa_target_settings(conn: sqlite3.Connection, settings: MesaTargetSe
                 settings.agent_id,
                 settings.content_limit_chars,
                 now_iso,
+                settings.contract_source,
+                settings.health_path,
+                settings.publish_path,
+                settings.mutation_status_path_template,
             ),
         )
 
@@ -335,11 +352,28 @@ def get_document_mesa_status(conn: sqlite3.Connection, document_id: str) -> dict
     """
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT i.remote_state, count(*), max(i.updated_at), max(d.delivery_id)
-           FROM mesa_delivery_items i
-           JOIN mesa_deliveries d ON i.delivery_id = d.delivery_id
-           WHERE i.document_id = ?
-           GROUP BY i.remote_state""",
+        """WITH delivered_versions AS (
+               SELECT i.version_id,
+                      ROW_NUMBER() OVER (
+                          ORDER BY COALESCE(v.revision_number, 1) DESC, v.created_at DESC
+                      ) AS version_rank
+               FROM mesa_delivery_items i
+               LEFT JOIN versions v ON v.version_id = i.version_id
+               WHERE i.document_id = ?
+               GROUP BY i.version_id
+           ), latest_items AS (
+               SELECT i.remote_state,
+                      ROW_NUMBER() OVER (
+                          PARTITION BY i.chunk_id
+                          ORDER BY i.updated_at DESC, i.created_at DESC
+                      ) AS attempt_rank
+               FROM mesa_delivery_items i
+               JOIN delivered_versions dv ON dv.version_id = i.version_id AND dv.version_rank = 1
+           )
+           SELECT remote_state, count(*)
+           FROM latest_items
+           WHERE attempt_rank = 1
+           GROUP BY remote_state""",
         (document_id,),
     )
     counts = dict((r[0], r[1]) for r in cursor.fetchall())

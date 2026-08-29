@@ -1,10 +1,6 @@
 import hashlib
 import json
-import os
-import sqlite3
-from pathlib import Path
 
-import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
@@ -14,9 +10,7 @@ from mesa_legal_data.catalog import (
     approve_version_streaming,
     evaluate_auto_approval,
     get_connection,
-    get_db_path,
     get_record,
-    get_version,
     insert_artifact,
     insert_record,
     insert_version,
@@ -33,17 +27,11 @@ from mesa_legal_data.parsers.encoding import decode_source_bytes
 from mesa_legal_data.parsers.legislation import parse_legislation_text
 from mesa_legal_data.parsers.text_normalizer import normalize_text
 from mesa_legal_data.pipeline import process_artifact_pipeline
-from mesa_legal_data.publisher.chunker import plan_source_chunks
-from mesa_legal_data.publisher.client import MesaClient
-from mesa_legal_data.publisher.engine import build_delivery_plan, execute_publish_delivery, retry_delivery_failures
-from mesa_legal_data.publisher.hashing import generate_idempotency_key
+from mesa_legal_data.publisher.engine import execute_publish_delivery
 from mesa_legal_data.publisher.ledger import (
-    get_delivery,
-    list_delivery_items,
-    get_mesa_target_settings,
     upsert_mesa_target_settings,
 )
-from mesa_legal_data.publisher.models import DeliveryStatus, MesaTargetSettings, MutationState
+from mesa_legal_data.publisher.models import MesaTargetSettings
 from mesa_legal_data.quality import evaluate_quality
 from mesa_legal_data.web.app import create_app
 
@@ -137,7 +125,7 @@ def test_kontrol_1_versioning_isolation_and_stability(audit_env):
     c.execute("SELECT count(*) FROM versions WHERE document_id = ?", (doc_id,))
     assert c.fetchone()[0] == 1  # No duplicate version!
     c.execute("SELECT count(*) FROM records WHERE version_id = ?", (v1_id,))
-    v1_rec_count = c.fetchone()[0]
+    assert c.fetchone()[0] > 0
 
     # 2. Version B (Amended Article 1)
     content_b = """<!DOCTYPE html><html><body>
@@ -189,7 +177,7 @@ def test_kontrol_1_versioning_isolation_and_stability(audit_env):
 
     assert v1_rev == 1
     assert v2_rev == 2
-    assert v2_super == v1_id
+    assert v2_super is None
 
     # Check record instances for Article 1
     logical_art1_id = f"{doc_id}:article:1"
@@ -497,6 +485,11 @@ def test_kontrol_5_auto_approval_engine(audit_env):
     set_parser_certification(conn, "rg", "rg_parser", "2.0.0", certified=False)
 
     upsert_document(conn, "doc:auto:1", "legislation", "law", "TR", "Auto Law 1", "key1", "fetched")
+    auto_path = audit_env["data_root"] / "canonical/1.jsonl"
+    auto_path.parent.mkdir(parents=True, exist_ok=True)
+    auto_line = json.dumps({"id": "auto-rec-1", "record_type": "article"}, sort_keys=True) + "\n"
+    auto_path.write_text(auto_line, encoding="utf-8")
+    auto_hash = hashlib.sha256(auto_line.encode()).hexdigest()
     insert_version(
         conn=conn,
         version_id="doc:auto:1:v1",
@@ -508,7 +501,7 @@ def test_kontrol_5_auto_approval_engine(audit_env):
         effective_to=None,
         canonical_path="canonical/1.jsonl",
         canonical_line=1,
-        canonical_sha256="1" * 64,
+        canonical_sha256=auto_hash,
         parser_name="rg_parser",
         parser_version="1.0.0",
         schema_version="1.0.0",
@@ -518,6 +511,7 @@ def test_kontrol_5_auto_approval_engine(audit_env):
         revision_number=1,
         quality_status="PASS",
     )
+    insert_record(conn, "auto-rec-1", "doc:auto:1:v1", "article", "canonical/1.jsonl", 1, auto_hash)
 
     # 1. PASS + certified -> Auto Approve
     app_1, _ = evaluate_auto_approval(
@@ -719,6 +713,10 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
         workspace_id="legal",
         dataset_id="tr_legislation",
         agent_id="publisher",
+        contract_source="configured",
+        health_path="/v4/health",
+        publish_path="/v4/sources/chunks",
+        mutation_status_path_template="/v4/mutations/{mutation_id}",
     )
     upsert_mesa_target_settings(conn, settings)
 
@@ -749,7 +747,12 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
     c_rel = "canonical/hmk.jsonl"
     c_abs = audit_env["data_root"] / c_rel
     c_abs.parent.mkdir(parents=True, exist_ok=True)
-    c_abs.write_text(json.dumps({"id": "art-1", "type": "article", "content": "MADDE 1 - Görev kuralları kamu düzenindendir."}) + "\n", encoding="utf-8")
+    canonical_text = "MADDE 1 - Görev kuralları kamu düzenindendir."
+    canonical_line = json.dumps(
+        {"id": doc_id, "record_type": "legislation", "full_text": canonical_text}, sort_keys=True
+    ) + "\n"
+    c_abs.write_text(canonical_line, encoding="utf-8")
+    canonical_hash = hashlib.sha256(canonical_line.encode()).hexdigest()
 
     v_id = f"{doc_id}:v1"
     insert_version(
@@ -763,7 +766,7 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
         None,
         c_rel,
         1,
-        "b" * 64,
+        canonical_hash,
         "parser",
         "1.0.0",
         "1.0.0",
@@ -773,7 +776,7 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
         1,
         "PASS",
     )
-    insert_record(conn, "art-1", v_id, "article", c_rel, 1, "c" * 64, "valid", "approved")
+    insert_record(conn, doc_id, v_id, "legislation", c_rel, 1, canonical_hash, "valid", "approved")
     conn.close()
 
     # Mock MESA HTTP endpoints
@@ -809,7 +812,7 @@ def test_kontrol_10_and_11_security_and_clean_architecture(audit_env):
     conn = get_connection(audit_env["db_path"])
     c = conn.cursor()
     c.execute("SELECT * FROM mesa_target_settings")
-    row = c.fetchone()
+    assert c.fetchone() is not None
     # Check that settings do NOT contain any api_key column
     col_names = [d[0] for d in c.description]
     assert "api_key" not in col_names

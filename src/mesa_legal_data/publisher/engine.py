@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 import uuid
@@ -6,7 +7,7 @@ from typing import Any, Callable
 from mesa_legal_data.catalog import get_connection
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.publisher.chunker import plan_source_chunks
-from mesa_legal_data.publisher.client import MesaClient
+from mesa_legal_data.publisher.client import MesaClient, MesaClientError
 from mesa_legal_data.publisher.hashing import generate_idempotency_key
 from mesa_legal_data.publisher.ledger import (
     create_delivery,
@@ -37,11 +38,23 @@ def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
 
     # 2. Fetch approved versions
     cursor.execute(
-        """SELECT v.version_id, v.document_id, v.canonical_path, v.canonical_sha256, v.revision_number, d.family
-           FROM versions v
+        """WITH eligible AS (
+               SELECT v.*,
+                      ROW_NUMBER() OVER (
+                          PARTITION BY v.document_id
+                          ORDER BY COALESCE(v.revision_number, 1) DESC, v.created_at DESC
+                      ) AS version_rank
+               FROM versions v
+               WHERE v.approval_status = 'approved'
+                 AND v.validation_status = 'valid'
+                 AND v.privacy_status IN ('clean', 'approved')
+                 AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+           )
+           SELECT v.version_id, v.document_id, v.canonical_path, v.canonical_sha256,
+                  v.revision_number, d.family
+           FROM eligible v
            JOIN documents d ON v.document_id = d.document_id
-           WHERE v.approval_status = 'approved'
-             AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+           WHERE v.version_rank = 1
            ORDER BY v.created_at ASC"""
     )
     rows = cursor.fetchall()
@@ -77,64 +90,64 @@ def build_delivery_plan(
     unique_docs = set()
     total_bytes = 0
     already_committed = 0
+    unreadable_versions = 0
 
     for v_info in versions:
         doc_id = v_info["document_id"]
         v_id = v_info["version_id"]
-        rel_c_path = v_info["canonical_path"]
-        unique_docs.add(doc_id)
-
         canonical_text = ""
-        records = []
-        if rel_c_path:
-            abs_c_path = data_root / rel_c_path
-            if abs_c_path.exists():
-                try:
-                    with open(abs_c_path, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                    text_parts = []
-                    for idx, line in enumerate(lines, start=1):
-                        try:
-                            item = json.loads(line.strip())
-                            txt = item.get("content") or item.get("raw_text") or item.get("canonical_text", "")
-                            if txt:
-                                text_parts.append(txt)
-                            records.append(
-                                {
-                                    "record_id": item.get("id") or item.get("record_id") or f"rec-{idx}",
-                                    "record_type": item.get("type") or item.get("record_type") or "article",
-                                    "char_start": item.get("char_start"),
-                                    "char_end": item.get("char_end"),
-                                    "ordinal": item.get("ordinal", idx),
-                                    "title": item.get("title"),
-                                    "article_number": item.get("article_number"),
-                                    "content": txt,
-                                }
-                            )
-                        except Exception:
-                            continue
-                    canonical_text = "\n\n".join([p for p in text_parts if p])
-                except Exception:
-                    canonical_text = ""
+        records: list[dict[str, Any]] = []
+        c_cur = conn.cursor()
+        c_cur.execute(
+            """SELECT record_id, record_type, canonical_path, canonical_line, record_sha256
+               FROM records
+               WHERE version_id = ? AND validation_status = 'valid' AND approval_status = 'approved'
+               ORDER BY canonical_path, canonical_line""",
+            (v_id,),
+        )
+        rec_rows = c_cur.fetchall()
 
-        # Fallback if no records found in jsonl
-        if not records:
-            c_cur = conn.cursor()
-            c_cur.execute(
-                """SELECT record_id, record_type, canonical_path, canonical_line
-                   FROM records WHERE version_id = ?""",
-                (v_id,),
-            )
-            rec_rows = c_cur.fetchall()
-            records = [
-                {
-                    "record_id": r[0],
-                    "record_type": r[1],
-                    "canonical_path": r[2],
-                    "canonical_line": r[3],
-                }
-                for r in rec_rows
-            ]
+        try:
+            lines_by_path: dict[str, list[str]] = {}
+            for record_id, record_type, rel_path, line_number, expected_hash in rec_rows:
+                if rel_path not in lines_by_path:
+                    abs_path = data_root / rel_path
+                    lines_by_path[rel_path] = abs_path.read_text(encoding="utf-8").splitlines(keepends=True)
+                lines = lines_by_path[rel_path]
+                if line_number < 1 or line_number > len(lines):
+                    raise ValueError(f"Canonical line out of bounds for {record_id}")
+                line = lines[line_number - 1]
+                if hashlib.sha256(line.encode("utf-8")).hexdigest() != expected_hash:
+                    raise ValueError(f"Canonical hash mismatch for {record_id}")
+                item = json.loads(line)
+                if item.get("id") != record_id or item.get("record_type") != record_type:
+                    raise ValueError(f"Canonical identity mismatch for {record_id}")
+
+                if record_type == "legislation":
+                    canonical_text = item.get("full_text") or ""
+                elif record_type == "decision":
+                    canonical_text = item.get("text") or ""
+                elif record_type == "article":
+                    span = item.get("source_span") or {}
+                    records.append(
+                        {
+                            "record_id": record_id,
+                            "record_type": "article",
+                            "char_start": span.get("char_start"),
+                            "char_end": span.get("char_end"),
+                            "ordinal": item.get("ordinal", line_number),
+                            "title": item.get("heading"),
+                            "article_number": item.get("article_number"),
+                            "content": item.get("text") or "",
+                        }
+                    )
+            if not canonical_text.strip():
+                raise ValueError(f"Version {v_id} has no authoritative canonical document text")
+        except (OSError, ValueError, json.JSONDecodeError):
+            unreadable_versions += 1
+            continue
+
+        unique_docs.add(doc_id)
 
         chunks = plan_source_chunks(
             document_id=doc_id,
@@ -162,12 +175,13 @@ def build_delivery_plan(
 
     summary = DeliveryPlanSummary(
         ready_documents=len(unique_docs),
-        ready_versions=len(versions),
+        ready_versions=len(versions) - unreadable_versions,
         estimated_chunks=len(all_chunks),
         total_canonical_bytes=total_bytes,
         already_committed_chunks=already_committed,
         new_chunks_to_send=len(all_chunks) - already_committed,
         blocked_versions_excluded=blocked_count,
+        unreadable_versions_excluded=unreadable_versions,
     )
     return all_chunks, summary
 
@@ -198,6 +212,19 @@ def execute_publish_delivery(
     # 1. Build delivery plan
     chunk_tuples, summary = build_delivery_plan(target_key=target_key)
     total_items = len(chunk_tuples)
+
+    preflight = client.run_preflight_checks(
+        ready_documents_count=summary.ready_documents,
+        ready_versions_count=summary.ready_versions,
+        estimated_chunks_count=summary.estimated_chunks,
+        total_canonical_bytes=summary.total_canonical_bytes,
+        blocked_versions_count=summary.blocked_versions_excluded,
+        unreadable_versions_count=summary.unreadable_versions_excluded,
+    )
+    if preflight.overall_status == "FAIL":
+        conn.close()
+        failures = "; ".join(check.message for check in preflight.checks if check.status == "FAIL")
+        raise MesaClientError(f"Publisher preflight failed: {failures}")
 
     # 2. Create delivery in ledger
     create_delivery(
@@ -407,6 +434,27 @@ def retry_delivery_failures(
         pub_res = client.publish_source_chunk(chunk, idempotency_key=idemp_key)
         remote_mutation_id = pub_res.get("mutation_id")
         final_state = pub_res.get("state", MutationState.FAILED.value)
+
+        if final_state in (MutationState.QUEUED.value, MutationState.PROCESSING.value):
+            update_delivery_item_state(
+                conn,
+                item_id=item_id,
+                remote_state=MutationState.PROCESSING.value,
+                remote_mutation_id=remote_mutation_id,
+            )
+            for _ in range(5):
+                time.sleep(0.5)
+                poll_res = client.get_mutation_status(remote_mutation_id or "")
+                polled_state = poll_res.get("state", MutationState.FAILED.value)
+                if polled_state in (
+                    MutationState.COMMITTED.value,
+                    MutationState.FAILED.value,
+                    MutationState.REJECTED.value,
+                ):
+                    final_state = polled_state
+                    if polled_state != MutationState.COMMITTED.value:
+                        last_err = poll_res.get("error") or last_err
+                    break
 
         if final_state == MutationState.COMMITTED.value:
             retried_success += 1

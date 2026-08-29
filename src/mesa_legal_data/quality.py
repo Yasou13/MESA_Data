@@ -105,6 +105,10 @@ def evaluate_quality(
         )
 
     mojibake_issues = detect_mojibake(canonical_text)
+    replacement_count = canonical_text.count("\ufffd")
+    severe_replacement_loss = replacement_count >= 10 or (
+        len(canonical_text) >= 1000 and replacement_count / len(canonical_text) >= 0.01
+    )
     if any("\\x00" in iss for iss in mojibake_issues):
         checks.append(
             CheckResult(
@@ -112,6 +116,16 @@ def evaluate_quality(
                 "encoding_corruption",
                 "BLOCK",
                 "Null bytes detected in canonical text",
+                {"issues": mojibake_issues},
+            )
+        )
+    elif severe_replacement_loss:
+        checks.append(
+            CheckResult(
+                "EXTRACTION",
+                "severe_encoding_loss",
+                "BLOCK",
+                f"Severe Unicode replacement loss detected ({replacement_count} characters)",
                 {"issues": mojibake_issues},
             )
         )
@@ -165,7 +179,19 @@ def evaluate_quality(
             if c_start is not None and c_end is not None:
                 if c_start < 0 or c_end > text_len or c_start > c_end:
                     span_errors.append(f"Invalid span [{c_start}, {c_end}] for article {a.get('id')}")
-        ord_val = a.get("source_span", {}).get("ordinal") or 0
+                else:
+                    source_slice = canonical_text[c_start:c_end]
+                    article_text = a.get("text")
+                    article_number = str(a.get("article_number") or "").strip()
+                    if article_text and article_text not in source_slice:
+                        span_errors.append(f"Span does not contain article text for {a.get('id')}")
+                    if article_number and article_number not in source_slice[:100]:
+                        span_errors.append(f"Span does not start at article {article_number} for {a.get('id')}")
+            else:
+                span_errors.append(f"Incomplete span for article {a.get('id')}")
+        else:
+            span_errors.append(f"Missing span for article {a.get('id')}")
+        ord_val = a.get("ordinal") or 0
         if ord_val and ord_val <= prev_ord:
             ord_disorder = True
         if ord_val:
@@ -195,16 +221,34 @@ def evaluate_quality(
     cov_dict = None
     if coverage:
         cov_dict = coverage.to_dict()
+        unexplained_gaps = [
+            gap
+            for gap in coverage.uncovered_ranges
+            if gap.get("candidate_type") == "gap"
+            and gap.get("length", 0) >= max(1000, int(max(1, coverage.canonical_chars) * 0.05))
+        ]
         if coverage.coverage_ratio < 0.20 and leg_recs and art_recs:
             checks.append(
                 CheckResult(
                     "STRUCTURE", "coverage", "REVIEW", f"Low parser coverage: {coverage.coverage_ratio * 100:.1f}%"
                 )
             )
+        elif unexplained_gaps:
+            checks.append(
+                CheckResult(
+                    "STRUCTURE",
+                    "coverage",
+                    "REVIEW",
+                    "Large unexplained gaps exist between parsed legal units",
+                    {"gaps": unexplained_gaps},
+                )
+            )
         else:
             checks.append(
                 CheckResult("STRUCTURE", "coverage", "PASS", f"Parser coverage: {coverage.coverage_ratio * 100:.1f}%")
             )
+    elif leg_recs:
+        checks.append(CheckResult("STRUCTURE", "coverage", "REVIEW", "Legislation parsing coverage was not supplied"))
 
     # 5. METADATA GROUP
     doc_id = canonical_records[0].get("id") if canonical_records else None

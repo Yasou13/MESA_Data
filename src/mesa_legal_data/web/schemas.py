@@ -85,6 +85,9 @@ class MesaTargetSettingsUpdateRequest(BaseModel):
     dataset_id: str = Field(min_length=1, max_length=100)
     agent_id: str = Field(min_length=1, max_length=100)
     content_limit_chars: int = Field(default=32768, ge=1024, le=1048576)
+    health_path: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
+    publish_path: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
+    mutation_status_path_template: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
 
 
 class MesaPublishRequest(BaseModel):

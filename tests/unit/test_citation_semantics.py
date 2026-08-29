@@ -70,6 +70,24 @@ def test_false_positive_prevention():
         assert len(citations) == 0, f"False positive detected in: '{text}', citations: {citations}"
 
 
+def test_lowercase_ay_and_random_4857_are_not_resolved():
+    text = "Bu ay 4857 başvuru kaydedildi; ilgili Kanun hükmü ayrıca incelenecektir."
+    citations = extract_citations(text)
+
+    assert not any(c.target_legislation_id == "tr:legislation:constitution:2709" for c in citations)
+    assert not any(c.target_legislation_id == "tr:legislation:law:4857" for c in citations)
+    assert any(c.citation_status == "UNRESOLVED" for c in citations)
+
+
+def test_unknown_numbered_law_stays_extracted_until_resolution():
+    citations = extract_citations("9999 sayılı Kanun'un 3. maddesi uyarınca işlem yapıldı.")
+
+    assert len(citations) == 1
+    assert citations[0].target_legislation_id == "tr:legislation:law:9999"
+    assert citations[0].target_article_id == "tr:legislation:law:9999:article:3"
+    assert citations[0].citation_status == "EXTRACTED"
+
+
 def test_temporal_relation_hints():
     cases = [
         ("Bu madde 5237 sayılı Kanun ile değiştirilmiştir.", "amends"),

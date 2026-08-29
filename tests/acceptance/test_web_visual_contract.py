@@ -98,3 +98,8 @@ def test_static_js_files_exist_and_served():
     assert "Durum kontrol ediliyor…" in app_js
     assert "API erişilebilir" in app_js
     assert "API erişilemiyor" in app_js
+
+    # This helper is used by loadCollectView before DOMContentLoaded handlers run.
+    assert app_js.index("function updateDocTypesForSource") < app_js.index(
+        'document.addEventListener("DOMContentLoaded"'
+    )

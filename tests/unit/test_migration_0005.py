@@ -98,6 +98,13 @@ def test_migration_0005_data_preservation_and_backfill(tmp_path):
 
     c.execute("SELECT release_id, record_id, record_sha256 FROM release_items WHERE release_id = 'rel-1'")
     assert c.fetchone() == ("rel-1", "tr:legislation:law:1:article:1", "recsha1")
+    c.execute("SELECT version_id FROM release_items WHERE release_id = 'rel-1'")
+    assert c.fetchone() == ("ver-1",)
+
+    c.execute(
+        "SELECT contract_source, health_path, publish_path, mutation_status_path_template FROM mesa_target_settings"
+    )
+    assert c.fetchone() == ("unknown", "", "", "")
 
     # Verify inserting Version 2 for the same article does NOT collide or overwrite Version 1
     conn2.execute(

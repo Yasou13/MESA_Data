@@ -1,4 +1,7 @@
+import hashlib
 import json
+import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,6 +10,7 @@ from mesa_legal_data.catalog import (
     get_connection,
     get_db_path,
     insert_artifact,
+    insert_record,
     insert_version,
     migrate,
     upsert_document,
@@ -108,6 +112,13 @@ def test_document_versions_and_pending_reviews_endpoint(test_client):
         metadata_json="{}",
     )
 
+    canonical_path = "canonical/test.jsonl"
+    canonical_line = json.dumps({"id": "tck-rec-1", "record_type": "article"}, sort_keys=True) + "\n"
+    canonical_abs = Path(os.environ["MESA_DATA_DATA_ROOT"]) / canonical_path
+    canonical_abs.parent.mkdir(parents=True, exist_ok=True)
+    canonical_abs.write_text(canonical_line, encoding="utf-8")
+    canonical_hash = hashlib.sha256(canonical_line.encode()).hexdigest()
+
     insert_version(
         conn=conn,
         version_id="tr:legislation:law:5237:v1",
@@ -117,9 +128,9 @@ def test_document_versions_and_pending_reviews_endpoint(test_client):
         snapshot_date="2026-01-01",
         effective_from=None,
         effective_to=None,
-        canonical_path="canonical/test.jsonl",
+        canonical_path=canonical_path,
         canonical_line=1,
-        canonical_sha256="2222222222222222222222222222222222222222222222222222222222222222",
+        canonical_sha256=canonical_hash,
         parser_name="resmi_gazete_parser",
         parser_version="1.0.0",
         schema_version="1.0.0",
@@ -129,6 +140,15 @@ def test_document_versions_and_pending_reviews_endpoint(test_client):
         revision_number=1,
         quality_status="REVIEW",
         quality_json=json.dumps({"checks": [{"name": "STRUCTURE", "status": "REVIEW"}]}),
+    )
+    insert_record(
+        conn,
+        "tck-rec-1",
+        "tr:legislation:law:5237:v1",
+        "article",
+        canonical_path,
+        1,
+        canonical_hash,
     )
     conn.close()
 

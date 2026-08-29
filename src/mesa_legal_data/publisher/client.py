@@ -50,35 +50,47 @@ class MesaClient:
             headers["Idempotency-Key"] = idempotency_key
         return headers
 
+    @property
+    def is_contract_configured(self) -> bool:
+        return bool(
+            self.settings.contract_source in ("configured", "live_verified")
+            and self.settings.base_url
+            and self.settings.health_path.startswith("/")
+            and self.settings.publish_path.startswith("/")
+            and self.settings.mutation_status_path_template.startswith("/")
+            and "{mutation_id}" in self.settings.mutation_status_path_template
+        )
+
+    @staticmethod
+    def _normalize_mutation_state(raw_state: Any) -> tuple[str, str | None]:
+        """Normalize known states without ever inferring COMMITTED."""
+        if not isinstance(raw_state, str) or not raw_state.strip():
+            return MutationState.FAILED.value, "MESA response did not include an explicit mutation state"
+        state_upper = raw_state.strip().upper()
+        if state_upper in ("ACCEPTED", "RECEIVED"):
+            return MutationState.QUEUED.value, None
+        if state_upper in MutationState.__members__:
+            return state_upper, None
+        return MutationState.FAILED.value, f"Unknown MESA mutation state: {raw_state}"
+
     def test_connection(self) -> dict[str, Any]:
         """
         Tests connectivity to the configured MESA base_url.
         """
-        if not self.settings.base_url:
-            return {"connected": False, "latency_ms": 0.0, "details": "Base URL not configured"}
+        if not self.is_contract_configured:
+            return {
+                "connected": False,
+                "latency_ms": 0.0,
+                "details": "MESA HTTP contract routes are not configured or verified",
+            }
 
         start_time = time.perf_counter()
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
-                # Try v4 health, then root health
                 url = self.settings.base_url.rstrip("/")
-                resp = None
-                for path in ["/v4/health", "/health", "/"]:
-                    try:
-                        resp = client.get(f"{url}{path}", headers=self._get_headers())
-                        if resp.status_code in (200, 204, 401, 403):
-                            break
-                    except Exception:
-                        continue
+                resp = client.get(f"{url}{self.settings.health_path}", headers=self._get_headers())
 
                 latency_ms = (time.perf_counter() - start_time) * 1000.0
-
-                if resp is None:
-                    return {
-                        "connected": False,
-                        "latency_ms": round(latency_ms, 2),
-                        "details": f"Could not reach {self.settings.base_url}",
-                    }
 
                 if resp.status_code in (200, 204):
                     return {
@@ -113,6 +125,7 @@ class MesaClient:
         estimated_chunks_count: int = 0,
         total_canonical_bytes: int = 0,
         blocked_versions_count: int = 0,
+        unreadable_versions_count: int = 0,
     ) -> PreflightReport:
         """
         Executes preflight verification checks against MESA v4 publisher requirements.
@@ -128,6 +141,23 @@ class MesaClient:
             )
         else:
             checks.append(PreflightCheckItem(name="target_url", status="FAIL", message="Invalid or missing target URL"))
+
+        if self.is_contract_configured:
+            checks.append(
+                PreflightCheckItem(
+                    name="http_contract",
+                    status="PASS",
+                    message=f"MESA HTTP contract is {self.settings.contract_source}",
+                )
+            )
+        else:
+            checks.append(
+                PreflightCheckItem(
+                    name="http_contract",
+                    status="FAIL",
+                    message="MESA HTTP routes are unknown; configure a documented or live-verified contract",
+                )
+            )
 
         # 2. API Key Check
         if self.is_api_key_configured:
@@ -185,6 +215,21 @@ class MesaClient:
             )
 
         # 5. Quality & Release Readiness Check
+        if unreadable_versions_count > 0:
+            checks.append(
+                PreflightCheckItem(
+                    name="canonical_integrity",
+                    status="FAIL",
+                    message=f"{unreadable_versions_count} approved versions failed canonical integrity checks",
+                )
+            )
+        else:
+            checks.append(
+                PreflightCheckItem(
+                    name="canonical_integrity", status="PASS", message="All planned canonical versions are readable"
+                )
+            )
+
         if blocked_versions_count > 0:
             checks.append(
                 PreflightCheckItem(
@@ -205,8 +250,8 @@ class MesaClient:
             checks.append(
                 PreflightCheckItem(
                     name="quality_guard",
-                    status="WARN",
-                    message="No approved versions currently pending publication",
+                    status="FAIL",
+                    message="No approved, readable versions are pending publication",
                 )
             )
 
@@ -247,7 +292,14 @@ class MesaClient:
             "metadata": chunk.metadata,
         }
 
-        url = f"{self.settings.base_url.rstrip('/')}/v4/sources/chunks"
+        if not self.is_contract_configured:
+            return {
+                "mutation_id": None,
+                "state": MutationState.FAILED.value,
+                "message": "MESA HTTP contract is unknown; refusing to guess a publish route",
+            }
+
+        url = f"{self.settings.base_url.rstrip('/')}{self.settings.publish_path}"
         headers = self._get_headers(idempotency_key=idempotency_key)
 
         try:
@@ -255,16 +307,15 @@ class MesaClient:
                 resp = client.post(url, json=payload, headers=headers)
                 if resp.status_code in (200, 201, 202):
                     data = resp.json()
-                    mutation_id = data.get("mutation_id") or data.get("id") or f"mut-{chunk.chunk_id}"
-                    # Check explicit mutation status from response
-                    state = data.get("state") or data.get("status") or "COMMITTED"
-                    state_upper = state.upper()
-                    if state_upper not in MutationState.__members__:
-                        state_upper = "COMMITTED"
+                    mutation_id = data.get("mutation_id") or data.get("id")
+                    state_upper, state_error = self._normalize_mutation_state(data.get("state") or data.get("status"))
+                    if state_upper in (MutationState.QUEUED.value, MutationState.PROCESSING.value) and not mutation_id:
+                        state_upper = MutationState.FAILED.value
+                        state_error = "MESA returned a non-terminal state without mutation_id"
                     return {
                         "mutation_id": mutation_id,
                         "state": state_upper,
-                        "message": data.get("message", "Mutation accepted"),
+                        "message": state_error or data.get("message", "Mutation accepted"),
                     }
                 elif resp.status_code == 422:
                     # Semantic rejection
@@ -298,7 +349,15 @@ class MesaClient:
         if not mutation_id:
             return {"mutation_id": mutation_id, "state": MutationState.FAILED.value, "error": "Missing mutation_id"}
 
-        url = f"{self.settings.base_url.rstrip('/')}/v4/mutations/{mutation_id}"
+        if not self.is_contract_configured:
+            return {
+                "mutation_id": mutation_id,
+                "state": MutationState.FAILED.value,
+                "error": "MESA HTTP contract is unknown",
+            }
+
+        mutation_path = self.settings.mutation_status_path_template.replace("{mutation_id}", mutation_id)
+        url = f"{self.settings.base_url.rstrip('/')}{mutation_path}"
         headers = self._get_headers()
 
         try:
@@ -306,14 +365,11 @@ class MesaClient:
                 resp = client.get(url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    raw_state = data.get("state") or data.get("status") or "COMMITTED"
-                    state_upper = raw_state.upper()
-                    if state_upper not in MutationState.__members__:
-                        state_upper = "COMMITTED"
+                    state_upper, state_error = self._normalize_mutation_state(data.get("state") or data.get("status"))
                     return {
                         "mutation_id": mutation_id,
                         "state": state_upper,
-                        "error": data.get("error"),
+                        "error": state_error or data.get("error"),
                     }
                 else:
                     return {

@@ -1,4 +1,5 @@
 import pytest
+import respx
 
 from mesa_legal_data.catalog import get_connection, migrate
 from mesa_legal_data.publisher.client import MesaClient
@@ -13,7 +14,7 @@ from mesa_legal_data.publisher.ledger import (
     update_delivery_progress,
     upsert_mesa_target_settings,
 )
-from mesa_legal_data.publisher.models import MesaTargetSettings, MutationState
+from mesa_legal_data.publisher.models import MesaTargetSettings, MutationState, SourceChunk
 
 
 @pytest.fixture
@@ -59,6 +60,41 @@ def test_api_key_secrecy_and_isolation(monkeypatch):
     # Verify settings dump does NOT leak the API key
     dumped = settings.model_dump()
     assert "secret_token_12345" not in str(dumped)
+
+
+@respx.mock
+@pytest.mark.parametrize("response_json", [{}, {"state": "unknown_future_state"}, {"status": "accepted"}])
+def test_committed_truth_requires_explicit_committed(response_json):
+    settings = MesaTargetSettings(
+        base_url="https://mesa-contract.test",
+        contract_source="configured",
+        health_path="/health-contract",
+        publish_path="/publish-contract",
+        mutation_status_path_template="/mutations-contract/{mutation_id}",
+    )
+    client = MesaClient(settings=settings, api_key="secret")
+    chunk = SourceChunk(
+        chunk_id="v1:chunk:1",
+        document_id="doc-1",
+        version_id="v1",
+        chunk_type="general",
+        char_start=0,
+        char_end=4,
+        ordinal=1,
+        content="test",
+        content_hash="hash",
+    )
+    respx.post("https://mesa-contract.test/publish-contract").respond(200, json=response_json)
+
+    result = client.publish_source_chunk(chunk, "stable-key")
+
+    assert result["state"] != MutationState.COMMITTED.value
+
+
+def test_unknown_contract_never_guesses_routes():
+    client = MesaClient(settings=MesaTargetSettings(base_url="https://mesa-contract.test"), api_key="secret")
+    assert client.is_contract_configured is False
+    assert client.test_connection()["connected"] is False
 
 
 def test_delivery_ledger_and_cross_release_dedup(db_conn):

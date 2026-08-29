@@ -119,6 +119,75 @@ def test_evaluate_quality_corrupt_block():
     assert report.decision == "BLOCK"
 
 
+def _quality_report_for_text(canonical_text, records, coverage=None):
+    return evaluate_quality(
+        source_info={"source_id": "mevzuat", "source_url": "https://example.com/law.html"},
+        raw_info={"byte_size": max(1, len(canonical_text.encode())), "sha256": "d" * 64, "file_exists": True},
+        canonical_records=records,
+        canonical_text=canonical_text,
+        coverage=coverage,
+        privacy_issues=[],
+    )
+
+
+def test_quality_adversarial_inputs_never_pass():
+    provenance = {"source": {"artifact_sha256": "d" * 64}, "provenance": {"pipeline_run_id": "run-audit"}}
+
+    assert _quality_report_for_text("", []).decision == "BLOCK"
+
+    canonical = "MADDE 1 - Birinci metin.\n\nMADDE 2 - İkinci metin."
+    shifted_article = {
+        "id": "law:article:1",
+        "record_type": "article",
+        "article_number": "1",
+        "text": "Birinci metin.",
+        "source_span": {"char_start": canonical.index("MADDE 2"), "char_end": len(canonical)},
+        **provenance,
+    }
+    legislation = {"id": "law", "record_type": "legislation", "title": "Audit Law", **provenance}
+    assert _quality_report_for_text(canonical, [legislation, shifted_article]).decision == "BLOCK"
+
+    severe_mojibake = "MADDE 1 - " + ("\ufffd" * 20)
+    valid_span_article = {
+        "id": "law:article:1",
+        "record_type": "article",
+        "article_number": "1",
+        "text": "\ufffd" * 20,
+        "source_span": {"char_start": 0, "char_end": len(severe_mojibake)},
+        **provenance,
+    }
+    severe_report = _quality_report_for_text(severe_mojibake, [legislation, valid_span_article])
+    assert severe_report.decision == "BLOCK"
+
+    first = "MADDE 1 - Başlangıç."
+    second = "MADDE 2 - Bitiş."
+    missing_middle = first + ("\nKAYIP BÖLÜM" * 600) + "\n" + second
+    second_start = missing_middle.rindex("MADDE 2")
+    articles = [
+        {
+            "id": "law:article:1",
+            "record_type": "article",
+            "article_number": "1",
+            "text": "Başlangıç.",
+            "source_span": {"char_start": 0, "char_end": len(first)},
+            **provenance,
+        },
+        {
+            "id": "law:article:2",
+            "record_type": "article",
+            "article_number": "2",
+            "text": "Bitiş.",
+            "source_span": {"char_start": second_start, "char_end": len(missing_middle)},
+            **provenance,
+        },
+    ]
+    coverage = compute_parsing_coverage(
+        missing_middle,
+        [(0, len(first)), (second_start, len(missing_middle))],
+    )
+    assert _quality_report_for_text(missing_middle, [legislation, *articles], coverage).decision == "REVIEW"
+
+
 def test_release_guard_blocks_unapproved_and_blocked_versions(quality_db):
     """
     Release Guard Test:

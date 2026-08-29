@@ -376,18 +376,23 @@ def insert_version(
     with transaction(conn):
         cur = conn.cursor()
         cur.execute(
-            "SELECT revision_number, supersedes_version_id, approval_status FROM versions WHERE version_id = ?",
+            """SELECT revision_number, supersedes_version_id, approval_status,
+                      document_id, artifact_id, canonical_sha256
+               FROM versions WHERE version_id = ?""",
             (version_id,),
         )
         existing_ver = cur.fetchone()
 
         if existing_ver:
-            rev_num = existing_ver[0] if existing_ver[0] is not None else (revision_number or 1)
-            super_id = supersedes_version_id or existing_ver[1]
-            if existing_ver[2] == "approved" and approval_status == "pending":
-                final_approval = "approved"
-            else:
-                final_approval = approval_status
+            if (existing_ver[3], existing_ver[4], existing_ver[5]) != (
+                document_id,
+                artifact_id,
+                canonical_sha256,
+            ):
+                raise CatalogError(
+                    f"Immutable version collision for {version_id}: existing identity/content differs"
+                )
+            return
         else:
             if revision_number is not None:
                 rev_num = revision_number
@@ -398,15 +403,8 @@ def insert_version(
                 )
                 rev_num = cur.fetchone()[0]
 
-            if supersedes_version_id is not None:
-                super_id = supersedes_version_id
-            else:
-                cur.execute(
-                    "SELECT version_id FROM versions WHERE document_id = ? AND version_id != ? ORDER BY revision_number DESC, created_at DESC LIMIT 1",
-                    (document_id, version_id),
-                )
-                super_row = cur.fetchone()
-                super_id = super_row[0] if super_row else None
+            # A predecessor is provenance, not an insertion-order guess.
+            super_id = supersedes_version_id
 
             final_approval = approval_status
 
@@ -653,14 +651,23 @@ def iter_records_for_release(
     cursor = conn.cursor()
     cursor.execute(
         """
+        WITH eligible_versions AS (
+            SELECT v.version_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY v.document_id
+                       ORDER BY COALESCE(v.revision_number, 1) DESC, v.created_at DESC
+                   ) AS version_rank
+            FROM versions v
+            WHERE v.approval_status = 'approved'
+              AND v.validation_status = 'valid'
+              AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+              AND v.privacy_status IN ('clean', 'approved')
+        )
         SELECT r.record_id, r.record_type, r.record_sha256, r.canonical_path, r.canonical_line, r.version_id
         FROM records r
-        JOIN versions v ON r.version_id = v.version_id
+        JOIN eligible_versions ev ON r.version_id = ev.version_id AND ev.version_rank = 1
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
-          AND v.validation_status = 'valid'
-          AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
-          AND v.privacy_status IN ('clean', 'approved')
         ORDER BY r.canonical_path ASC, r.canonical_line ASC
         """
     )
@@ -1038,12 +1045,18 @@ def mark_release_status(
             )
 
 
-def add_release_item(conn: sqlite3.Connection, release_id: str, record_id: str, record_sha256: str):
+def add_release_item(
+    conn: sqlite3.Connection,
+    release_id: str,
+    record_id: str,
+    record_sha256: str,
+    version_id: str | None = None,
+):
     with transaction(conn):
         conn.execute(
-            """INSERT INTO release_items (release_id, record_id, record_sha256)
-               VALUES (?, ?, ?)""",
-            (release_id, record_id, record_sha256),
+            """INSERT INTO release_items (release_id, record_id, record_sha256, version_id)
+               VALUES (?, ?, ?, ?)""",
+            (release_id, record_id, record_sha256, version_id),
         )
 
 
@@ -1155,12 +1168,7 @@ def approve_version_streaming(
             spool_conn.close()
             if spool_db_path.exists():
                 spool_db_path.unlink()
-            return {
-                "status": "approved",
-                "version_id": version_id,
-                "approved_records": 0,
-                "approval_status": "approved",
-            }
+            raise CatalogError(f"Cannot approve version {version_id}: it has no canonical records")
 
         # Get distinct canonical paths
         p_cur = spool_conn.cursor()
@@ -2172,14 +2180,41 @@ def evaluate_auto_approval(
 
     Returns (is_approved, explanation_reason).
     """
-    if quality_decision != "PASS":
-        return False, f"Quality Gate decision is {quality_decision} (requires PASS)"
+    ver = get_version(conn, version_id)
+    if not ver:
+        return False, f"Version {version_id} does not exist"
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT source_id FROM artifacts WHERE artifact_id = ?", (ver["artifact_id"],))
+    source_row = cursor.fetchone()
+    actual_source_id = source_row[0] if source_row else None
+    actual_schema_valid = ver.get("validation_status") == "valid"
+    actual_privacy_blocker = ver.get("privacy_status") not in ("clean", "approved")
+
+    supplied_contract = (source_id, parser_name, parser_version, quality_decision, schema_valid, has_privacy_blocker)
+    stored_contract = (
+        actual_source_id,
+        ver.get("parser_name"),
+        ver.get("parser_version"),
+        ver.get("quality_status"),
+        actual_schema_valid,
+        actual_privacy_blocker,
+    )
+    if supplied_contract != stored_contract:
+        return False, "Auto-approval inputs do not match the stored version provenance and gate state"
+
+    if ver.get("quality_status") != "PASS":
+        return False, f"Quality Gate decision is {ver.get('quality_status')} (requires PASS)"
 
     if has_privacy_blocker:
         return False, "Privacy blocker detected in content"
 
     if not schema_valid:
         return False, "Schema validation failed"
+
+    source_id = str(actual_source_id)
+    parser_name = str(ver["parser_name"])
+    parser_version = str(ver["parser_version"])
 
     settings = get_source_operational_settings(conn, source_id)
     if not settings.get("enabled", True):
