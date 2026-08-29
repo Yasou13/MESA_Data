@@ -2167,7 +2167,7 @@ async function loadReleasesView() {
         <td>
           ${rel.status === "draft" ? `<button class="btn btn-sm btn-primary" onclick="verifyRelease('${escapeHtml(rel.release_id)}')">Doğrula</button>` : ""}
           ${rel.status === "verified" ? `<button class="btn btn-sm btn-success" onclick="publishRelease('${escapeHtml(rel.release_id)}')">Yayınla</button>` : ""}
-          ${rel.status === "published" ? `<button class="btn btn-sm btn-secondary" onclick="importRelease('${escapeHtml(rel.release_id)}')">MESA'ya Aktar</button>` : ""}
+          ${rel.status === "published" ? `<button class="btn btn-sm btn-secondary" onclick="importRelease('${escapeHtml(rel.release_id)}')">Yerel Staging'e Aktar</button>` : ""}
         </td>
       `;
       tbody.appendChild(tr);
@@ -2209,7 +2209,7 @@ async function importRelease(releaseId) {
   setBusy(true);
   try {
     await apiRequest(`/api/releases/${releaseId}/import-staging`, { method: "POST" });
-    showToast("Release MESA staging ortamına aktarıldı.", "success");
+    showToast("Release yerel development staging ortamına aktarıldı.", "success");
     await loadReleasesView();
   } catch (err) {
     console.error(err);

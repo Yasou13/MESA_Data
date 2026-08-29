@@ -462,6 +462,54 @@ def insert_version(
         )
 
 
+def replace_derived_version_output(
+    conn: sqlite3.Connection,
+    *,
+    version_id: str,
+    document_id: str,
+    artifact_id: str,
+    canonical_path: str,
+    canonical_line: int,
+    canonical_sha256: str,
+    parser_name: str,
+    parser_version: str,
+    validation_status: str,
+    privacy_status: str,
+    quality_status: str,
+    quality_json: str,
+) -> None:
+    """Replace only reproducible output for one immutable legal version."""
+    current = get_version(conn, version_id)
+    if not current:
+        raise CatalogError(f"Cannot reprocess unknown version {version_id}")
+    if current["document_id"] != document_id or current["artifact_id"] != artifact_id:
+        raise CatalogError(f"Immutable version identity mismatch for {version_id}")
+
+    with transaction(conn):
+        conn.execute(
+            """UPDATE versions
+               SET canonical_path = ?, canonical_line = ?, canonical_sha256 = ?,
+                   parser_name = ?, parser_version = ?, validation_status = ?,
+                   privacy_status = ?, approval_status = 'pending',
+                   quality_status = ?, quality_json = ?, auto_approved = 0,
+                   is_audit_sample = 0, audit_sample_reason = NULL
+               WHERE version_id = ?""",
+            (
+                canonical_path,
+                canonical_line,
+                canonical_sha256,
+                parser_name,
+                parser_version,
+                validation_status,
+                privacy_status,
+                quality_status,
+                quality_json,
+                version_id,
+            ),
+        )
+        conn.execute("DELETE FROM records WHERE version_id = ?", (version_id,))
+
+
 def get_version(conn: sqlite3.Connection, version_id: str) -> dict[str, Any] | None:
     cursor = conn.cursor()
     cursor.execute(
@@ -649,20 +697,17 @@ def iter_records_for_release(
     cursor = conn.cursor()
     cursor.execute("""
         WITH eligible_versions AS (
-            SELECT v.version_id,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY v.document_id
-                       ORDER BY COALESCE(v.revision_number, 1) DESC, v.created_at DESC
-                   ) AS version_rank
-            FROM versions v
+            SELECT v.version_id
+            FROM documents d
+            JOIN versions v ON v.version_id = d.current_version_id
             WHERE v.approval_status = 'approved'
               AND v.validation_status = 'valid'
-              AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+              AND v.quality_status = 'PASS'
               AND v.privacy_status IN ('clean', 'approved')
         )
         SELECT r.record_id, r.record_type, r.record_sha256, r.canonical_path, r.canonical_line, r.version_id
         FROM records r
-        JOIN eligible_versions ev ON r.version_id = ev.version_id AND ev.version_rank = 1
+        JOIN eligible_versions ev ON r.version_id = ev.version_id
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
         ORDER BY r.canonical_path ASC, r.canonical_line ASC

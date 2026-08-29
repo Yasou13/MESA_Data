@@ -352,23 +352,15 @@ def get_document_mesa_status(conn: sqlite3.Connection, document_id: str) -> dict
     """
     cursor = conn.cursor()
     cursor.execute(
-        """WITH delivered_versions AS (
-               SELECT i.version_id,
-                      ROW_NUMBER() OVER (
-                          ORDER BY COALESCE(v.revision_number, 1) DESC, v.created_at DESC
-                      ) AS version_rank
-               FROM mesa_delivery_items i
-               LEFT JOIN versions v ON v.version_id = i.version_id
-               WHERE i.document_id = ?
-               GROUP BY i.version_id
-           ), latest_items AS (
+        """WITH latest_items AS (
                SELECT i.remote_state,
                       ROW_NUMBER() OVER (
                           PARTITION BY i.chunk_id
                           ORDER BY i.updated_at DESC, i.created_at DESC
                       ) AS attempt_rank
                FROM mesa_delivery_items i
-               JOIN delivered_versions dv ON dv.version_id = i.version_id AND dv.version_rank = 1
+               JOIN documents d ON d.document_id = i.document_id
+               WHERE i.document_id = ? AND i.version_id = d.current_version_id
            )
            SELECT remote_state, count(*)
            FROM latest_items
@@ -378,12 +370,19 @@ def get_document_mesa_status(conn: sqlite3.Connection, document_id: str) -> dict
     )
     counts = dict((r[0], r[1]) for r in cursor.fetchall())
     if not counts:
-        return {"status": "Not Sent", "committed_count": 0, "failed_count": 0, "total_chunks": 0}
+        cursor.execute("SELECT 1 FROM mesa_delivery_items WHERE document_id = ? LIMIT 1", (document_id,))
+        status = "Update Pending" if cursor.fetchone() else "Not Sent"
+        return {"status": status, "committed_count": 0, "failed_count": 0, "total_chunks": 0}
 
     total = sum(counts.values())
     committed = counts.get("COMMITTED", 0) + counts.get("SKIPPED", 0)
     failed = counts.get("FAILED", 0) + counts.get("REJECTED", 0)
-    sending = counts.get("SENDING", 0) + counts.get("QUEUED", 0) + counts.get("PROCESSING", 0)
+    sending = (
+        counts.get("SENDING", 0)
+        + counts.get("QUEUED", 0)
+        + counts.get("PROCESSING", 0)
+        + counts.get("AWAITING_MUTATION", 0)
+    )
 
     if sending > 0:
         status = "Sending"
@@ -394,7 +393,7 @@ def get_document_mesa_status(conn: sqlite3.Connection, document_id: str) -> dict
     elif committed == total and total > 0:
         status = "Committed"
     else:
-        status = "Not Sent"
+        status = "Update Pending"
 
     return {
         "status": status,

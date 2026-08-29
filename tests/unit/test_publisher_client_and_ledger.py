@@ -186,8 +186,7 @@ def test_delivery_ledger_and_cross_release_dedup(db_conn):
     assert len(failed) == 1
     assert failed[0]["item_id"] == "item-02"
 
-    # Document MESA status check
+    # No current document version was created for this ledger-only fixture;
+    # historical delivery evidence must not be presented as current committed state.
     doc_status = get_document_mesa_status(db_conn, "doc-1")
-    assert doc_status["status"] == "Partial"
-    assert doc_status["committed_count"] == 1
-    assert doc_status["failed_count"] == 1
+    assert doc_status["status"] == "Update Pending"

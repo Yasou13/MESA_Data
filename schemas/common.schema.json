@@ -25,6 +25,7 @@
         "source_id": { "type": "string" },
         "source_url": { "type": "string" },
         "retrieved_at": { "type": "string" },
+        "publication_date": { "type": ["string", "null"] },
         "artifact_sha256": { "type": "string" },
         "artifact_path": { "type": ["string", "null"] }
       },

@@ -4,6 +4,9 @@ from pydantic import BaseModel, ConfigDict
 
 from mesa_legal_data.parsers.text_normalizer import normalize_text
 
+PARSER_NAME = "legislation_parser"
+PARSER_VERSION = "1.0.0"
+
 
 class ParsedArticle(BaseModel):
     model_config = ConfigDict(frozen=True)

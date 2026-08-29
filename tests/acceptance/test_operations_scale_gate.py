@@ -83,9 +83,9 @@ def test_operations_scale_gate(tmp_path, monkeypatch):
             rec_sha = hashlib.sha256(line_str.encode("utf-8")).hexdigest()
 
             c.execute(
-                """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at)
-                   VALUES (?, 'doc-scale-1', 'art-scale-1', 'snapshot', 'canonical/scale.jsonl', ?, 'sha-v-scale', 'parser_scale', '1.0', '1.0', 'valid', 'clean', 'pending', '2026-08-05T00:00:00Z')""",
-                (v_id, i),
+                """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at, revision_number, quality_status)
+                   VALUES (?, 'doc-scale-1', 'art-scale-1', 'snapshot', 'canonical/scale.jsonl', ?, 'sha-v-scale', 'parser_scale', '1.0', '1.0', 'valid', 'clean', 'pending', '2026-08-05T00:00:00Z', ?, 'PASS')""",
+                (v_id, i, i),
             )
             c.execute(
                 """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
@@ -102,6 +102,8 @@ def test_operations_scale_gate(tmp_path, monkeypatch):
 
     c.execute("SELECT COUNT(*) FROM records WHERE approval_status = 'approved'")
     assert c.fetchone()[0] == 500
+    conn.execute("UPDATE documents SET current_version_id = ? WHERE document_id = 'doc-scale-1'", (v_ids[-1],))
+    conn.commit()
 
     # 4. Large export streaming test
     res_exp = generate_export_package(

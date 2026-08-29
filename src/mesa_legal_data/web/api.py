@@ -157,10 +157,11 @@ def get_dashboard():
     c.execute("""
         SELECT count(DISTINCT r.record_instance_id) FROM records r
         JOIN versions v ON r.version_id = v.version_id
+        JOIN documents d ON d.current_version_id = v.version_id
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
           AND v.validation_status = 'valid'
-          AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+          AND v.quality_status = 'PASS'
     """)
     mesa_ready_count = c.fetchone()[0]
 
@@ -1019,7 +1020,7 @@ SOURCE_FAMILY_MAP = {
 
 @router.post("/documents/{document_id:path}/reprocess")
 async def reprocess_document(document_id: str):
-    return await process_document_pipeline(document_id=document_id)
+    return await process_document_pipeline(document_id=document_id, force_reprocess=True)
 
 
 @router.get("/documents/{document_id:path}/versions")
@@ -1202,7 +1203,7 @@ async def process_artifact(artifact_id: str):
 
 
 @router.post("/documents/{document_id:path}/pipeline")
-async def process_document_pipeline(document_id: str):
+async def process_document_pipeline(document_id: str, force_reprocess: bool = False):
     async with write_lock.acquire_write():
         conn = get_connection()
         c = conn.cursor()
@@ -1216,7 +1217,7 @@ async def process_document_pipeline(document_id: str):
             error_response("ARTIFACT_NOT_FOUND", f"No artifact found for document {document_id}", status_code=404)
         artifact_id = row[0]
         try:
-            pipeline_status = process_artifact_pipeline(artifact_id=artifact_id)
+            pipeline_status = process_artifact_pipeline(artifact_id=artifact_id, force_reprocess=force_reprocess)
             return ok_response(
                 {"document_id": document_id, "artifact_id": artifact_id, "pipeline_status": pipeline_status}
             )

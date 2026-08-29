@@ -1,6 +1,7 @@
 import os
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -50,6 +51,29 @@ class MesaClient:
             headers["Idempotency-Key"] = idempotency_key
         return headers
 
+    def target_safety_error(self) -> str | None:
+        """Validate the target before a request can carry Authorization."""
+        try:
+            parsed = urlparse(self.settings.base_url)
+        except ValueError:
+            return "MESA target URL is malformed"
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            return "MESA target URL is malformed or contains forbidden userinfo/query data"
+        local_hosts = {"localhost", "127.0.0.1", "::1"}
+        if host in local_hosts:
+            if parsed.scheme != "http" and parsed.scheme != "https":
+                return "Local MESA target must use HTTP or HTTPS"
+            return None
+        if parsed.scheme != "https":
+            return "Non-local MESA target must use HTTPS"
+        allowed_host = os.environ.get("MESA_DATA_MESA_ALLOWED_HOST", "").lower().rstrip(".")
+        if not allowed_host:
+            return "MESA_DATA_MESA_ALLOWED_HOST must explicitly allow the HTTPS target host"
+        if host != allowed_host:
+            return "MESA target host is not the explicitly allowed host"
+        return None
+
     @property
     def is_contract_configured(self) -> bool:
         return bool(
@@ -77,9 +101,20 @@ class MesaClient:
         """
         Tests connectivity to the configured MESA base_url.
         """
+        target_error = self.target_safety_error()
+        if target_error:
+            return {
+                "connected": False,
+                "reachable": False,
+                "authenticated": False,
+                "latency_ms": 0.0,
+                "details": target_error,
+            }
         if not self.is_contract_configured:
             return {
                 "connected": False,
+                "reachable": False,
+                "authenticated": False,
                 "latency_ms": 0.0,
                 "details": "MESA HTTP contract routes are not configured or verified",
             }
@@ -95,18 +130,24 @@ class MesaClient:
                 if resp.status_code in (200, 204):
                     return {
                         "connected": True,
+                        "reachable": True,
+                        "authenticated": True,
                         "latency_ms": round(latency_ms, 2),
                         "details": f"Connected ({resp.status_code})",
                     }
                 elif resp.status_code in (401, 403):
                     return {
-                        "connected": True,
+                        "connected": False,
+                        "reachable": True,
+                        "authenticated": False,
                         "latency_ms": round(latency_ms, 2),
                         "details": "Server reachable, authentication required",
                     }
                 else:
                     return {
                         "connected": False,
+                        "reachable": True,
+                        "authenticated": False,
                         "latency_ms": round(latency_ms, 2),
                         "details": f"Server responded with status {resp.status_code}",
                     }
@@ -114,6 +155,8 @@ class MesaClient:
             latency_ms = (time.perf_counter() - start_time) * 1000.0
             return {
                 "connected": False,
+                "reachable": False,
+                "authenticated": False,
                 "latency_ms": round(latency_ms, 2),
                 "details": f"Connection error: {e}",
             }
@@ -133,14 +176,15 @@ class MesaClient:
         checks: list[PreflightCheckItem] = []
 
         # 1. Target URL Check
-        if self.settings.base_url and self.settings.base_url.startswith(("http://", "https://")):
+        target_error = self.target_safety_error()
+        if not target_error:
             checks.append(
                 PreflightCheckItem(
                     name="target_url", status="PASS", message=f"Target URL configured: {self.settings.base_url}"
                 )
             )
         else:
-            checks.append(PreflightCheckItem(name="target_url", status="FAIL", message="Invalid or missing target URL"))
+            checks.append(PreflightCheckItem(name="target_url", status="FAIL", message=target_error))
 
         if self.is_contract_configured:
             checks.append(
@@ -205,6 +249,14 @@ class MesaClient:
                     message=f"Server reachable ({conn_res['details']}, {conn_res['latency_ms']}ms)",
                 )
             )
+        elif conn_res.get("reachable") and not conn_res.get("authenticated"):
+            checks.append(
+                PreflightCheckItem(
+                    name="connectivity",
+                    status="FAIL",
+                    message=f"Server reachable but authentication failed ({conn_res['details']})",
+                )
+            )
         else:
             checks.append(
                 PreflightCheckItem(
@@ -230,12 +282,12 @@ class MesaClient:
                 )
             )
 
-        if blocked_versions_count > 0:
+        if blocked_versions_count > 0 and ready_versions_count == 0:
             checks.append(
                 PreflightCheckItem(
                     name="quality_guard",
                     status="FAIL",
-                    message=f"{blocked_versions_count} versions have quality status BLOCK (excluded from delivery)",
+                    message=f"No current eligible versions; {blocked_versions_count} current versions are BLOCK and excluded",
                 )
             )
         elif ready_versions_count > 0:
@@ -243,7 +295,14 @@ class MesaClient:
                 PreflightCheckItem(
                     name="quality_guard",
                     status="PASS",
-                    message=f"{ready_versions_count} approved versions ready for publishing ({estimated_chunks_count} chunks)",
+                    message=(
+                        f"{ready_versions_count} approved current versions ready for publishing ({estimated_chunks_count} chunks)"
+                        + (
+                            f"; {blocked_versions_count} current BLOCK versions excluded"
+                            if blocked_versions_count
+                            else ""
+                        )
+                    ),
                 )
             )
         else:
@@ -298,6 +357,10 @@ class MesaClient:
                 "state": MutationState.FAILED.value,
                 "message": "MESA HTTP contract is unknown; refusing to guess a publish route",
             }
+
+        target_error = self.target_safety_error()
+        if target_error:
+            return {"mutation_id": None, "state": MutationState.FAILED.value, "message": target_error}
 
         url = f"{self.settings.base_url.rstrip('/')}{self.settings.publish_path}"
         headers = self._get_headers(idempotency_key=idempotency_key)
@@ -355,6 +418,10 @@ class MesaClient:
                 "state": MutationState.FAILED.value,
                 "error": "MESA HTTP contract is unknown",
             }
+
+        target_error = self.target_safety_error()
+        if target_error:
+            return {"mutation_id": mutation_id, "state": MutationState.FAILED.value, "error": target_error}
 
         mutation_path = self.settings.mutation_status_path_template.replace("{mutation_id}", mutation_id)
         url = f"{self.settings.base_url.rstrip('/')}{mutation_path}"
