@@ -12,7 +12,6 @@ from mesa_legal_data.catalog import (
     create_release,
     get_connection,
     iter_records_for_release,
-    list_open_blocking_issues,
     transaction,
 )
 from mesa_legal_data.config import load_settings
@@ -89,12 +88,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
     """)
 
     try:
-        # 1. Check open blocker issues
-        blockers = list_open_blocking_issues(conn)
-        if blockers:
-            raise ReleaseBuildError(f"Cannot build release: open blocker issues exist: {blockers}")
-
-        # 2. Stream selected record metadata from catalog into temporary selected_records table
+        # 1. Stream selected record metadata from catalog into temporary selected_records table
         selected_batch = []
         batch_size = 2000
         for ref in iter_records_for_release(conn, batch_size=batch_size):
@@ -124,7 +118,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
 
         spool_conn.commit()
 
-        # 2b. Guard: empty releases are not allowed
+        # 1b. Guard: empty releases are not allowed
         count_cur = spool_conn.cursor()
         count_cur.execute("SELECT COUNT(*) FROM selected_records")
         total_selected = count_cur.fetchone()[0]
@@ -133,6 +127,49 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
                 "Cannot build release: no eligible records found. "
                 "Ensure records are approved, validated, and privacy-cleared before building a release."
             )
+
+        # 2. Check candidate-scoped blocker issues
+        spool_cur = spool_conn.cursor()
+        spool_cur.execute("SELECT DISTINCT version_id FROM selected_records")
+        candidate_v_ids = set(r[0] for r in spool_cur.fetchall())
+        spool_cur.execute("SELECT version_id || ':' || record_id FROM selected_records")
+        candidate_rec_insts = set(r[0] for r in spool_cur.fetchall())
+
+        if candidate_v_ids:
+            check_cur = conn.cursor()
+            check_cur.execute(
+                "SELECT issue_id, subject_type, subject_id, severity, code, message, version_id, record_instance_id FROM validation_issues WHERE status = 'open' AND severity IN ('blocker', 'error')"
+            )
+            all_blockers = check_cur.fetchall()
+            candidate_blockers = []
+            for b in all_blockers:
+                iss_id, sub_type, sub_id, sev, code, msg, v_id, r_inst_id = b
+                is_candidate = False
+                if v_id and v_id in candidate_v_ids:
+                    is_candidate = True
+                elif sub_type == "version" and sub_id in candidate_v_ids:
+                    is_candidate = True
+                elif r_inst_id and r_inst_id in candidate_rec_insts:
+                    is_candidate = True
+                elif sub_type == "record" and sub_id in candidate_rec_insts:
+                    is_candidate = True
+
+                if is_candidate:
+                    candidate_blockers.append(
+                        {
+                            "issue_id": iss_id,
+                            "subject_type": sub_type,
+                            "subject_id": sub_id,
+                            "severity": sev,
+                            "code": code,
+                            "message": msg,
+                        }
+                    )
+
+            if candidate_blockers:
+                raise ReleaseBuildError(
+                    f"Cannot build release: candidate versions contain open blocker issues: {candidate_blockers}"
+                )
 
         # 3. O(n) Single Sequential Pass over Canonical Part Files
         # Group selected records by canonical_path ordered by canonical_line

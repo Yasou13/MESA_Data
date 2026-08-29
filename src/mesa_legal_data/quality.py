@@ -367,7 +367,17 @@ def evaluate_quality(
         )
 
     # 9. DUPLICATE GROUP
-    checks.append(CheckResult("DUPLICATE", "duplicate_evaluation", "PASS", "Duplicate check evaluated"))
+    if raw_info.get("is_duplicate"):
+        checks.append(
+            CheckResult(
+                "DUPLICATE",
+                "duplicate_evaluation",
+                "REVIEW",
+                "Duplicate artifact detected; manual verification recommended",
+            )
+        )
+    else:
+        checks.append(CheckResult("DUPLICATE", "duplicate_evaluation", "PASS", "Unique artifact payload"))
 
     # Aggregate decision: BLOCK > REVIEW > PASS
     statuses = [c.status for c in checks]

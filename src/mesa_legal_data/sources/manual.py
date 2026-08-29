@@ -33,6 +33,7 @@ def import_manual_file(
     document_type: str = "law",
     jurisdiction: str = "TR",
     title: str | None = None,
+    publication_date: str | None = None,
     stable_key: str | None = None,
     sources_yaml_path: Path | None = None,
 ) -> FetchedArtifact:
@@ -90,6 +91,7 @@ def import_manual_file(
         "source_id": source_id,
         "source_url": f"file://{file_path.resolve()}",
         "retrieved_at": retrieved_at,
+        "publication_date": publication_date,
         "fetch_method": "manual",
         "http_status": 200,
         "declared_content_type": detected_mime,

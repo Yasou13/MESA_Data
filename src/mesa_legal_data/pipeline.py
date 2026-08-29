@@ -17,10 +17,10 @@ from mesa_legal_data.catalog import (
     insert_record,
     insert_version,
     open_issue,
+    recompute_document_current_version,
     replace_derived_version_output,
     transaction,
     update_artifact_transport_status,
-    update_document_status,
 )
 from mesa_legal_data.config import load_settings
 from mesa_legal_data.ids import (
@@ -209,20 +209,42 @@ def process_artifact_pipeline(
 
     last_mod = art_row.get("last_modified") if art_row else None
     ret_at = art_row.get("retrieved_at") if art_row else None
-    ver_date = (
-        meta_dict.get("publication_date")
-        or meta_dict.get("snapshot_date")
-        or (str(last_mod)[:10] if last_mod else None)
-        or (str(ret_at)[:10] if ret_at else None)
-        or "2026-01-01"
-    )
-    ver_date = str(ver_date)[:10]
+
+    pub_date_missing = False
+    if v_kind == "original_publication":
+        raw_ver_date = meta_dict.get("publication_date") or meta_dict.get("source_date")
+        if not raw_ver_date:
+            pub_date_missing = True
+            ver_date = "unknown-date"
+        else:
+            ver_date = str(raw_ver_date)[:10]
+    elif fam == "decision":
+        dec_parsed_pre = parse_decision_text(canonical_text)
+        raw_ver_date = (
+            getattr(dec_parsed_pre, "decision_date", None)
+            or meta_dict.get("decision_date")
+            or meta_dict.get("publication_date")
+            or meta_dict.get("snapshot_date")
+        )
+        if not raw_ver_date and last_mod:
+            raw_ver_date = str(last_mod)[:10]
+        elif not raw_ver_date and ret_at:
+            raw_ver_date = str(ret_at)[:10]
+        ver_date = str(raw_ver_date)[:10] if raw_ver_date else "unknown-date"
+    else:
+        raw_ver_date = (
+            meta_dict.get("snapshot_date")
+            or meta_dict.get("publication_date")
+            or meta_dict.get("source_date")
+            or (str(last_mod)[:10] if last_mod else None)
+            or (str(ret_at)[:10] if ret_at else None)
+        )
+        ver_date = str(raw_ver_date)[:10] if raw_ver_date else "unknown-date"
 
     # Deterministic Version ID based on document_id, version_date, and artifact_sha256
     if fam == "legislation":
         version_id = build_legislation_version_id(doc_id or "tr:legislation:unknown", ver_date, expected_sha)
     else:
-        # Pre-parse decision to compute decision document_id
         dec_parsed_pre = parse_decision_text(canonical_text)
         dec_id = build_decision_id(
             dec_parsed_pre.court or "unknown",
@@ -232,7 +254,7 @@ def process_artifact_pipeline(
             expected_sha,
         )
         doc_id = doc_id or dec_id
-        version_id = f"{doc_id}:version:{ver_date}:{expected_sha[:8]}"
+        version_id = f"{doc_id}:version:{ver_date}:{expected_sha[:16]}"
 
     source_obj = {
         "source_id": art_row["source_id"],
@@ -511,6 +533,22 @@ def process_artifact_pipeline(
     quality_status = quality_report.decision
     quality_json = json.dumps(quality_report.to_dict())
 
+    # Publication date missing for original publication cannot PASS
+    if pub_date_missing and v_kind == "original_publication":
+        if quality_status == "PASS":
+            quality_status = "REVIEW"
+        open_issue(
+            conn,
+            issue_id=f"iss-{uuid.uuid4().hex[:8]}",
+            subject_type="version",
+            subject_id=version_id,
+            version_id=version_id,
+            severity="error",
+            code="PUBLICATION_DATE_MISSING",
+            message="Authoritative publication date is missing for original publication",
+            details_json=json.dumps({"source_id": art_row.get("source_id")}),
+        )
+
     # Release Guard & Lifecycle Determination
     if quality_status == "BLOCK":
         val_status = "failed"
@@ -520,6 +558,7 @@ def process_artifact_pipeline(
             issue_id=f"iss-{uuid.uuid4().hex[:8]}",
             subject_type="version",
             subject_id=version_id,
+            version_id=version_id,
             severity="blocker",
             code="QUALITY_GATE_BLOCKED",
             message=f"Quality gate blocked version: {quality_report.summary}",
@@ -535,8 +574,11 @@ def process_artifact_pipeline(
         rt = r["record_type"]
         records_by_type.setdefault(rt, []).append(r)
 
+    c_sha = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
     canonical_locations = []
-    canonical_write_id = "version-" + hashlib.sha256(f"{version_id}:parser:{parser_version}".encode()).hexdigest()[:20]
+    canonical_write_id = (
+        "version-" + hashlib.sha256(f"{version_id}:parser:{parser_version}:{c_sha}".encode()).hexdigest()[:20]
+    )
     for rt, r_list in records_by_type.items():
         locs = write_canonical_part(r_list, rt, canonical_write_id)
         canonical_locations.extend(locs)
@@ -545,7 +587,6 @@ def process_artifact_pipeline(
     with transaction(conn):
         first_loc = canonical_locations[0] if canonical_locations else None
         c_path = first_loc.relative_path if first_loc else ""
-        c_sha = first_loc.record_sha256 if first_loc else expected_sha
 
         if existing_version:
             replace_derived_version_output(
@@ -601,12 +642,12 @@ def process_artifact_pipeline(
             )
 
         if doc_id:
-            update_document_status(conn, doc_id, final_status, current_version_id=version_id)
+            recompute_document_current_version(conn, doc_id)
 
         # Step 9b: Safe Auto-Approval Evaluation
         auto_approved = False
         auto_reason = ""
-        if quality_status != "BLOCK" and val_status == "valid":
+        if quality_status != "BLOCK" and val_status == "valid" and not pub_date_missing:
             try:
                 auto_approved, auto_reason = evaluate_auto_approval(
                     conn,
@@ -621,13 +662,14 @@ def process_artifact_pipeline(
                 if auto_approved:
                     final_status = "approved"
                     if doc_id:
-                        update_document_status(conn, doc_id, "approved", current_version_id=version_id)
+                        recompute_document_current_version(conn, doc_id)
             except Exception as exc:
                 open_issue(
                     conn,
                     issue_id=f"iss-{uuid.uuid4().hex[:8]}",
                     subject_type="version",
                     subject_id=version_id,
+                    version_id=version_id,
                     severity="error",
                     code="AUTO_APPROVAL_EVALUATION_FAILED",
                     message=str(exc),

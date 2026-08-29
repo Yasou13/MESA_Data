@@ -67,17 +67,40 @@ def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
 
 def build_delivery_plan(
     target_key: str = "default",
+    release_id: str | None = None,
 ) -> tuple[list[tuple[SourceChunk, bool]], DeliveryPlanSummary]:
     """
-    Constructs the delivery plan across all ready versions.
+    Constructs the delivery plan across all ready versions or verified release items.
     Returns:
       - List of (SourceChunk, is_already_committed)
       - DeliveryPlanSummary
     """
     conn = get_connection()
     target_settings = get_mesa_target_settings(conn, target_key)
-    versions, blocked_count = get_ready_versions_and_content(conn)
     data_root = load_settings().data_root_path
+
+    if release_id:
+        from mesa_legal_data.release.verifier import verify_release
+
+        if not verify_release(release_id):
+            conn.close()
+            raise MesaClientError(f"Cannot build delivery plan from unverified or invalid release {release_id}")
+
+        c_ver = conn.cursor()
+        c_ver.execute(
+            """SELECT DISTINCT r.version_id, v.document_id, d.family
+               FROM release_items ri
+               JOIN records r ON r.record_id = ri.record_id AND r.record_sha256 = ri.record_sha256
+               JOIN versions v ON v.version_id = r.version_id
+               JOIN documents d ON d.document_id = v.document_id
+               WHERE ri.release_id = ?""",
+            (release_id,),
+        )
+        version_rows = c_ver.fetchall()
+        versions = [{"version_id": r[0], "document_id": r[1], "family": r[2]} for r in version_rows]
+        blocked_count = 0
+    else:
+        versions, blocked_count = get_ready_versions_and_content(conn)
 
     all_chunks: list[tuple[SourceChunk, bool]] = []
     unique_docs = set()
@@ -91,13 +114,23 @@ def build_delivery_plan(
         canonical_text = ""
         records: list[dict[str, Any]] = []
         c_cur = conn.cursor()
-        c_cur.execute(
-            """SELECT record_id, record_type, canonical_path, canonical_line, record_sha256
-               FROM records
-               WHERE version_id = ? AND validation_status = 'valid' AND approval_status = 'approved'
-               ORDER BY canonical_path, canonical_line""",
-            (v_id,),
-        )
+        if release_id:
+            c_cur.execute(
+                """SELECT r.record_id, r.record_type, r.canonical_path, r.canonical_line, r.record_sha256
+                   FROM release_items ri
+                   JOIN records r ON r.record_id = ri.record_id AND r.record_sha256 = ri.record_sha256
+                   WHERE ri.release_id = ? AND r.version_id = ?
+                   ORDER BY r.canonical_path, r.canonical_line""",
+                (release_id, v_id),
+            )
+        else:
+            c_cur.execute(
+                """SELECT record_id, record_type, canonical_path, canonical_line, record_sha256
+                   FROM records
+                   WHERE version_id = ? AND validation_status = 'valid' AND approval_status = 'approved'
+                   ORDER BY canonical_path, canonical_line""",
+                (v_id,),
+            )
         rec_rows = c_cur.fetchall()
 
         try:
@@ -185,6 +218,7 @@ def execute_publish_delivery(
     release_id: str | None = None,
     target_key: str = "default",
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    is_cancelled_cb: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """
     Executes an end-to-end MESA v4 publish delivery:
@@ -203,7 +237,7 @@ def execute_publish_delivery(
         delivery_id = f"del-{uuid.uuid4().hex[:12]}"
 
     # 1. Build delivery plan
-    chunk_tuples, summary = build_delivery_plan(target_key=target_key)
+    chunk_tuples, summary = build_delivery_plan(target_key=target_key, release_id=release_id)
     total_items = len(chunk_tuples)
 
     preflight = client.run_preflight_checks(
@@ -241,8 +275,13 @@ def execute_publish_delivery(
     failed_count = 0
     skipped_count = 0
     last_err = None
+    cancelled_early = False
 
     for idx, (chunk, is_already_done) in enumerate(chunk_tuples, start=1):
+        if is_cancelled_cb and is_cancelled_cb():
+            cancelled_early = True
+            break
+
         item_id = f"item-{uuid.uuid4().hex[:12]}"
         idemp_key = generate_idempotency_key(
             tenant_id=target_settings.tenant_id,
@@ -371,7 +410,9 @@ def execute_publish_delivery(
         (delivery_id,),
     )
     awaiting_count = cursor.fetchone()[0]
-    if awaiting_count:
+    if cancelled_early or (is_cancelled_cb and is_cancelled_cb()):
+        final_delivery_status = DeliveryStatus.CANCELLED.value
+    elif awaiting_count:
         final_delivery_status = DeliveryStatus.AWAITING_MUTATION.value
     elif total_items == 0:
         final_delivery_status = DeliveryStatus.COMMITTED.value
@@ -390,10 +431,9 @@ def execute_publish_delivery(
         failed_items=failed_count,
         skipped_items=skipped_count,
         last_error=last_err,
-        finished=final_delivery_status != DeliveryStatus.AWAITING_MUTATION.value,
+        finished=final_delivery_status not in (DeliveryStatus.AWAITING_MUTATION.value, DeliveryStatus.SENDING.value),
     )
     conn.close()
-
     return {
         "delivery_id": delivery_id,
         "status": final_delivery_status,

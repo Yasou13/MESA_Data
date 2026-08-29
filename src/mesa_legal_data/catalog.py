@@ -184,6 +184,15 @@ def finish_run(
         )
 
 
+def _normalize_legal_date(raw_date: str | None) -> str | None:
+    if not raw_date:
+        return None
+    cleaned = str(raw_date).strip()
+    if len(cleaned) >= 10 and cleaned[:4].isdigit() and cleaned[4] == "-" and cleaned[7] == "-":
+        return cleaned[:10]
+    return None
+
+
 def upsert_document(
     conn: sqlite3.Connection,
     document_id: str,
@@ -196,25 +205,195 @@ def upsert_document(
 ):
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
-        conn.execute(
-            """INSERT INTO documents (document_id, family, document_type, jurisdiction, title, stable_key, lifecycle_status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(document_id) DO UPDATE SET
-               title = excluded.title,
-               lifecycle_status = excluded.lifecycle_status,
-               updated_at = excluded.updated_at""",
-            (
-                document_id,
-                family,
-                document_type,
-                jurisdiction,
-                title,
-                stable_key,
-                lifecycle_status,
-                now,
-                now,
-            ),
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT lifecycle_status, current_version_id FROM documents WHERE document_id = ?", (document_id,)
         )
+        existing = cursor.fetchone()
+        if existing:
+            cur_lifecycle = existing[0]
+            target_lifecycle = (
+                cur_lifecycle
+                if (cur_lifecycle in ("approved", "needs_review") and lifecycle_status == "fetched")
+                else lifecycle_status
+            )
+            conn.execute(
+                """UPDATE documents SET title = COALESCE(?, title), lifecycle_status = ?, updated_at = ? WHERE document_id = ?""",
+                (title, target_lifecycle, now, document_id),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO documents (document_id, family, document_type, jurisdiction, title, stable_key, lifecycle_status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    document_id,
+                    family,
+                    document_type,
+                    jurisdiction,
+                    title,
+                    stable_key,
+                    lifecycle_status,
+                    now,
+                    now,
+                ),
+            )
+
+
+def recompute_document_current_version(
+    conn: sqlite3.Connection,
+    document_id: str,
+) -> str | None:
+    """
+    Recomputes and sets the authoritative current version for a document based on
+    legal chronology (publication_date, snapshot_date, decision_date, supersedes),
+    independent of the order in which historical artifacts were fetched or processed.
+    Also derives document.lifecycle_status strictly from the current version.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT v.version_id, v.version_kind, v.snapshot_date, v.effective_from,
+                  v.effective_to, v.canonical_sha256, v.revision_number,
+                  v.supersedes_version_id, v.approval_status, v.quality_status,
+                  v.validation_status, v.created_at, a.metadata_json, a.retrieved_at, a.last_modified
+           FROM versions v
+           LEFT JOIN artifacts a ON a.artifact_id = v.artifact_id
+           WHERE v.document_id = ?""",
+        (document_id,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+
+    parsed_versions = []
+    for r in rows:
+        meta_dict: dict[str, Any] = {}
+        if r[12]:
+            try:
+                meta_dict = json.loads(r[12])
+            except Exception:
+                pass
+
+        legal_date_str = (
+            meta_dict.get("publication_date")
+            or meta_dict.get("source_date")
+            or meta_dict.get("decision_date")
+            or r[2]
+            or r[3]
+        )
+        legal_date = _normalize_legal_date(legal_date_str)
+        has_known_date = legal_date is not None
+
+        parsed_versions.append(
+            {
+                "version_id": r[0],
+                "version_kind": r[1],
+                "legal_date": legal_date or "0000-00-00",
+                "has_known_date": has_known_date,
+                "canonical_sha256": r[5],
+                "revision_number": r[6] or 1,
+                "supersedes_version_id": r[7],
+                "approval_status": r[8],
+                "quality_status": r[9],
+                "validation_status": r[10],
+                "created_at": r[11],
+            }
+        )
+
+    def sort_key(item):
+        return (
+            1 if item["has_known_date"] else 0,
+            item["legal_date"],
+            item["revision_number"],
+            item["created_at"],
+        )
+
+    sorted_versions = sorted(parsed_versions, key=sort_key, reverse=True)
+    chosen = sorted_versions[0]
+
+    same_date_candidates = [
+        v
+        for v in sorted_versions
+        if v["has_known_date"]
+        and v["legal_date"] == chosen["legal_date"]
+        and v["canonical_sha256"] != chosen["canonical_sha256"]
+    ]
+    if same_date_candidates and not chosen.get("supersedes_version_id"):
+        doc_cur = conn.cursor()
+        doc_cur.execute("SELECT current_version_id FROM documents WHERE document_id = ?", (document_id,))
+        existing_doc = doc_cur.fetchone()
+        existing_cur_id = existing_doc[0] if existing_doc else None
+
+        existing_in_candidates = next((v for v in same_date_candidates if v["version_id"] == existing_cur_id), None)
+        if existing_in_candidates:
+            chosen = existing_in_candidates
+
+    chosen_version_id = chosen["version_id"]
+
+    derived_status = "fetched"
+    if chosen["approval_status"] == "approved":
+        derived_status = "approved"
+    elif chosen["approval_status"] == "rejected":
+        derived_status = "rejected"
+    elif chosen["quality_status"] == "BLOCK":
+        derived_status = "needs_review"
+    elif chosen["validation_status"] == "valid":
+        derived_status = "needs_review"
+    else:
+        derived_status = "needs_review"
+
+    now = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """UPDATE documents 
+               SET current_version_id = ?, lifecycle_status = ?, updated_at = ? 
+               WHERE document_id = ?""",
+            (chosen_version_id, derived_status, now, document_id),
+        )
+
+    return chosen_version_id
+
+
+def get_version_for_artifact(conn: sqlite3.Connection, artifact_id: str) -> dict[str, Any] | None:
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT version_id, document_id, artifact_id, version_kind, snapshot_date,
+                  effective_from, effective_to, canonical_path, canonical_line,
+                  canonical_sha256, parser_name, parser_version, schema_version,
+                  validation_status, privacy_status, approval_status, created_at,
+                  revision_number, supersedes_version_id, quality_status, quality_json,
+                  is_audit_sample, audit_sample_reason, auto_approved
+           FROM versions WHERE artifact_id = ? ORDER BY created_at DESC LIMIT 1""",
+        (artifact_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "version_id": row[0],
+        "document_id": row[1],
+        "artifact_id": row[2],
+        "version_kind": row[3],
+        "snapshot_date": row[4],
+        "effective_from": row[5],
+        "effective_to": row[6],
+        "canonical_path": row[7],
+        "canonical_line": row[8],
+        "canonical_sha256": row[9],
+        "parser_name": row[10],
+        "parser_version": row[11],
+        "schema_version": row[12],
+        "validation_status": row[13],
+        "privacy_status": row[14],
+        "approval_status": row[15],
+        "created_at": row[16],
+        "revision_number": row[17] if len(row) > 17 and row[17] is not None else 1,
+        "supersedes_version_id": row[18] if len(row) > 18 else None,
+        "quality_status": row[19] if len(row) > 19 else None,
+        "quality_json": row[20] if len(row) > 20 else None,
+        "is_audit_sample": bool(row[21]) if len(row) > 21 and row[21] is not None else False,
+        "audit_sample_reason": row[22] if len(row) > 22 else None,
+        "auto_approved": bool(row[23]) if len(row) > 23 and row[23] is not None else False,
+    }
 
 
 def get_document(conn: sqlite3.Connection, document_id: str) -> dict[str, Any] | None:
@@ -274,11 +453,11 @@ def insert_artifact(
     byte_size: int,
     sha256: str,
     raw_path: str,
-    etag: str | None,
-    last_modified: str | None,
-    transport_status: str,
-    error_code: str | None,
-    metadata_json: str,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    transport_status: str = "verified",
+    error_code: str | None = None,
+    metadata_json: str | None = None,
 ):
     with transaction(conn):
         conn.execute(
@@ -750,16 +929,27 @@ def open_issue(
     code: str,
     message: str,
     details_json: str,
+    version_id: str | None = None,
+    record_instance_id: str | None = None,
 ):
     now = datetime.now(UTC).isoformat()
+    if not version_id and subject_type == "version":
+        version_id = subject_id
+    elif not record_instance_id and subject_type == "record" and ":" in subject_id:
+        record_instance_id = subject_id
+        if not version_id and ":version:" in subject_id:
+            version_id = subject_id.rsplit(":article:", 1)[0]
+
     with transaction(conn):
         conn.execute(
-            """INSERT INTO validation_issues (issue_id, subject_type, subject_id, severity, code, message, details_json, status, opened_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)""",
+            """INSERT INTO validation_issues (issue_id, subject_type, subject_id, version_id, record_instance_id, severity, code, message, details_json, status, opened_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)""",
             (
                 issue_id,
                 subject_type,
                 subject_id,
+                version_id,
+                record_instance_id,
                 severity,
                 code,
                 message,
@@ -773,8 +963,8 @@ def list_open_blocking_issues(conn: sqlite3.Connection, subject_id: str | None =
     cursor = conn.cursor()
     if subject_id:
         cursor.execute(
-            "SELECT issue_id, subject_type, subject_id, severity, code, message FROM validation_issues WHERE status = 'open' AND severity IN ('blocker', 'error') AND subject_id = ?",
-            (subject_id,),
+            "SELECT issue_id, subject_type, subject_id, severity, code, message FROM validation_issues WHERE status = 'open' AND severity IN ('blocker', 'error') AND (subject_id = ? OR record_instance_id = ? OR version_id = ?)",
+            (subject_id, subject_id, subject_id),
         )
     else:
         cursor.execute(
@@ -800,17 +990,20 @@ def list_open_blocking_issues(conn: sqlite3.Connection, subject_id: str | None =
 
 
 def list_open_blocking_issues_for_version(conn: sqlite3.Connection, version_id: str) -> list[dict[str, Any]]:
-    """Lists open blocking issues on the version itself or any child records under that version."""
+    """Lists open blocking issues scoped specifically to the version itself or child record instances under that version."""
     cursor = conn.cursor()
     cursor.execute(
         """SELECT issue_id, subject_type, subject_id, severity, code, message 
            FROM validation_issues 
            WHERE status = 'open' AND severity IN ('blocker', 'error') 
              AND (
-                 subject_id = ? 
+                 version_id = ? 
+                 OR (subject_type = 'version' AND subject_id = ?)
+                 OR record_instance_id IN (SELECT record_instance_id FROM records WHERE version_id = ?)
                  OR (subject_type = 'record' AND subject_id IN (SELECT record_id FROM records WHERE version_id = ?))
+                 OR (subject_type = 'record' AND subject_id IN (SELECT record_instance_id FROM records WHERE version_id = ?))
              )""",
-        (version_id, version_id),
+        (version_id, version_id, version_id, version_id, version_id),
     )
     rows = []
     while True:
@@ -878,28 +1071,78 @@ def add_record_review(
     decision: str,
     reviewer: str,
     note: str | None = None,
+    version_id: str | None = None,
+    record_instance_id: str | None = None,
 ):
     now = datetime.now(UTC).isoformat()
+    if not record_instance_id:
+        if version_id:
+            record_instance_id = f"{version_id}:{record_id}"
+        else:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT record_instance_id, version_id FROM records WHERE record_id = ? AND record_sha256 = ?",
+                (record_id, record_sha256),
+            )
+            rows = cur.fetchall()
+            if len(rows) > 1:
+                raise CatalogError(
+                    f"RECORD_VERSION_AMBIGUOUS: Multiple record instances match record_id {record_id}. Provide version_id or record_instance_id."
+                )
+            elif len(rows) == 1:
+                record_instance_id = rows[0][0]
+                version_id = rows[0][1]
+            else:
+                record_instance_id = f"unknown:{record_id}"
+                version_id = "unknown"
+
+    if not version_id and record_instance_id and ":" in record_instance_id:
+        version_id = record_instance_id.rsplit(":", 1)[0]
+    if not version_id:
+        version_id = "unknown"
+
     with transaction(conn):
         conn.execute(
-            """INSERT INTO record_reviews (review_id, record_id, record_sha256, decision, reviewer, note, reviewed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (review_id, record_id, record_sha256, decision, reviewer, note, now),
+            """INSERT INTO record_reviews (review_id, record_instance_id, version_id, record_id, record_sha256, decision, reviewer, note, reviewed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (review_id, record_instance_id, version_id, record_id, record_sha256, decision, reviewer, note, now),
         )
         conn.execute(
-            "UPDATE records SET approval_status = ? WHERE record_id = ? AND record_sha256 = ?",
-            (decision, record_id, record_sha256),
+            "UPDATE records SET approval_status = ? WHERE record_instance_id = ?",
+            (decision, record_instance_id),
         )
 
 
 def approve_record_with_checks(
-    conn: sqlite3.Connection, record_id: str, reviewer: str, note: str | None = None
+    conn: sqlite3.Connection,
+    record_id: str,
+    reviewer: str,
+    note: str | None = None,
+    version_id: str | None = None,
+    record_instance_id: str | None = None,
 ) -> dict[str, Any]:
-    rec = get_record(conn, record_id)
+    if record_instance_id:
+        rec = get_record(conn, record_instance_id)
+    elif version_id:
+        rec = get_record(conn, record_id, version_id=version_id)
+    else:
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM records WHERE record_id = ?", (record_id,))
+        count = cur.fetchone()[0]
+        if count > 1:
+            raise CatalogError(
+                f"RECORD_VERSION_AMBIGUOUS: Record {record_id} has {count} instances across versions. Specify version_id or record_instance_id."
+            )
+        rec = get_record(conn, record_id)
+
     if not rec:
         raise CatalogError(f"Record {record_id} not found")
 
+    rec_inst_id = rec.get("record_instance_id") or f"{rec['version_id']}:{rec['record_id']}"
+    rec_ver_id = rec["version_id"]
+
     blockers = list_open_blocking_issues(conn, subject_id=record_id)
+    blockers += list_open_blocking_issues(conn, subject_id=rec_inst_id)
     if blockers:
         raise BlockingValidationIssueExists(f"Cannot approve record {record_id}: open blocker issues exist: {blockers}")
 
@@ -924,9 +1167,25 @@ def approve_record_with_checks(
     if actual_hash.lower() != rec["record_sha256"].lower():
         raise CatalogError(f"Record hash mismatch for {record_id}: expected {rec['record_sha256']}, got {actual_hash}")
 
-    review_id = f"rev-{uuid.uuid4().hex[:8]}"
-    add_record_review(conn, review_id, record_id, rec["record_sha256"], "approved", reviewer, note)
-    return {"status": "approved", "record_id": record_id, "review_id": review_id}
+    review_id = f"rev-{uuid.uuid4().hex[:12]}"
+    add_record_review(
+        conn,
+        review_id=review_id,
+        record_id=rec["record_id"],
+        record_sha256=rec["record_sha256"],
+        decision="approved",
+        reviewer=reviewer,
+        note=note,
+        version_id=rec_ver_id,
+        record_instance_id=rec_inst_id,
+    )
+    return {
+        "status": "approved",
+        "record_id": rec["record_id"],
+        "review_id": review_id,
+        "record_instance_id": rec_inst_id,
+        "version_id": rec_ver_id,
+    }
 
 
 def approve_version_with_checks(
@@ -936,15 +1195,52 @@ def approve_version_with_checks(
 
 
 def reject_record_with_checks(
-    conn: sqlite3.Connection, record_id: str, reviewer: str, note: str | None = None
+    conn: sqlite3.Connection,
+    record_id: str,
+    reviewer: str,
+    note: str | None = None,
+    version_id: str | None = None,
+    record_instance_id: str | None = None,
 ) -> dict[str, Any]:
-    rec = get_record(conn, record_id)
+    if record_instance_id:
+        rec = get_record(conn, record_instance_id)
+    elif version_id:
+        rec = get_record(conn, record_id, version_id=version_id)
+    else:
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM records WHERE record_id = ?", (record_id,))
+        count = cur.fetchone()[0]
+        if count > 1:
+            raise CatalogError(
+                f"RECORD_VERSION_AMBIGUOUS: Record {record_id} has {count} instances across versions. Specify version_id or record_instance_id."
+            )
+        rec = get_record(conn, record_id)
+
     if not rec:
         raise CatalogError(f"Record {record_id} not found")
 
-    review_id = f"rev-{uuid.uuid4().hex[:8]}"
-    add_record_review(conn, review_id, record_id, rec["record_sha256"], "rejected", reviewer, note)
-    return {"status": "rejected", "record_id": record_id, "review_id": review_id}
+    rec_inst_id = rec.get("record_instance_id") or f"{rec['version_id']}:{rec['record_id']}"
+    rec_ver_id = rec["version_id"]
+
+    review_id = f"rev-{uuid.uuid4().hex[:12]}"
+    add_record_review(
+        conn,
+        review_id=review_id,
+        record_id=rec["record_id"],
+        record_sha256=rec["record_sha256"],
+        decision="rejected",
+        reviewer=reviewer,
+        note=note,
+        version_id=rec_ver_id,
+        record_instance_id=rec_inst_id,
+    )
+    return {
+        "status": "rejected",
+        "record_id": rec["record_id"],
+        "review_id": review_id,
+        "record_instance_id": rec_inst_id,
+        "version_id": rec_ver_id,
+    }
 
 
 def reject_version(
@@ -962,13 +1258,28 @@ def reject_version(
 
     with transaction(conn):
         cur = conn.cursor()
-        cur.execute("SELECT record_id, record_sha256 FROM records WHERE version_id = ?", (version_id,))
+        cur.execute(
+            "SELECT record_id, record_sha256, record_instance_id FROM records WHERE version_id = ?", (version_id,)
+        )
         records = cur.fetchall()
 
         if records:
-            review_rows = [(r[0], r[1], reviewer, "rejected", note, now_iso) for r in records]
+            review_rows = [
+                (
+                    f"rev-{uuid.uuid4().hex[:12]}",
+                    r[2] or f"{version_id}:{r[0]}",
+                    version_id,
+                    r[0],
+                    r[1],
+                    "rejected",
+                    reviewer,
+                    note,
+                    now_iso,
+                )
+                for r in records
+            ]
             conn.executemany(
-                "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO record_reviews (review_id, record_instance_id, version_id, record_id, record_sha256, decision, reviewer, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 review_rows,
             )
             conn.execute(
@@ -980,10 +1291,14 @@ def reject_version(
             "UPDATE versions SET approval_status = 'rejected' WHERE version_id = ?",
             (version_id,),
         )
-        conn.execute(
-            "UPDATE documents SET lifecycle_status = 'rejected', updated_at = ? WHERE document_id = ?",
-            (now_iso, ver["document_id"]),
-        )
+
+        # Only update document lifecycle if version is the current version of the document
+        doc = get_document(conn, ver["document_id"])
+        if doc and doc.get("current_version_id") == version_id:
+            conn.execute(
+                "UPDATE documents SET lifecycle_status = 'rejected', updated_at = ? WHERE document_id = ?",
+                (now_iso, ver["document_id"]),
+            )
 
         log_audit_event(
             conn,
@@ -1165,7 +1480,10 @@ def approve_version_streaming(
                 PRIMARY KEY (canonical_path, canonical_line)
             );
             CREATE TABLE approved_spool (
-                record_id TEXT PRIMARY KEY,
+                review_id TEXT PRIMARY KEY,
+                record_instance_id TEXT NOT NULL,
+                version_id TEXT NOT NULL,
+                record_id TEXT NOT NULL,
                 record_sha256 TEXT NOT NULL,
                 reviewer TEXT NOT NULL,
                 decision TEXT NOT NULL,
@@ -1249,11 +1567,15 @@ def approve_version_streaming(
                                 f"Record SHA256 mismatch for {r_id}: expected {expected_hash}, got {calc_hash}"
                             )
 
-                        approved_batch.append((r_id, expected_hash, reviewer, "approved", note, now_iso))
+                        rev_id = f"rev-{uuid.uuid4().hex[:12]}"
+                        inst_id = f"{version_id}:{r_id}"
+                        approved_batch.append(
+                            (rev_id, inst_id, version_id, r_id, expected_hash, reviewer, "approved", note, now_iso)
+                        )
                         approved_count += 1
                         if len(approved_batch) >= batch_size:
                             spool_conn.executemany(
-                                "INSERT INTO approved_spool (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                "INSERT INTO approved_spool (review_id, record_instance_id, version_id, record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                 approved_batch,
                             )
                             approved_batch.clear()
@@ -1268,7 +1590,7 @@ def approve_version_streaming(
 
         if approved_batch:
             spool_conn.executemany(
-                "INSERT INTO approved_spool (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO approved_spool (review_id, record_instance_id, version_id, record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 approved_batch,
             )
             approved_batch.clear()
@@ -1278,14 +1600,14 @@ def approve_version_streaming(
         with transaction(conn):
             app_cur = spool_conn.cursor()
             app_cur.execute(
-                "SELECT record_id, record_sha256, reviewer, decision, note, reviewed_at FROM approved_spool"
+                "SELECT review_id, record_instance_id, version_id, record_id, record_sha256, reviewer, decision, note, reviewed_at FROM approved_spool"
             )
             while True:
                 rows = app_cur.fetchmany(batch_size)
                 if not rows:
                     break
                 conn.executemany(
-                    "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO record_reviews (review_id, record_instance_id, version_id, record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     rows,
                 )
 
@@ -1298,10 +1620,14 @@ def approve_version_streaming(
                 "UPDATE versions SET approval_status = 'approved', privacy_status = CASE WHEN privacy_status = 'flagged' THEN 'approved' ELSE privacy_status END WHERE version_id = ?",
                 (version_id,),
             )
-            conn.execute(
-                "UPDATE documents SET lifecycle_status = 'approved', updated_at = ? WHERE document_id = ?",
-                (now_iso, ver["document_id"]),
-            )
+
+            # Only update document lifecycle if this version is the current version
+            doc = get_document(conn, ver["document_id"])
+            if doc and doc.get("current_version_id") == version_id:
+                conn.execute(
+                    "UPDATE documents SET lifecycle_status = 'approved', updated_at = ? WHERE document_id = ?",
+                    (now_iso, ver["document_id"]),
+                )
 
             log_audit_event(
                 conn,

@@ -211,6 +211,9 @@ def _run_operation_task(operation_id: str):
             rel_id = inp.get("release_id")
             target_key = inp.get("target_key", "default")
 
+            def is_cancelled_cb() -> bool:
+                return is_cancelled(operation_id)
+
             def progress_cb(prog: dict[str, Any]) -> None:
                 if not is_cancelled(operation_id):
                     tot = max(1, prog.get("total", 1))
@@ -228,14 +231,26 @@ def _run_operation_task(operation_id: str):
                 release_id=rel_id,
                 target_key=target_key,
                 progress_callback=progress_cb,
+                is_cancelled_cb=is_cancelled_cb,
             )
 
-            status_str = "succeeded" if res.get("status") in ("COMMITTED", "PARTIAL") else "failed"
+            del_status = res.get("status")
+            if is_cancelled(operation_id) or del_status == "CANCELLED":
+                status_str = "cancelled"
+            elif del_status == "COMMITTED":
+                status_str = "succeeded"
+            elif del_status == "PARTIAL":
+                status_str = "partial"
+            elif del_status == "AWAITING_MUTATION":
+                status_str = "awaiting_external"
+            else:
+                status_str = "failed"
+
             update_operation_job(
                 conn,
                 operation_id,
                 status=status_str,
-                progress_current=100,
+                progress_current=100 if status_str in ("succeeded", "partial") else None,
                 result_json=json.dumps(res),
                 error_summary=res.get("last_error"),
             )

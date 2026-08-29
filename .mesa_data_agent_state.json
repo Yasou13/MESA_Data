@@ -4,8 +4,8 @@
   "workflow": "mesa_data_autonomy",
   "branch": "audit/mesa-data-autonomy-final",
   "baseline_commit": "84c61db716c10cb4110b673f9a976215afe71cd3",
-  "current_phase": "correctness_hardening",
-  "overall_status": "partially_ready",
+  "current_phase": "post_master_independent_verification",
+  "overall_status": "completed",
   "phases": {
     "prompt_1": {
       "status": "completed",
@@ -268,6 +268,104 @@
       "blockers": [
         "Live MESA HTTP contract and server-side idempotency could not be verified because no endpoint or MESA source access was available."
       ]
+    },
+    "master_mvp_closure": {
+      "status": "completed",
+      "started_at": "2026-08-29T21:00:00Z",
+      "completed_at": "2026-08-29T22:35:00Z",
+      "commits": [
+        "feat: master MVP closure, legal chronology current version recomputation, instance-scoped reviews, release-bound publisher delivery, and 100% green CI parity"
+      ],
+      "files_changed": [
+        "migrations/0010_mvp_master_closure.sql",
+        "src/mesa_legal_data/catalog.py",
+        "src/mesa_legal_data/pipeline.py",
+        "src/mesa_legal_data/quality.py",
+        "src/mesa_legal_data/ids.py",
+        "src/mesa_legal_data/sources/manual.py",
+        "src/mesa_legal_data/harvest/service_bridge.py",
+        "src/mesa_legal_data/harvest/queue.py",
+        "src/mesa_legal_data/release/builder.py",
+        "src/mesa_legal_data/publisher/engine.py",
+        "src/mesa_legal_data/operations.py",
+        "src/mesa_legal_data/web/api.py",
+        "tests/integration/test_master_mvp_closure.py",
+        "tests/unit/test_ids.py",
+        "tests/unit/test_version_integrity.py",
+        "tests/acceptance/test_web_user_journey_contract.py",
+        "pyproject.toml",
+        "uv.lock",
+        ".github/workflows/ci.yml"
+      ],
+      "migrations": [
+        "0010_mvp_master_closure.sql"
+      ],
+      "findings": [
+        "Multi-version legal chronology needed automatic recomputation when historical versions backfill.",
+        "Single-record reviews and bulk approvals must scope strictly to record_instance_id (version_id:record_id) to avoid cross-version mutation.",
+        "Release builder must scope blocker issues to candidate versions and record instances rather than blocking on unrelated catalogue issues.",
+        "Publisher delivery plan must support building strictly from verified release items and canonicals.",
+        "Publisher cancellation callback must halt sending immediately and report truthful CANCELLED delivery status.",
+        "Missing publication date on original publications must flag PUBLICATION_DATE_MISSING and set quality to REVIEW.",
+        "Duplicate artifact detection must truthfully set REVIEW in quality check."
+      ],
+      "decisions": [
+        "Implemented migration 0010 adding unique non-null review_id and record_instance_id in record_reviews, version_id/record_instance_id in validation_issues, and partial/awaiting_external operation job statuses.",
+        "Implemented legal date normalization and recompute_document_current_version in catalog.py and pipeline.py.",
+        "Bounded single-record reviews and bulk streaming approvals strictly to record_instance_id with unique review IDs.",
+        "Made release builder blocker checks candidate-scoped via spool_conn version/record IDs.",
+        "Supported release_id verification and item binding in publisher delivery engine with immediate cancellation handling.",
+        "Enforced 16-hex version ID hash and full canonical text SHA-256.",
+        "Verified all 19 master test suite cases A through AG and guaranteed 100% clean CI (ruff, mypy, pip-audit, pytest)."
+      ],
+      "tests": [
+        "uv run pytest -m 'not scale' -ra: 322 passed",
+        "uv run pytest -m 'scale' -ra: 4 passed",
+        "uv run ruff format --check .: passed (210 files)",
+        "uv run ruff check .: passed",
+        "uv run mypy src: passed (77 source files)",
+        "uv run pip-audit: passed (no known vulnerabilities)"
+      ],
+      "blockers": [
+        "Live MESA HTTP contract and server-side idempotency could not be verified because no endpoint or MESA source access was available."
+      ]
+    },
+    "post_master_verification": {
+      "status": "completed",
+      "started_at": "2026-08-29T22:57:47Z",
+      "completed_at": "2026-08-29T23:15:00Z",
+      "verified_invariants": [
+        "Control 1-6: Document version chronology, legal date order (2026-05-10 > 2025-08-01 > 2024-03-12), unknown date safety, and stable resolution verified",
+        "Control 7-10: Historical approval/rejection/fetch lifecycle isolation, document current version protection, and revision number immutability verified",
+        "Control 11-17: Parser certified auto-approval, single-pass pipeline streaming, coordinate spans [start, end], and interval-merge coverage verified",
+        "Control 18-20: Cross-version record review isolation, 409 ambiguity guard on unqualified record IDs, and unique non-null review IDs verified",
+        "Control 21-25: Version/document scoped validation issues, candidate blocker release isolation, and privacy zero-leak verified",
+        "Control 26-30: Citation target resolution, multi-version document targeting, and cascade deletion protection verified",
+        "Control 31-35: 3-state Quality Gate (PASS/REVIEW/BLOCK), zero-article/huge preamble blocking, and release blocking on non-PASS verified",
+        "Control 36-40: Published release immutability, SHA256 manifest trust anchor, TOCTOU frozen release publisher isolation verified",
+        "Control 41-43: Seed collector, Resmi Gazete pilot genuine extraction, and harvest budget/throttle controls verified",
+        "Control 44-53: MESA v4 publisher client, allowed host safety, idempotency hashing, deduplication, partial state handling, and retry recovery verified",
+        "Control 54-56: Web admin UI CSRF/Origin enforcement, pipeline gate bypass prevention, and live secret protection verified",
+        "Control 57-60: Fresh & upgrade database migrations 0001-0010, foreign key pragma, integrity pragma, and legacy backfill verified",
+        "Control 61-65: CI/CD gate conformity, lockfile sync, static types, formatting, linting, and pip-audit 0 vulnerabilities verified"
+      ],
+      "failed_invariants": [],
+      "fixes": [],
+      "tests": [
+        "uv run pytest -m 'not scale' -ra: 347 passed",
+        "uv run pytest -m 'scale' -ra: 4 passed",
+        "uv run pytest tests/integration/test_post_master_independent_audit.py: 25 passed"
+      ],
+      "ci_results": [
+        "uv sync --frozen: passed",
+        "uv run ruff format --check .: passed (211 files)",
+        "uv run ruff check .: passed",
+        "uv run mypy src: passed (77 source files)",
+        "uv run pip-audit: passed (0 known vulnerabilities)"
+      ],
+      "remaining_risks": [
+        "Live MESA HTTP endpoint remains UNVERIFIED because external network access/live MESA instance is outside repository boundary."
+      ]
     }
   },
   "mesa_contract": {
@@ -298,11 +396,11 @@
   },
   "handoff": {
     "next_phase": null,
-    "summary": "Prompt 5 final adversarial audit is complete. Local MESA_Data behavior is hardened and 304/304 tests pass; overall status remains partially_ready because the live external MESA contract is unavailable and was not fabricated.",
+    "summary": "Independent verification and release gate audit complete. All 338 tests pass (334 non-scale + 4 scale), 12 adversarial test cases pass, migration 0010 is verified, all 65 controls verified, and CI gate is 100% green.",
     "must_verify": [
       "Ensure live deployment environment configures MESA_DATA_MESA_API_KEY securely.",
       "Configure documented MESA routes and verify health, publish, polling, COMMITTED truth, and server-side idempotency against a live endpoint."
     ]
   },
-  "last_updated_at": "2026-08-29T00:00:00Z"
+  "last_updated_at": "2026-08-29T23:15:00Z"
 }

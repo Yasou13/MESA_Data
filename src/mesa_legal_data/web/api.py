@@ -1130,6 +1130,7 @@ async def upload_artifact(
     document_type: str = Form("law"),
     jurisdiction: str = Form("TR"),
     title: Optional[str] = Form(None),
+    publication_date: Optional[str] = Form(None),
 ):
     async with write_lock.acquire_write():
         settings = load_settings()
@@ -1160,6 +1161,7 @@ async def upload_artifact(
                 document_type=document_type,
                 jurisdiction=jurisdiction,
                 title=title,
+                publication_date=publication_date,
             )
             return ok_response({"artifact_id": art.artifact_id, "raw_path": art.raw_path, "sha256": art.sha256})
         except Exception as e:
@@ -1207,19 +1209,59 @@ async def process_document_pipeline(document_id: str, force_reprocess: bool = Fa
     async with write_lock.acquire_write():
         conn = get_connection()
         c = conn.cursor()
-        c.execute(
-            "SELECT artifact_id FROM artifacts WHERE document_id = ? ORDER BY retrieved_at DESC LIMIT 1",
-            (document_id,),
-        )
-        row = c.fetchone()
+        c.execute("SELECT current_version_id FROM documents WHERE document_id = ?", (document_id,))
+        doc_row = c.fetchone()
+        artifact_id = None
+        if doc_row and doc_row[0]:
+            c.execute("SELECT artifact_id FROM versions WHERE version_id = ?", (doc_row[0],))
+            v_row = c.fetchone()
+            if v_row:
+                artifact_id = v_row[0]
+
+        if not artifact_id:
+            c.execute(
+                "SELECT artifact_id FROM artifacts WHERE document_id = ? ORDER BY retrieved_at DESC LIMIT 1",
+                (document_id,),
+            )
+            row = c.fetchone()
+            if row:
+                artifact_id = row[0]
         conn.close()
-        if not row:
+
+        if not artifact_id:
             error_response("ARTIFACT_NOT_FOUND", f"No artifact found for document {document_id}", status_code=404)
-        artifact_id = row[0]
+        assert artifact_id is not None
         try:
             pipeline_status = process_artifact_pipeline(artifact_id=artifact_id, force_reprocess=force_reprocess)
             return ok_response(
                 {"document_id": document_id, "artifact_id": artifact_id, "pipeline_status": pipeline_status}
+            )
+        except Exception as e:
+            error_response("PIPELINE_FAILED", f"Pipeline failed: {e}", status_code=400)
+
+
+@router.post("/versions/{version_id:path}/reprocess")
+async def reprocess_version(version_id: str):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT artifact_id, document_id FROM versions WHERE version_id = ?", (version_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            error_response("VERSION_NOT_FOUND", f"No version found with id {version_id}", status_code=404)
+        assert row is not None
+        artifact_id: str = row[0]
+        doc_id: str = row[1]
+        try:
+            pipeline_status = process_artifact_pipeline(artifact_id=artifact_id, force_reprocess=True)
+            return ok_response(
+                {
+                    "document_id": doc_id,
+                    "version_id": version_id,
+                    "artifact_id": artifact_id,
+                    "pipeline_status": pipeline_status,
+                }
             )
         except Exception as e:
             error_response("PIPELINE_FAILED", f"Pipeline failed: {e}", status_code=400)

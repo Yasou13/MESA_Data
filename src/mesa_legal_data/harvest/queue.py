@@ -227,45 +227,35 @@ def _check_canonical_committed(
 
     # Check catalog.sqlite
     try:
-        from mesa_legal_data.catalog import get_artifact, get_connection, get_document, get_version
+        from mesa_legal_data.catalog import get_connection, get_version_for_artifact
 
         conn = get_connection()
         try:
-            art = get_artifact(conn, artifact_id)
-            if art and art.get("document_id"):
-                doc = get_document(conn, art["document_id"])
-                if doc and doc.get("current_version_id"):
-                    ver_id = doc["current_version_id"]
-                    ver = get_version(conn, ver_id)
-                    if ver:
-                        v_app = ver.get("approval_status")
-                        d_st = doc.get("lifecycle_status")
+            ver = get_version_for_artifact(conn, artifact_id)
+            if ver:
+                ver_id = ver["version_id"]
+                v_app = ver.get("approval_status")
 
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT approval_status FROM records WHERE version_id = ?", (ver_id,))
-                        rec_rows = cursor.fetchall()
-                        rec_statuses = set(r[0] for r in rec_rows) if rec_rows else set()
+                cursor = conn.cursor()
+                cursor.execute("SELECT approval_status FROM records WHERE version_id = ?", (ver_id,))
+                rec_rows = cursor.fetchall()
+                rec_statuses = set(r[0] for r in rec_rows) if rec_rows else set()
 
-                        if v_app == "approved" or d_st == "approved":
-                            if not any(s in ("pending", "needs_review", "rejected") for s in rec_statuses):
-                                return True, "approved", ver_id
+                if v_app == "approved":
+                    if not any(s in ("pending", "needs_review", "rejected") for s in rec_statuses):
+                        return True, "approved", ver_id
 
-                        if (
-                            "needs_review" in rec_statuses
-                            or "pending" in rec_statuses
-                            or v_app in ("needs_review", "pending")
-                            or d_st in ("needs_review", "draft")
-                        ):
-                            return True, "needs_review", ver_id
-                        elif "rejected" in rec_statuses or v_app == "rejected" or d_st == "rejected":
-                            return True, "rejected", ver_id
-                        elif rec_statuses and all(s == "approved" for s in rec_statuses):
-                            return True, "approved", ver_id
-                        elif not rec_statuses:
-                            if v_app in ("approved", "needs_review", "rejected"):
-                                return True, v_app, ver_id
+                if "needs_review" in rec_statuses or "pending" in rec_statuses or v_app in ("needs_review", "pending"):
+                    return True, "needs_review", ver_id
+                elif "rejected" in rec_statuses or v_app == "rejected":
+                    return True, "rejected", ver_id
+                elif rec_statuses and all(s == "approved" for s in rec_statuses):
+                    return True, "approved", ver_id
+                elif not rec_statuses:
+                    if v_app in ("approved", "needs_review", "rejected"):
+                        return True, v_app, ver_id
 
-                        return False, None, None
+                return False, None, None
         finally:
             conn.close()
     except Exception:

@@ -11,8 +11,8 @@ def test_ids_generation():
     leg_id = build_legislation_id("law", "4721")
     assert leg_id == "tr:legislation:law:4721"
 
-    ver_id = build_legislation_version_id(leg_id, "2026-08-05", "8f15c921abc")
-    assert ver_id == "tr:legislation:law:4721:version:2026-08-05:8f15c921"
+    ver_id = build_legislation_version_id(leg_id, "2026-08-05", "8f15c921abcdef01")
+    assert ver_id == "tr:legislation:law:4721:version:2026-08-05:8f15c921abcdef01"
 
     art_id = build_article_id(leg_id, "1", "standard")
     assert art_id == "tr:legislation:law:4721:article:1"
