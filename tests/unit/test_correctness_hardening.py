@@ -12,7 +12,9 @@ from mesa_legal_data.quality import evaluate_quality
 def _quality(text: str, spans: list[tuple[int, int]]):
     provenance = {"pipeline_run_id": "test-run"}
     source = {"artifact_sha256": "a" * 64}
-    records = [{"id": "doc", "record_type": "legislation", "title": "Kanun", "source": source, "provenance": provenance}]
+    records = [
+        {"id": "doc", "record_type": "legislation", "title": "Kanun", "source": source, "provenance": provenance}
+    ]
     records.extend(
         {
             "id": f"article-{index}",
@@ -79,15 +81,45 @@ def test_only_current_version_is_publishable(tmp_path):
     for version_id, revision, approval, quality in (("v1", 1, "approved", "PASS"), ("v2", 2, "pending", "REVIEW")):
         artifact_id = f"art-{version_id}"
         insert_artifact(
-            conn, artifact_id, doc_id, "resmi_gazete", "https://example.test/law", "2026-08-10T00:00:00Z",
-            "http", 200, "text/html", "text/html", 1, ("a" if version_id == "v1" else "b") * 64,
-            f"raw/{version_id}.html", None, None,
-            "verified", None, "{}",
+            conn,
+            artifact_id,
+            doc_id,
+            "resmi_gazete",
+            "https://example.test/law",
+            "2026-08-10T00:00:00Z",
+            "http",
+            200,
+            "text/html",
+            "text/html",
+            1,
+            ("a" if version_id == "v1" else "b") * 64,
+            f"raw/{version_id}.html",
+            None,
+            None,
+            "verified",
+            None,
+            "{}",
         )
         insert_version(
-            conn, version_id, doc_id, artifact_id, "original_publication", "2026-08-10", None, None,
-            "canonical/law.jsonl", 1, "a" * 64, "legislation_parser", "1.0.0", "1.0.0", "valid",
-            "clean", approval, revision_number=revision, quality_status=quality,
+            conn,
+            version_id,
+            doc_id,
+            artifact_id,
+            "original_publication",
+            "2026-08-10",
+            None,
+            None,
+            "canonical/law.jsonl",
+            1,
+            "a" * 64,
+            "legislation_parser",
+            "1.0.0",
+            "1.0.0",
+            "valid",
+            "clean",
+            approval,
+            revision_number=revision,
+            quality_status=quality,
         )
     conn.execute("UPDATE documents SET current_version_id = 'v2' WHERE document_id = ?", (doc_id,))
     ready, blocked = get_ready_versions_and_content(conn)
@@ -96,8 +128,16 @@ def test_only_current_version_is_publishable(tmp_path):
 
     create_delivery(conn, delivery_id="old-delivery", release_id=None, target_key="default", total_items=1)
     insert_delivery_item(
-        conn, item_id="old-item", delivery_id="old-delivery", document_id=doc_id, version_id="v1",
-        chunk_id="chunk-1", content_hash="content", idempotency_key="stable", remote_state="COMMITTED", payload_json="{}",
+        conn,
+        item_id="old-item",
+        delivery_id="old-delivery",
+        document_id=doc_id,
+        version_id="v1",
+        chunk_id="chunk-1",
+        content_hash="content",
+        idempotency_key="stable",
+        remote_state="COMMITTED",
+        payload_json="{}",
     )
     assert get_document_mesa_status(conn, doc_id)["status"] == "Update Pending"
     conn.close()

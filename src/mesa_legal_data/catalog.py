@@ -495,9 +495,16 @@ def replace_derived_version_output(
                    is_audit_sample = 0, audit_sample_reason = NULL
                WHERE version_id = ?""",
             (
-                canonical_path, canonical_line, canonical_sha256, parser_name,
-                parser_version, validation_status, privacy_status, quality_status,
-                quality_json, version_id,
+                canonical_path,
+                canonical_line,
+                canonical_sha256,
+                parser_name,
+                parser_version,
+                validation_status,
+                privacy_status,
+                quality_status,
+                quality_json,
+                version_id,
             ),
         )
         conn.execute("DELETE FROM records WHERE version_id = ?", (version_id,))

@@ -366,7 +366,10 @@ def execute_publish_delivery(
 
     # 3. Compute final delivery status
     cursor = conn.cursor()
-    cursor.execute("SELECT count(*) FROM mesa_delivery_items WHERE delivery_id = ? AND remote_state = 'AWAITING_MUTATION'", (delivery_id,))
+    cursor.execute(
+        "SELECT count(*) FROM mesa_delivery_items WHERE delivery_id = ? AND remote_state = 'AWAITING_MUTATION'",
+        (delivery_id,),
+    )
     awaiting_count = cursor.fetchone()[0]
     if awaiting_count:
         final_delivery_status = DeliveryStatus.AWAITING_MUTATION.value

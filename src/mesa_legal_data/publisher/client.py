@@ -103,7 +103,13 @@ class MesaClient:
         """
         target_error = self.target_safety_error()
         if target_error:
-            return {"connected": False, "reachable": False, "authenticated": False, "latency_ms": 0.0, "details": target_error}
+            return {
+                "connected": False,
+                "reachable": False,
+                "authenticated": False,
+                "latency_ms": 0.0,
+                "details": target_error,
+            }
         if not self.is_contract_configured:
             return {
                 "connected": False,
@@ -291,7 +297,11 @@ class MesaClient:
                     status="PASS",
                     message=(
                         f"{ready_versions_count} approved current versions ready for publishing ({estimated_chunks_count} chunks)"
-                        + (f"; {blocked_versions_count} current BLOCK versions excluded" if blocked_versions_count else "")
+                        + (
+                            f"; {blocked_versions_count} current BLOCK versions excluded"
+                            if blocked_versions_count
+                            else ""
+                        )
                     ),
                 )
             )
