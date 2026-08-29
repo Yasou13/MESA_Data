@@ -4,7 +4,7 @@
   "workflow": "mesa_data_autonomy",
   "branch": "audit/mesa-data-autonomy-final",
   "baseline_commit": "84c61db716c10cb4110b673f9a976215afe71cd3",
-  "current_phase": "complete",
+  "current_phase": "correctness_hardening",
   "overall_status": "partially_ready",
   "phases": {
     "prompt_1": {
@@ -191,6 +191,42 @@
       ],
       "blockers": []
     },
+    "correctness_hardening": {
+      "status": "completed",
+      "started_at": "2026-08-29T00:00:00Z",
+      "completed_at": "2026-08-29T00:00:00Z",
+      "findings": [
+        {"id": "QG_ZERO_ARTICLE_PASS", "severity": "P0", "status": "fixed"},
+        {"id": "PUBLICATION_DATE_BRIDGE_LOSS", "severity": "P0", "status": "fixed"},
+        {"id": "STALE_APPROVED_VERSION_PUBLISH", "severity": "P0", "status": "fixed"},
+        {"id": "CURRENT_VERSION_MESA_STATUS", "severity": "P0", "status": "fixed"},
+        {"id": "DERIVED_REPROCESS_EARLY_RETURN", "severity": "P0", "status": "fixed"},
+        {"id": "MESA_TARGET_KEY_EXFILTRATION", "severity": "P0", "status": "fixed"},
+        {"id": "MUTATION_TIMEOUT_MARKED_FAILED", "severity": "P1", "status": "fixed"},
+        {"id": "ARTIFACT_SHA_CROSS_DOCUMENT_COLLISION", "severity": "P1", "status": "fixed"}
+      ],
+      "fixes": [
+        "Legislation zero-article and abnormal large uncovered-area outcomes cannot PASS; article ordinal is retained in canonical records.",
+        "Discovery publication_date is forwarded into artifact metadata and canonical provenance; retrieval time remains fallback-only.",
+        "Release and MESA selection now joins documents.current_version_id, excluding stale approved versions and unrelated blockers.",
+        "Reprocess refreshes only derived output, resets approval, and preserves version identity and revision number.",
+        "MESA requests require local development host or HTTPS host exactly allowed by MESA_DATA_MESA_ALLOWED_HOST; 401/403 are reachable but unauthenticated failures.",
+        "Pending mutation timeouts use AWAITING_MUTATION and schema support; retries poll known mutation IDs before resubmitting.",
+        "Same payload for another document produces an explicit ARTIFACT_DOCUMENT_COLLISION rather than reassociation."
+      ],
+      "commits": [
+        "a6656bb fix: harden parsing and version correctness",
+        "c20aa17 fix: secure current-version MESA publishing"
+      ],
+      "migrations": ["0009_correctness_hardening.sql"],
+      "tests": [
+        {"name": "focused correctness regression", "command": "MESA_DATA_MESA_ALLOWED_HOST=mock-mesa.internal UV_CACHE_DIR=/tmp/mesa-data-uv-cache uv run pytest -q tests/unit/test_correctness_hardening.py tests/unit/test_quality_gate.py tests/unit/test_catalog_release_iterator.py tests/unit/test_publisher_client_and_ledger.py tests/integration/test_mesa_v4_publisher_e2e.py", "result": "19 passed"},
+        {"name": "compile", "command": "UV_CACHE_DIR=/tmp/mesa-data-uv-cache uv run python -m compileall -q src/mesa_legal_data", "result": "passed"},
+        {"name": "ruff", "command": "UV_CACHE_DIR=/tmp/mesa-data-uv-cache uv run ruff check src tests", "result": "passed"}
+      ],
+      "blockers": ["The all-test pytest invocation did not complete within the desktop command window and is not recorded as passed."],
+      "unverified": ["MESA live HTTP payload and server-side mutation contract remain UNVERIFIED because no live endpoint or MESA source code is available."]
+    },
     "prompt_5": {
       "status": "completed",
       "completed_at": "2026-08-29T15:13:48Z",
@@ -266,5 +302,5 @@
       "Configure documented MESA routes and verify health, publish, polling, COMMITTED truth, and server-side idempotency against a live endpoint."
     ]
   },
-  "last_updated_at": "2026-08-29T15:13:48Z"
+  "last_updated_at": "2026-08-29T00:00:00Z"
 }
