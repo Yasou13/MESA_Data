@@ -18,14 +18,33 @@ from mesa_legal_data.catalog import (
     get_export_package,
     get_record,
     get_release,
+    get_source_operational_settings,
     list_open_blocking_issues,
+    list_parser_certifications,
+    list_source_operational_settings,
     reject_record_with_checks,
     reject_version,
     resolve_issue,
+    set_parser_certification,
+    upsert_source_operational_settings,
 )
 from mesa_legal_data.config import load_settings, load_sources
 from mesa_legal_data.parsers import decode_source_bytes
 from mesa_legal_data.pipeline import process_artifact_pipeline
+from mesa_legal_data.publisher.client import MesaClient
+from mesa_legal_data.publisher.engine import (
+    build_delivery_plan,
+    retry_delivery_failures,
+)
+from mesa_legal_data.publisher.ledger import (
+    get_delivery,
+    get_document_mesa_status,
+    get_mesa_target_settings,
+    list_deliveries,
+    list_delivery_items,
+    upsert_mesa_target_settings,
+)
+from mesa_legal_data.publisher.models import MesaTargetSettings
 from mesa_legal_data.release import build_release, verify_release
 from mesa_legal_data.release.importer import (
     ReleaseNotFound,
@@ -41,9 +60,13 @@ from mesa_legal_data.sources import import_manual_file, import_manual_url
 from mesa_legal_data.web.schemas import (
     HarvestStartRequest,
     IssueResolveRequest,
+    MesaPublishRequest,
+    MesaTargetSettingsUpdateRequest,
+    ParserCertifyRequest,
     ReleaseCreateRequest,
     ReviewRequest,
     RevokeRequest,
+    SourceSettingsUpdateRequest,
     UrlImportRequest,
 )
 from mesa_legal_data.web.security import verify_security, write_lock
@@ -113,6 +136,34 @@ def get_dashboard():
     c.execute("SELECT count(*) FROM releases WHERE status = 'published'")
     published_releases = c.fetchone()[0]
 
+    # Health & Operational Metrics
+    c.execute("SELECT count(*) FROM artifacts WHERE retrieved_at >= date('now')")
+    discovered_today = c.fetchone()[0]
+
+    c.execute("SELECT count(*) FROM processing_runs WHERE started_at >= date('now')")
+    processed_today = c.fetchone()[0]
+
+    c.execute("SELECT count(*) FROM versions WHERE auto_approved = 1 AND created_at >= date('now')")
+    auto_approved_today = c.fetchone()[0]
+
+    c.execute(
+        "SELECT count(*) FROM versions WHERE approval_status = 'pending' AND (quality_status IS NULL OR quality_status != 'BLOCK')"
+    )
+    needs_review_count = c.fetchone()[0]
+
+    c.execute("SELECT count(*) FROM versions WHERE quality_status = 'BLOCK' OR validation_status = 'failed'")
+    blocked_count = c.fetchone()[0]
+
+    c.execute("""
+        SELECT count(DISTINCT r.record_instance_id) FROM records r
+        JOIN versions v ON r.version_id = v.version_id
+        WHERE r.approval_status = 'approved'
+          AND r.validation_status = 'valid'
+          AND v.validation_status = 'valid'
+          AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+    """)
+    mesa_ready_count = c.fetchone()[0]
+
     c.execute(
         "SELECT document_id, family, document_type, title, lifecycle_status, updated_at FROM documents ORDER BY updated_at DESC LIMIT 10"
     )
@@ -159,6 +210,16 @@ def get_dashboard():
                 "open_errors": open_errors,
                 "published_releases": published_releases,
                 "active_release_id": active_release_id,
+            },
+            "health": {
+                "discovered_today": discovered_today,
+                "processed_today": processed_today,
+                "auto_approved_today": auto_approved_today,
+                "needs_review_count": needs_review_count,
+                "blocked_count": blocked_count,
+                "mesa_ready_count": mesa_ready_count,
+                "mesa_status": "not_configured",
+                "mesa_status_label": "MESA entegrasyonu yapılandırılmadı (Yerel Staging Aktif)",
             },
             "recent_documents": recent_docs,
             "recent_runs": recent_runs,
@@ -460,6 +521,53 @@ def list_sources_endpoint():
                 }
             )
     return ok_response(sources_list)
+
+
+@router.get("/sources/settings")
+def get_sources_settings():
+    conn = get_connection()
+    try:
+        sources_settings = list_source_operational_settings(conn)
+        return ok_response(sources_settings)
+    finally:
+        conn.close()
+
+
+@router.post("/sources/{source_id}/settings")
+async def update_source_settings(source_id: str, req: SourceSettingsUpdateRequest):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            upsert_source_operational_settings(
+                conn,
+                source_id=source_id,
+                enabled=req.enabled,
+                auto_approval_enabled=req.auto_approval_enabled,
+                weekly_sample_count=req.weekly_sample_count,
+            )
+            settings = get_source_operational_settings(conn, source_id)
+            return ok_response(settings)
+        finally:
+            conn.close()
+
+
+@router.post("/sources/{source_id}/certify-parser")
+async def certify_parser_endpoint(source_id: str, req: ParserCertifyRequest):
+    async with write_lock.acquire_write():
+        conn = get_connection()
+        try:
+            set_parser_certification(
+                conn,
+                source_id=source_id,
+                parser_name=req.parser_name,
+                parser_version=req.parser_version,
+                certified=req.certified,
+                certified_by=req.certified_by or "operator",
+            )
+            certs = list_parser_certifications(conn, source_id=source_id)
+            return ok_response(certs)
+        finally:
+            conn.close()
 
 
 # 8.4 Documents
@@ -909,6 +1017,67 @@ SOURCE_FAMILY_MAP = {
 }
 
 
+@router.post("/documents/{document_id:path}/reprocess")
+async def reprocess_document(document_id: str):
+    return await process_document_pipeline(document_id=document_id)
+
+
+@router.get("/documents/{document_id:path}/versions")
+def get_document_versions(document_id: str):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        """SELECT version_id, document_id, artifact_id, version_kind, snapshot_date,
+                  revision_number, supersedes_version_id, quality_status, quality_json,
+                  validation_status, privacy_status, approval_status, created_at,
+                  is_audit_sample, audit_sample_reason, auto_approved
+           FROM versions WHERE document_id = ? ORDER BY revision_number DESC, created_at DESC""",
+        (document_id,),
+    )
+    versions = []
+    for r in c.fetchall():
+        q_data = None
+        if r[8]:
+            try:
+                q_data = json.loads(r[8])
+            except Exception:
+                pass
+        versions.append(
+            {
+                "version_id": r[0],
+                "document_id": r[1],
+                "artifact_id": r[2],
+                "version_kind": r[3],
+                "snapshot_date": r[4],
+                "revision_number": r[5] or 1,
+                "supersedes_version_id": r[6],
+                "quality_status": r[7],
+                "quality_json": q_data,
+                "validation_status": r[9],
+                "privacy_status": r[10],
+                "approval_status": r[11],
+                "created_at": r[12],
+                "is_audit_sample": bool(r[13]),
+                "audit_sample_reason": r[14],
+                "auto_approved": bool(r[15]),
+            }
+        )
+    conn.close()
+    return ok_response({"document_id": document_id, "versions": versions})
+
+
+@router.get("/documents/{document_id:path}/mesa-status")
+def get_document_mesa_status_endpoint(document_id: str):
+    conn = get_connection()
+    doc = get_document(conn, document_id)
+    if not doc:
+        conn.close()
+        error_response("DOCUMENT_NOT_FOUND", f"Document {document_id} not found", status_code=404)
+    status_data = get_document_mesa_status(conn, document_id)
+    conn.close()
+    return ok_response(status_data)
+
+
 @router.get("/documents/{document_id:path}")
 def get_document_detail(document_id: str):
     conn = get_connection()
@@ -1055,6 +1224,63 @@ async def process_document_pipeline(document_id: str):
             error_response("PIPELINE_FAILED", f"Pipeline failed: {e}", status_code=400)
 
 
+@router.get("/reviews/pending-versions")
+@router.get("/versions/pending")
+def list_pending_versions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        """SELECT count(*) FROM versions WHERE approval_status = 'pending' AND (quality_status IS NULL OR quality_status != 'BLOCK')"""
+    )
+    total = c.fetchone()[0]
+    offset = (page - 1) * page_size
+
+    c.execute(
+        """SELECT v.version_id, v.document_id, d.title, d.family, a.source_id, a.source_url, a.raw_path,
+                  v.canonical_path, v.snapshot_date, v.revision_number, v.quality_status, v.quality_json,
+                  v.is_audit_sample, v.audit_sample_reason, v.created_at
+           FROM versions v
+           JOIN documents d ON v.document_id = d.document_id
+           LEFT JOIN artifacts a ON v.artifact_id = a.artifact_id
+           WHERE v.approval_status = 'pending' AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+           ORDER BY v.is_audit_sample DESC, v.created_at DESC
+           LIMIT ? OFFSET ?""",
+        (page_size, offset),
+    )
+    items = []
+    for r in c.fetchall():
+        q_data = None
+        if r[11]:
+            try:
+                q_data = json.loads(r[11])
+            except Exception:
+                pass
+        items.append(
+            {
+                "version_id": r[0],
+                "document_id": r[1],
+                "document_title": r[2] or r[1],
+                "family": r[3],
+                "source_id": r[4],
+                "source_url": r[5],
+                "raw_path": r[6],
+                "canonical_path": r[7],
+                "snapshot_date": r[8],
+                "revision_number": r[9] or 1,
+                "quality_status": r[10],
+                "quality_json": q_data,
+                "is_audit_sample": bool(r[12]),
+                "audit_sample_reason": r[13],
+                "created_at": r[14],
+            }
+        )
+    conn.close()
+    return ok_response({"items": items, "total": total, "page": page, "page_size": page_size})
+
+
 # 8.6 Records
 @router.get("/records")
 @router.get("/reviews/records")
@@ -1132,9 +1358,11 @@ def get_record_detail(record_id: str):
         FROM records r
         JOIN versions v ON r.version_id = v.version_id
         LEFT JOIN documents d ON v.document_id = d.document_id
-        WHERE r.record_id = ?
+        WHERE r.record_id = ? OR r.record_instance_id = ?
+        ORDER BY r.created_at DESC
+        LIMIT 1
         """,
-        (record_id,),
+        (record_id, record_id),
     )
     row = c.fetchone()
     if not row:
@@ -1273,13 +1501,13 @@ def list_issues(
                    COALESCE(
                        (SELECT d.title FROM documents d WHERE d.document_id = v.subject_id),
                        (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id WHERE ver.version_id = v.subject_id),
-                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id),
+                       (SELECT d.title FROM documents d JOIN versions ver ON ver.document_id = d.document_id JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id OR rec.record_instance_id = v.subject_id LIMIT 1),
                        (SELECT d.title FROM documents d JOIN artifacts a ON a.document_id = d.document_id WHERE a.artifact_id = v.subject_id)
                    ) AS document_title,
                    COALESCE(
                        (CASE WHEN v.subject_type = 'document' THEN v.subject_id ELSE NULL END),
                        (SELECT ver.document_id FROM versions ver WHERE ver.version_id = v.subject_id),
-                       (SELECT ver.document_id FROM versions ver JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id),
+                       (SELECT ver.document_id FROM versions ver JOIN records rec ON rec.version_id = ver.version_id WHERE rec.record_id = v.subject_id OR rec.record_instance_id = v.subject_id LIMIT 1),
                        (SELECT a.document_id FROM artifacts a WHERE a.artifact_id = v.subject_id)
                    ) AS document_id,
                    (SELECT a.source_id FROM artifacts a WHERE a.artifact_id = v.subject_id) AS source_id,
@@ -1846,3 +2074,151 @@ def explorer_facets_endpoint():
             "validation_statuses": validation_statuses,
         }
     )
+
+
+# -------------------------------------------------------------
+# MESA v4 Publisher Endpoints
+# -------------------------------------------------------------
+
+
+@router.get("/publisher/settings")
+def get_publisher_settings_endpoint(target_key: str = "default"):
+    conn = get_connection()
+    settings = get_mesa_target_settings(conn, target_key)
+    conn.close()
+    client = MesaClient(settings=settings)
+    data = settings.model_dump()
+    data["api_key_configured"] = client.is_api_key_configured
+    return ok_response(data)
+
+
+@router.post("/publisher/settings")
+def update_publisher_settings_endpoint(req: MesaTargetSettingsUpdateRequest, target_key: str = "default"):
+    conn = get_connection()
+    new_settings = MesaTargetSettings(
+        target_key=target_key,
+        base_url=req.base_url,
+        tenant_id=req.tenant_id,
+        workspace_id=req.workspace_id,
+        dataset_id=req.dataset_id,
+        agent_id=req.agent_id,
+        content_limit_chars=req.content_limit_chars,
+        contract_source=(
+            "configured"
+            if req.health_path and req.publish_path and "{mutation_id}" in req.mutation_status_path_template
+            else "unknown"
+        ),
+        health_path=req.health_path,
+        publish_path=req.publish_path,
+        mutation_status_path_template=req.mutation_status_path_template,
+    )
+    upsert_mesa_target_settings(conn, new_settings)
+    conn.close()
+    client = MesaClient(settings=new_settings)
+    data = new_settings.model_dump()
+    data["api_key_configured"] = client.is_api_key_configured
+    return ok_response(data)
+
+
+@router.post("/publisher/test-connection")
+def test_publisher_connection_endpoint(target_key: str = "default"):
+    conn = get_connection()
+    settings = get_mesa_target_settings(conn, target_key)
+    conn.close()
+    client = MesaClient(settings=settings)
+    res = client.test_connection()
+    return ok_response(res)
+
+
+@router.post("/publisher/preflight")
+def run_publisher_preflight_endpoint(target_key: str = "default"):
+    conn = get_connection()
+    settings = get_mesa_target_settings(conn, target_key)
+    _, summary = build_delivery_plan(target_key=target_key)
+    client = MesaClient(settings=settings)
+    report = client.run_preflight_checks(
+        ready_documents_count=summary.ready_documents,
+        ready_versions_count=summary.ready_versions,
+        estimated_chunks_count=summary.estimated_chunks,
+        total_canonical_bytes=summary.total_canonical_bytes,
+        blocked_versions_count=summary.blocked_versions_excluded,
+        unreadable_versions_count=summary.unreadable_versions_excluded,
+    )
+    conn.close()
+    return ok_response(report.model_dump())
+
+
+@router.get("/publisher/ready-summary")
+def get_publisher_ready_summary_endpoint(target_key: str = "default"):
+    _, summary = build_delivery_plan(target_key=target_key)
+    return ok_response(summary.model_dump())
+
+
+@router.post("/publisher/publish")
+def start_publisher_delivery_endpoint(req: MesaPublishRequest):
+    from mesa_legal_data.operations import submit_operation
+
+    conn = get_connection()
+    target_settings = get_mesa_target_settings(conn, req.target_key)
+    client = MesaClient(settings=target_settings)
+    _, summary = build_delivery_plan(target_key=req.target_key)
+
+    report = client.run_preflight_checks(
+        ready_documents_count=summary.ready_documents,
+        ready_versions_count=summary.ready_versions,
+        estimated_chunks_count=summary.estimated_chunks,
+        total_canonical_bytes=summary.total_canonical_bytes,
+        blocked_versions_count=summary.blocked_versions_excluded,
+        unreadable_versions_count=summary.unreadable_versions_excluded,
+    )
+    if report.overall_status == "FAIL":
+        conn.close()
+        failed_msgs = [c.message for c in report.checks if c.status == "FAIL"]
+        error_response("PREFLIGHT_FAILED", f"Preflight checks failed: {'; '.join(failed_msgs)}", status_code=400)
+
+    delivery_id = f"del-{uuid.uuid4().hex[:12]}"
+    op_id = submit_operation(
+        conn,
+        operation_type="mesa_v4_delivery",
+        requested_by="web-user",
+        input_dict={
+            "delivery_id": delivery_id,
+            "release_id": req.release_id,
+            "target_key": req.target_key,
+        },
+    )
+    conn.close()
+    return ok_response({"operation_id": op_id, "delivery_id": delivery_id, "summary": summary.model_dump()})
+
+
+@router.get("/publisher/deliveries")
+def list_publisher_deliveries_endpoint(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    conn = get_connection()
+    offset = (page - 1) * page_size
+    items = list_deliveries(conn, limit=page_size, offset=offset)
+    c = conn.cursor()
+    c.execute("SELECT count(*) FROM mesa_deliveries")
+    total = c.fetchone()[0]
+    conn.close()
+    return ok_response({"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/publisher/deliveries/{delivery_id}")
+def get_publisher_delivery_endpoint(delivery_id: str):
+    conn = get_connection()
+    delivery = get_delivery(conn, delivery_id)
+    if not delivery:
+        conn.close()
+        error_response("DELIVERY_NOT_FOUND", f"Delivery {delivery_id} not found", status_code=404)
+    items = list_delivery_items(conn, delivery_id, limit=200)
+    conn.close()
+    return ok_response({"delivery": delivery, "items": items})
+
+
+@router.post("/publisher/deliveries/{delivery_id}/retry")
+def retry_publisher_delivery_endpoint(delivery_id: str):
+    res = retry_delivery_failures(delivery_id)
+    return ok_response(res)

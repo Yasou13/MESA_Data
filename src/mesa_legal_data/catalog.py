@@ -367,16 +367,61 @@ def insert_version(
     validation_status: str,
     privacy_status: str,
     approval_status: str,
+    revision_number: int | None = None,
+    supersedes_version_id: str | None = None,
+    quality_status: str | None = "PASS",
+    quality_json: str | None = None,
 ):
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT revision_number, supersedes_version_id, approval_status,
+                      document_id, artifact_id, canonical_sha256
+               FROM versions WHERE version_id = ?""",
+            (version_id,),
+        )
+        existing_ver = cur.fetchone()
+
+        if existing_ver:
+            if (existing_ver[3], existing_ver[4], existing_ver[5]) != (
+                document_id,
+                artifact_id,
+                canonical_sha256,
+            ):
+                raise CatalogError(f"Immutable version collision for {version_id}: existing identity/content differs")
+            return
+        else:
+            if revision_number is not None:
+                rev_num = revision_number
+            else:
+                cur.execute(
+                    "SELECT COALESCE(MAX(revision_number), 0) + 1 FROM versions WHERE document_id = ?",
+                    (document_id,),
+                )
+                rev_num = cur.fetchone()[0]
+
+            # A predecessor is provenance, not an insertion-order guess.
+            super_id = supersedes_version_id
+
+            final_approval = approval_status
+
         conn.execute(
-            """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, snapshot_date, effective_from, effective_to, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO versions (
+                   version_id, document_id, artifact_id, version_kind, snapshot_date,
+                   effective_from, effective_to, canonical_path, canonical_line,
+                   canonical_sha256, parser_name, parser_version, schema_version,
+                   validation_status, privacy_status, approval_status, created_at,
+                   revision_number, supersedes_version_id, quality_status, quality_json
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(version_id) DO UPDATE SET
                    document_id = excluded.document_id,
                    artifact_id = excluded.artifact_id,
                    version_kind = excluded.version_kind,
+                   snapshot_date = excluded.snapshot_date,
+                   effective_from = excluded.effective_from,
+                   effective_to = excluded.effective_to,
                    canonical_path = excluded.canonical_path,
                    canonical_line = excluded.canonical_line,
                    canonical_sha256 = excluded.canonical_sha256,
@@ -385,7 +430,11 @@ def insert_version(
                    schema_version = excluded.schema_version,
                    validation_status = excluded.validation_status,
                    privacy_status = excluded.privacy_status,
-                   approval_status = excluded.approval_status""",
+                   approval_status = ?,
+                   revision_number = excluded.revision_number,
+                   supersedes_version_id = excluded.supersedes_version_id,
+                   quality_status = excluded.quality_status,
+                   quality_json = excluded.quality_json""",
             (
                 version_id,
                 document_id,
@@ -402,8 +451,13 @@ def insert_version(
                 schema_version,
                 validation_status,
                 privacy_status,
-                approval_status,
+                final_approval,
                 now,
+                rev_num,
+                super_id,
+                quality_status,
+                quality_json,
+                final_approval,
             ),
         )
 
@@ -411,7 +465,13 @@ def insert_version(
 def get_version(conn: sqlite3.Connection, version_id: str) -> dict[str, Any] | None:
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT version_id, document_id, artifact_id, version_kind, snapshot_date, effective_from, effective_to, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at FROM versions WHERE version_id = ?",
+        """SELECT version_id, document_id, artifact_id, version_kind, snapshot_date,
+                  effective_from, effective_to, canonical_path, canonical_line,
+                  canonical_sha256, parser_name, parser_version, schema_version,
+                  validation_status, privacy_status, approval_status, created_at,
+                  revision_number, supersedes_version_id, quality_status, quality_json,
+                  is_audit_sample, audit_sample_reason, auto_approved
+           FROM versions WHERE version_id = ?""",
         (version_id,),
     )
     row = cursor.fetchone()
@@ -435,6 +495,13 @@ def get_version(conn: sqlite3.Connection, version_id: str) -> dict[str, Any] | N
         "privacy_status": row[14],
         "approval_status": row[15],
         "created_at": row[16],
+        "revision_number": row[17] if len(row) > 17 and row[17] is not None else 1,
+        "supersedes_version_id": row[18] if len(row) > 18 else None,
+        "quality_status": row[19] if len(row) > 19 else None,
+        "quality_json": row[20] if len(row) > 20 else None,
+        "is_audit_sample": bool(row[21]) if len(row) > 21 and row[21] is not None else False,
+        "audit_sample_reason": row[22] if len(row) > 22 else None,
+        "auto_approved": bool(row[23]) if len(row) > 23 and row[23] is not None else False,
     }
 
 
@@ -448,21 +515,27 @@ def insert_record(
     record_sha256: str,
     validation_status: str = "valid",
     approval_status: str = "pending",
+    record_instance_id: str | None = None,
 ):
     now = datetime.now(UTC).isoformat()
+    instance_id = record_instance_id or f"{version_id}:{record_id}"
     with transaction(conn):
         conn.execute(
-            """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(record_id) DO UPDATE SET
-                   version_id = excluded.version_id,
+            """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(version_id, record_id) DO UPDATE SET
+                   record_instance_id = excluded.record_instance_id,
                    record_type = excluded.record_type,
                    canonical_path = excluded.canonical_path,
                    canonical_line = excluded.canonical_line,
                    record_sha256 = excluded.record_sha256,
                    validation_status = excluded.validation_status,
-                   approval_status = excluded.approval_status""",
+                   approval_status = CASE 
+                       WHEN records.approval_status = 'approved' THEN records.approval_status 
+                       ELSE excluded.approval_status 
+                   END""",
             (
+                instance_id,
                 record_id,
                 version_id,
                 record_type,
@@ -476,12 +549,38 @@ def insert_record(
         )
 
 
-def get_record(conn: sqlite3.Connection, record_id: str) -> dict[str, Any] | None:
+def get_record(conn: sqlite3.Connection, record_id: str, version_id: str | None = None) -> dict[str, Any] | None:
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at FROM records WHERE record_id = ?",
-        (record_id,),
-    )
+    if version_id:
+        cursor.execute(
+            "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at, record_instance_id FROM records WHERE record_id = ? AND version_id = ?",
+            (record_id, version_id),
+        )
+    else:
+        cursor.execute(
+            "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at, record_instance_id FROM records WHERE record_instance_id = ?",
+            (record_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return {
+                "record_id": row[0],
+                "version_id": row[1],
+                "record_type": row[2],
+                "canonical_path": row[3],
+                "canonical_line": row[4],
+                "record_sha256": row[5],
+                "validation_status": row[6],
+                "approval_status": row[7],
+                "created_at": row[8],
+                "record_instance_id": row[9],
+            }
+
+        cursor.execute(
+            "SELECT record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at, record_instance_id FROM records WHERE record_id = ? ORDER BY created_at DESC LIMIT 1",
+            (record_id,),
+        )
+
     row = cursor.fetchone()
     if not row:
         return None
@@ -495,6 +594,7 @@ def get_record(conn: sqlite3.Connection, record_id: str) -> dict[str, Any] | Non
         "validation_status": row[6],
         "approval_status": row[7],
         "created_at": row[8],
+        "record_instance_id": row[9] if len(row) > 9 else f"{row[1]}:{row[0]}",
     }
 
 
@@ -547,18 +647,26 @@ def iter_records_for_release(
     batch_size: int = 1000,
 ) -> Iterator[ReleaseRecordRef]:
     cursor = conn.cursor()
-    cursor.execute(
-        """
+    cursor.execute("""
+        WITH eligible_versions AS (
+            SELECT v.version_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY v.document_id
+                       ORDER BY COALESCE(v.revision_number, 1) DESC, v.created_at DESC
+                   ) AS version_rank
+            FROM versions v
+            WHERE v.approval_status = 'approved'
+              AND v.validation_status = 'valid'
+              AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
+              AND v.privacy_status IN ('clean', 'approved')
+        )
         SELECT r.record_id, r.record_type, r.record_sha256, r.canonical_path, r.canonical_line, r.version_id
         FROM records r
-        JOIN versions v ON r.version_id = v.version_id
+        JOIN eligible_versions ev ON r.version_id = ev.version_id AND ev.version_rank = 1
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
-          AND v.validation_status = 'valid'
-          AND v.privacy_status IN ('clean', 'approved')
         ORDER BY r.canonical_path ASC, r.canonical_line ASC
-        """
-    )
+        """)
     while True:
         rows = cursor.fetchmany(batch_size)
         if not rows:
@@ -933,12 +1041,18 @@ def mark_release_status(
             )
 
 
-def add_release_item(conn: sqlite3.Connection, release_id: str, record_id: str, record_sha256: str):
+def add_release_item(
+    conn: sqlite3.Connection,
+    release_id: str,
+    record_id: str,
+    record_sha256: str,
+    version_id: str | None = None,
+):
     with transaction(conn):
         conn.execute(
-            """INSERT INTO release_items (release_id, record_id, record_sha256)
-               VALUES (?, ?, ?)""",
-            (release_id, record_id, record_sha256),
+            """INSERT INTO release_items (release_id, record_id, record_sha256, version_id)
+               VALUES (?, ?, ?, ?)""",
+            (release_id, record_id, record_sha256, version_id),
         )
 
 
@@ -982,6 +1096,9 @@ def approve_version_streaming(
     ver = get_version(conn, version_id)
     if not ver:
         raise CatalogError(f"Version {version_id} not found")
+
+    if ver.get("quality_status") == "BLOCK":
+        raise BlockingValidationIssueExists(f"Cannot approve version {version_id}: quality gate status is BLOCK")
 
     blockers = list_open_blocking_issues_for_version(conn, version_id=version_id)
     if blockers:
@@ -1047,12 +1164,7 @@ def approve_version_streaming(
             spool_conn.close()
             if spool_db_path.exists():
                 spool_db_path.unlink()
-            return {
-                "status": "approved",
-                "version_id": version_id,
-                "approved_records": 0,
-                "approval_status": "approved",
-            }
+            raise CatalogError(f"Cannot approve version {version_id}: it has no canonical records")
 
         # Get distinct canonical paths
         p_cur = spool_conn.cursor()
@@ -1131,11 +1243,11 @@ def approve_version_streaming(
                     "INSERT INTO record_reviews (record_id, record_sha256, reviewer, decision, note, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
                     rows,
                 )
-                id_tuples = [(r[0],) for r in rows]
-                conn.executemany(
-                    "UPDATE records SET approval_status = 'approved' WHERE record_id = ?",
-                    id_tuples,
-                )
+
+            conn.execute(
+                "UPDATE records SET approval_status = 'approved' WHERE version_id = ?",
+                (version_id,),
+            )
 
             conn.execute(
                 "UPDATE versions SET approval_status = 'approved', privacy_status = CASE WHEN privacy_status = 'flagged' THEN 'approved' ELSE privacy_status END WHERE version_id = ?",
@@ -1843,3 +1955,294 @@ def list_export_packages(conn: sqlite3.Connection, limit: int = 50) -> list[dict
             }
         )
     return items
+
+
+# ==========================================
+# Operational Source Settings & Certifications
+# ==========================================
+
+
+def get_source_operational_settings(conn: sqlite3.Connection, source_id: str) -> dict[str, Any]:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT source_id, enabled, auto_approval_enabled, weekly_sample_count, updated_at, updated_by FROM source_operational_settings WHERE source_id = ?",
+        (source_id,),
+    )
+    row = cursor.fetchone()
+    if row:
+        return {
+            "source_id": row[0],
+            "enabled": bool(row[1]),
+            "auto_approval_enabled": bool(row[2]),
+            "weekly_sample_count": row[3],
+            "updated_at": row[4],
+            "updated_by": row[5],
+        }
+    return {
+        "source_id": source_id,
+        "enabled": True,
+        "auto_approval_enabled": False,
+        "weekly_sample_count": 10,
+        "updated_at": datetime.now(UTC).isoformat(),
+        "updated_by": "default",
+    }
+
+
+def upsert_source_operational_settings(
+    conn: sqlite3.Connection,
+    source_id: str,
+    *,
+    enabled: bool = True,
+    auto_approval_enabled: bool = False,
+    weekly_sample_count: int = 10,
+    updated_by: str = "operator",
+) -> None:
+    now_iso = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO source_operational_settings (source_id, enabled, auto_approval_enabled, weekly_sample_count, updated_at, updated_by)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_id) DO UPDATE SET
+               enabled = excluded.enabled,
+               auto_approval_enabled = excluded.auto_approval_enabled,
+               weekly_sample_count = excluded.weekly_sample_count,
+               updated_at = excluded.updated_at,
+               updated_by = excluded.updated_by""",
+            (
+                source_id,
+                1 if enabled else 0,
+                1 if auto_approval_enabled else 0,
+                weekly_sample_count,
+                now_iso,
+                updated_by,
+            ),
+        )
+
+
+def list_source_operational_settings(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    cursor.execute("SELECT source_id, name, authority, base_url, enabled FROM sources ORDER BY source_id ASC")
+    sources = cursor.fetchall()
+
+    results = []
+    for s_id, s_name, s_auth, s_url, s_enabled in sources:
+        settings = get_source_operational_settings(conn, s_id)
+        certs = list_parser_certifications(conn, source_id=s_id)
+        results.append(
+            {
+                "source_id": s_id,
+                "name": s_name,
+                "authority": s_auth,
+                "base_url": s_url,
+                "source_enabled": bool(s_enabled) and settings["enabled"],
+                "auto_approval_enabled": settings["auto_approval_enabled"],
+                "weekly_sample_count": settings["weekly_sample_count"],
+                "updated_at": settings["updated_at"],
+                "certifications": certs,
+            }
+        )
+    return results
+
+
+def get_parser_certification(
+    conn: sqlite3.Connection,
+    source_id: str,
+    parser_name: str,
+    parser_version: str,
+) -> bool:
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT certified FROM parser_certifications WHERE source_id = ? AND parser_name = ? AND parser_version = ?",
+        (source_id, parser_name, parser_version),
+    )
+    row = cursor.fetchone()
+    if row:
+        return bool(row[0])
+    return False
+
+
+def set_parser_certification(
+    conn: sqlite3.Connection,
+    source_id: str,
+    parser_name: str,
+    parser_version: str,
+    certified: bool,
+    certified_by: str = "operator",
+) -> None:
+    now_iso = datetime.now(UTC).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO parser_certifications (source_id, parser_name, parser_version, certified, certified_at, certified_by)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_id, parser_name, parser_version) DO UPDATE SET
+               certified = excluded.certified,
+               certified_at = excluded.certified_at,
+               certified_by = excluded.certified_by""",
+            (
+                source_id,
+                parser_name,
+                parser_version,
+                1 if certified else 0,
+                now_iso,
+                certified_by,
+            ),
+        )
+
+
+def list_parser_certifications(
+    conn: sqlite3.Connection,
+    source_id: str | None = None,
+) -> list[dict[str, Any]]:
+    cursor = conn.cursor()
+    if source_id:
+        cursor.execute(
+            "SELECT source_id, parser_name, parser_version, certified, certified_at, certified_by FROM parser_certifications WHERE source_id = ? ORDER BY parser_name, parser_version",
+            (source_id,),
+        )
+    else:
+        cursor.execute(
+            "SELECT source_id, parser_name, parser_version, certified, certified_at, certified_by FROM parser_certifications ORDER BY source_id, parser_name, parser_version"
+        )
+    return [
+        {
+            "source_id": r[0],
+            "parser_name": r[1],
+            "parser_version": r[2],
+            "certified": bool(r[3]),
+            "certified_at": r[4],
+            "certified_by": r[5],
+        }
+        for r in cursor.fetchall()
+    ]
+
+
+def should_audit_sample(conn: sqlite3.Connection, source_id: str, version_id: str) -> bool:
+    """
+    Determines if a version should be selected for manual quality audit sampling.
+    Enforces that:
+      - Already sampled versions maintain their sampling state.
+      - Sampling rate obeys weekly_sample_count.
+    """
+    ver = get_version(conn, version_id)
+    if ver and ver.get("is_audit_sample"):
+        return True
+
+    settings = get_source_operational_settings(conn, source_id)
+    weekly_limit = settings.get("weekly_sample_count", 10)
+    if weekly_limit <= 0:
+        return False
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT count(*) FROM versions v
+           JOIN artifacts a ON v.artifact_id = a.artifact_id
+           WHERE a.source_id = ?
+             AND v.is_audit_sample = 1
+             AND v.created_at >= datetime('now', '-7 days')""",
+        (source_id,),
+    )
+    current_weekly_samples = cursor.fetchone()[0]
+
+    if current_weekly_samples < weekly_limit:
+        # Deterministic sample rate modulo on version ID hash
+        int_hash = int(hashlib.sha256(version_id.encode("utf-8")).hexdigest(), 16)
+        rate = min(100, max(1, weekly_limit))
+        if (int_hash % 100) < rate:
+            return True
+
+    return False
+
+
+def evaluate_auto_approval(
+    conn: sqlite3.Connection,
+    *,
+    version_id: str,
+    source_id: str,
+    parser_name: str,
+    parser_version: str,
+    quality_decision: str,
+    has_privacy_blocker: bool,
+    schema_valid: bool,
+) -> tuple[bool, str]:
+    """
+    Evaluates strict auto-approval conditions for a version:
+      1. quality_decision == 'PASS'
+      2. No privacy blockers
+      3. Schema valid
+      4. Source operationally enabled
+      5. Auto-approval enabled for source
+      6. Parser name and version certified for this source
+      7. Not selected for audit sampling
+
+    Returns (is_approved, explanation_reason).
+    """
+    ver = get_version(conn, version_id)
+    if not ver:
+        return False, f"Version {version_id} does not exist"
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT source_id FROM artifacts WHERE artifact_id = ?", (ver["artifact_id"],))
+    source_row = cursor.fetchone()
+    actual_source_id = source_row[0] if source_row else None
+    actual_schema_valid = ver.get("validation_status") == "valid"
+    actual_privacy_blocker = ver.get("privacy_status") not in ("clean", "approved")
+
+    supplied_contract = (source_id, parser_name, parser_version, quality_decision, schema_valid, has_privacy_blocker)
+    stored_contract = (
+        actual_source_id,
+        ver.get("parser_name"),
+        ver.get("parser_version"),
+        ver.get("quality_status"),
+        actual_schema_valid,
+        actual_privacy_blocker,
+    )
+    if supplied_contract != stored_contract:
+        return False, "Auto-approval inputs do not match the stored version provenance and gate state"
+
+    if ver.get("quality_status") != "PASS":
+        return False, f"Quality Gate decision is {ver.get('quality_status')} (requires PASS)"
+
+    if has_privacy_blocker:
+        return False, "Privacy blocker detected in content"
+
+    if not schema_valid:
+        return False, "Schema validation failed"
+
+    source_id = str(actual_source_id)
+    parser_name = str(ver["parser_name"])
+    parser_version = str(ver["parser_version"])
+
+    settings = get_source_operational_settings(conn, source_id)
+    if not settings.get("enabled", True):
+        return False, f"Source {source_id} is operationally disabled"
+
+    if not settings.get("auto_approval_enabled", False):
+        return False, "Auto-approval is disabled for source"
+
+    is_certified = get_parser_certification(conn, source_id, parser_name, parser_version)
+    if not is_certified:
+        return False, f"Parser {parser_name} v{parser_version} is not certified for source {source_id}"
+
+    is_sampled = should_audit_sample(conn, source_id, version_id)
+    if is_sampled:
+        with transaction(conn):
+            conn.execute(
+                "UPDATE versions SET is_audit_sample = 1, audit_sample_reason = 'quality_audit_sample' WHERE version_id = ?",
+                (version_id,),
+            )
+        return False, "Selected for audit quality sampling (requires manual review)"
+
+    # All safety gates passed: Execute streaming auto-approval
+    approve_version_streaming(
+        conn,
+        version_id=version_id,
+        reviewer="system:auto-approval",
+        note="Safe auto-approval: quality PASS, parser certified, not sampled",
+    )
+    with transaction(conn):
+        conn.execute(
+            "UPDATE versions SET auto_approved = 1, approval_status = 'approved' WHERE version_id = ?",
+            (version_id,),
+        )
+
+    return True, "Auto-approved successfully"

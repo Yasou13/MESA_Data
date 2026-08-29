@@ -1,9 +1,48 @@
 import re
+import unicodedata
 
 META_CHARSET_PATTERN = re.compile(
     rb"""<meta[^>]+(?:charset\s*=\s*["']?([a-zA-Z0-9_-]+)|content\s*=\s*["'][^"']*charset\s*=\s*([a-zA-Z0-9_-]+))""",
     re.IGNORECASE,
 )
+
+# Common Mojibake patterns for Turkish legal texts (UTF-8 decoded as Latin-1/cp1252/cp1254)
+MOJIBAKE_PATTERNS = [
+    re.compile(r"Ã[§¶¼‡–œ°½¾]"),  # ç, ö, ü, Ç, Ö, Ü, ğ, ı, ş
+    re.compile(r"Ä[Ÿ±°]"),  # ğ, ı, İ
+    re.compile(r"Å[Ÿž]"),  # ş, Ş
+    re.compile(r"[\ufffd]"),  # Unicode replacement character
+]
+
+
+def detect_mojibake(text: str) -> list[str]:
+    """
+    Detects potential mojibake / corrupted character sequences in text.
+    Returns list of issue descriptions if detected.
+    """
+    issues: list[str] = []
+    if not text:
+        return issues
+
+    if "\ufffd" in text:
+        count = text.count("\ufffd")
+        issues.append(f"Unicode replacement character (\\ufffd) found {count} time(s)")
+
+    if "\x00" in text:
+        count = text.count("\x00")
+        issues.append(f"Null byte (\\x00) found {count} time(s)")
+
+    for pat in MOJIBAKE_PATTERNS[:3]:
+        matches = pat.findall(text)
+        if matches:
+            issues.append(f"Mojibake pattern match: {matches[:5]}")
+
+    # Check for excessive unprintable control characters
+    control_count = sum(1 for c in text if c not in ("\n", "\t", "\r") and unicodedata.category(c).startswith("C"))
+    if control_count > 0:
+        issues.append(f"Unprintable control characters found: {control_count}")
+
+    return issues
 
 
 def decode_source_bytes(raw_bytes: bytes, is_html: bool = True) -> tuple[str, str]:

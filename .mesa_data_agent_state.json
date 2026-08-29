@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "project": "MESA_Data",
+  "workflow": "mesa_data_autonomy",
+  "branch": "audit/mesa-data-autonomy-final",
+  "baseline_commit": "84c61db716c10cb4110b673f9a976215afe71cd3",
+  "current_phase": "complete",
+  "overall_status": "partially_ready",
+  "phases": {
+    "prompt_1": {
+      "status": "completed",
+      "started_at": "2026-08-29T01:42:00Z",
+      "completed_at": "2026-08-29T01:54:00Z",
+      "commits": [
+        "5014d5d fix: make document versions deterministic and isolate record instances",
+        "964b72f feat: add canonical source spans, parser coverage, and text health checks",
+        "bedcb99 feat: add deterministic 3-state quality gate and release guard",
+        "d6efb7c test: cover version, parser, quality gate, and migration integrity"
+      ],
+      "files_changed": [
+        "migrations/0005_version_aware_records_and_quality.sql",
+        "src/mesa_legal_data/catalog.py",
+        "src/mesa_legal_data/pipeline.py",
+        "src/mesa_legal_data/parsers/text_normalizer.py",
+        "src/mesa_legal_data/parsers/legislation.py",
+        "src/mesa_legal_data/parsers/encoding.py",
+        "src/mesa_legal_data/parsers/coverage.py",
+        "src/mesa_legal_data/quality.py",
+        "src/mesa_legal_data/web/api.py",
+        "tests/unit/test_version_integrity.py",
+        "tests/unit/test_canonical_spans_and_coverage.py",
+        "tests/unit/test_quality_gate.py",
+        "tests/unit/test_migration_0005.py"
+      ],
+      "migrations": [
+        "0005_version_aware_records_and_quality.sql"
+      ],
+      "findings": [
+        "Version ID in pipeline was using execution timestamp instead of source artifact publication/snapshot/retrieved date, creating fake duplicate versions on daily reprocessing.",
+        "Records table used record_id as PRIMARY KEY without version scoping, causing Version B to overwrite Version A's record instances for the same logical article.",
+        "Version kind calculation was hardcoded to 'consolidated_snapshot' when inserted into catalog.",
+        "ParsedArticle had no char_start, char_end, or ordinal, and pipeline did not compute canonical coordinate spans.",
+        "No formal interval-merge coverage computation existed to detect preamble/annex uncovered ranges.",
+        "No formal 3-state Quality Gate (PASS/REVIEW/BLOCK) existed at version level to guard releases against corrupt extractions/spans."
+      ],
+      "decisions": [
+        "Upgraded records table to use composite uniqueness (version_id, record_id) and record_instance_id primary key to isolate multi-version record instances.",
+        "Upgraded versions schema to track revision_number sequentially per document, supersedes_version_id, and quality_status/quality_json.",
+        "Implemented single coordinate system flow: RAW -> EXTRACTED -> SAFE NORMALIZATION -> CANONICAL TEXT -> LEGAL PARSER -> SOURCE SPANS.",
+        "Implemented interval-merge coverage computation in coverage.py to classify uncovered ranges (preamble, gap, annex_trailing).",
+        "Implemented 3-state Quality Gate evaluating 9 check groups (SOURCE, RAW, EXTRACTION, STRUCTURE, METADATA, CITATION, PRIVACY, PROVENANCE, DUPLICATE) returning strictly PASS, REVIEW, or BLOCK.",
+        "Implemented Release Guard in catalog and release iterator preventing approval or release of versions with quality == BLOCK."
+      ],
+      "tests": [
+        "tests/unit/test_version_integrity.py",
+        "tests/unit/test_canonical_spans_and_coverage.py",
+        "tests/unit/test_quality_gate.py",
+        "tests/unit/test_migration_0005.py",
+        "tests/unit/test_encoding_cp1254.py"
+      ],
+      "blockers": []
+    },
+    "prompt_2": {
+      "status": "completed",
+      "started_at": "2026-08-29T02:00:00Z",
+      "completed_at": "2026-08-29T02:08:00Z",
+      "commits": [
+        "390f6ecdc002d351bb356737799e2b2d0b888558 feat: citation semantics, safe auto-approval engine, and web panel completion"
+      ],
+      "files_changed": [
+        "migrations/0006_citations_certifications_and_panel.sql",
+        "schemas/citation.schema.json",
+        "src/mesa_legal_data/ids.py",
+        "src/mesa_legal_data/parsers/citations.py",
+        "src/mesa_legal_data/catalog.py",
+        "src/mesa_legal_data/pipeline.py",
+        "src/mesa_legal_data/web/schemas.py",
+        "src/mesa_legal_data/web/api.py",
+        "src/mesa_legal_data/web/static/index.html",
+        "src/mesa_legal_data/web/static/app.js",
+        "tests/unit/test_citation_semantics.py",
+        "tests/unit/test_auto_approval_and_certifications.py",
+        "tests/integration/test_web_panel_prompt2.py"
+      ],
+      "migrations": [
+        "0006_citations_certifications_and_panel.sql"
+      ],
+      "findings": [
+        "Extracted citations were previously automatically treated as valid, violating the 4-state lifecycle (EXTRACTED, RESOLVED, UNRESOLVED, HUMAN_VERIFIED).",
+        "Citation spans lacked exact unicode coordinate matching canonical text slices.",
+        "Auto-approval lacked strict certification verification and configurable audit quality sampling.",
+        "Web panel needed 6 key metrics, truthful local staging publish labels, multi-version document history, reprocess actions, and source automation settings."
+      ],
+      "decisions": [
+        "Implemented 4-state citation lifecycle with Turkish legal aliases (TCK, CMK, HMK, TMK, TBK, TTK, İİK, İYUK, VUK, KVKK, AY, AvK, PVSK, İşK) and temporal relation verbs (amends, repeals, adds).",
+        "Enforced exact canonical coordinate slicing (canonical_text[char_start:char_end] == raw_text) and context-aware law number matching.",
+        "Implemented 7-condition Safe Auto-Approval Engine in catalog.py with parser certifications and weekly audit sampling.",
+        "Completed web management panel with health metrics, honest MESA banner, multi-version history, safe reprocessing, and operational settings."
+      ],
+      "tests": [
+        "tests/unit/test_citation_semantics.py",
+        "tests/unit/test_auto_approval_and_certifications.py",
+        "tests/integration/test_web_panel_prompt2.py"
+      ],
+      "blockers": []
+    },
+    "prompt_3": {
+      "status": "completed",
+      "started_at": "2026-08-29T02:08:00Z",
+      "completed_at": "2026-08-29T02:17:00Z",
+      "commits": [
+        "59a822d3b5d1187fec4683c71ad1da831745b318 feat: implement real MESA v4 publisher, legal chunker, delivery ledger, cross-release deduplication, and web push panel"
+      ],
+      "files_changed": [
+        "migrations/0007_mesa_v4_publisher_and_deliveries.sql",
+        "src/mesa_legal_data/publisher/__init__.py",
+        "src/mesa_legal_data/publisher/models.py",
+        "src/mesa_legal_data/publisher/hashing.py",
+        "src/mesa_legal_data/publisher/chunker.py",
+        "src/mesa_legal_data/publisher/client.py",
+        "src/mesa_legal_data/publisher/ledger.py",
+        "src/mesa_legal_data/publisher/engine.py",
+        "src/mesa_legal_data/operations.py",
+        "src/mesa_legal_data/web/schemas.py",
+        "src/mesa_legal_data/web/api.py",
+        "src/mesa_legal_data/web/static/index.html",
+        "src/mesa_legal_data/web/static/app.js",
+        "src/mesa_legal_data/cli.py",
+        "tests/unit/test_publisher_chunker.py",
+        "tests/unit/test_publisher_idempotency_and_hashing.py",
+        "tests/unit/test_publisher_client_and_ledger.py",
+        "tests/integration/test_mesa_v4_publisher_e2e.py",
+        "tests/integration/test_web_panel_publisher.py",
+        "tests/unit/test_cli_sync.py"
+      ],
+      "migrations": [
+        "0007_mesa_v4_publisher_and_deliveries.sql"
+      ],
+      "findings": [
+        "MESA Publisher was missing; MESA_Data had no direct v4 HTTP client, preflight checklist, or cross-release deduplication ledger.",
+        "Legal chunking requires preserving preamble, article units, and annex schedules with deterministic fallback on paragraph boundaries.",
+        "API key secrecy required strict separation from SQLite persistence, logs, JSON state, and browser source code.",
+        "MESA mutation state tracking requires truthful reporting (only COMMITTED marks success, partial failures enable targeted retry).",
+        "Automated pipeline sync (mesa-data sync) must stop before MESA push to preserve human-in-the-loop manual push gate."
+      ],
+      "decisions": [
+        "Target settings: Non-secret target settings persisted in SQLite table mesa_target_settings, secret API key read strictly from MESA_DATA_MESA_API_KEY / MESA_API_KEY environment variable.",
+        "Legal chunker: Preserves preamble, articles, and annex ranges with configurable content limit (default 32768) and deterministic paragraph boundaries (\\n\\n).",
+        "Deterministic hashing: Canonical revision hash is pure SHA256 of sorted chunk content hashes. Stable idempotency key mesa-data:<sha256(canonical_json)> contains zero runtime volatile data.",
+        "Delivery ledger & O(1) deduplication: Persists mesa_deliveries and mesa_delivery_items; skips already COMMITTED chunks across releases.",
+        "Truthful mutation lifecycle: COMMITTED, PROCESSING, QUEUED, FAILED, REJECTED tracked accurately; partial failure banner displays retry CTA.",
+        "Web Panel Yayınla tab: Target settings manager, preflight checklist, ready summary, confirmation modal, live progress polling, delivery detail modal, retry CTA.",
+        "CLI sync: mesa-data sync command discovers, fetches, processes, validates quality, auto-approves, and summarizes ready items, stopping strictly before MESA push."
+      ],
+      "tests": [
+        "tests/unit/test_publisher_chunker.py",
+        "tests/unit/test_publisher_idempotency_and_hashing.py",
+        "tests/unit/test_publisher_client_and_ledger.py",
+        "tests/integration/test_mesa_v4_publisher_e2e.py",
+        "tests/integration/test_web_panel_publisher.py",
+        "tests/unit/test_cli_sync.py"
+      ],
+      "blockers": []
+    },
+    "prompt_4": {
+      "status": "completed",
+      "started_at": "2026-08-29T02:18:00Z",
+      "completed_at": "2026-08-29T02:24:00Z",
+      "commits": [
+        "7f958f0ac6592f8e0f6bd2c4697a15ca626993b4 test: integration audit and verification suite for Prompt 4 Kontrol 1-11"
+      ],
+      "files_changed": [
+        "tests/integration/test_prompt4_integration_audit.py",
+        ".mesa_data_agent_state.json",
+        "docs/BUILD_STATE.json"
+      ],
+      "migrations": [],
+      "findings": [
+        "All 11 audit controls verified against source code, SQLite schemas, HTTP APIs, and runtime behavior.",
+        "No live MESA endpoint is currently deployed on localhost/network in this workspace; verified strictly through mock HTTP contracts; marked contract state as LIVE_MESA_NOT_VERIFIED.",
+        "Verified strict manual push gate: CLI sync never performs automated MESA push.",
+        "Zero prohibited overengineered components found (no Celery, Kafka, RabbitMQ, Airflow, Spark, LLMs, Vector DBs, Graph DBs, or frontend frameworks)."
+      ],
+      "decisions": [
+        "Created comprehensive Prompt 4 integration audit test suite covering Kontrol 1 through 11 in tests/integration/test_prompt4_integration_audit.py.",
+        "Verified all 11 core invariants end-to-end with 295 passing tests (291 non-scale, 4 scale, 0 failed)."
+      ],
+      "tests": [
+        "tests/integration/test_prompt4_integration_audit.py",
+        "Full test suite: 295 tests passed (291 non-scale + 4 scale, 0 failed, 100% pass rate)"
+      ],
+      "blockers": []
+    },
+    "prompt_5": {
+      "status": "completed",
+      "completed_at": "2026-08-29T15:13:48Z",
+      "commits": [
+        "1baa2c2642684a24aead899c3d53873c60298342 fix: harden final autonomy audit invariants"
+      ],
+      "migrations": [
+        "0008_final_audit_hardening.sql"
+      ],
+      "findings": [
+        "Publisher routes were guessed rather than documented or explicitly configured, and unknown remote states could be misreported as COMMITTED.",
+        "Publisher payload assembly mixed citation text into canonical document text and could release multiple approved historical versions of one document.",
+        "Auto-approval trusted caller-supplied parser/source/quality facts instead of the stored version and artifact facts.",
+        "Exact artifact reprocessing could rewrite immutable version pointers, and predecessor links were inferred without authoritative evidence.",
+        "Quality checks accepted shifted spans and did not reliably block severe replacement loss or missing middle sections.",
+        "Numbered but unregistered legislation citations were incorrectly promoted directly to RESOLVED.",
+        "The sync item limit was not a total-run bound and could process more backlog items than requested.",
+        "Browser execution found a collect-view JavaScript scope regression not covered by the prior static UI tests.",
+        "No live MESA endpoint or MESA source code was available; the remote contract and server-side deduplication remain unverified."
+      ],
+      "decisions": [
+        "Removed all guessed MESA routes and required an explicit configured contract before connectivity or publication.",
+        "Made COMMITTED fail closed: missing, accepted, received, queued, processing, timeout, rejected, and unknown states cannot become success.",
+        "Bound approvals, releases, canonical reads, and reprocessing to exact stored version/artifact identities.",
+        "Hardened deterministic quality, citation lifecycle, retry/idempotency, partial delivery, and total sync-limit behavior.",
+        "Verified the primary panel journey in a real local browser and added a regression guard for collect-view helper scope."
+      ],
+      "tests": [
+        "uv run pytest -ra: 304 passed in 71.01s",
+        "uv run ruff check src tests: passed",
+        "uv run mypy src/mesa_legal_data --ignore-missing-imports --explicit-package-bases --follow-imports=skip: passed (77 source files)",
+        "python -m compileall -q src/mesa_legal_data: passed",
+        "node --check src/mesa_legal_data/web/static/app.js: passed",
+        "Live browser journey: Ana Sayfa, Veri Topla, Kütüphane, İnceleme, Yayınla, advanced navigation and explicit MESA contract fields verified",
+        "Two bounded real Resmi Gazete sync runs in isolated storage: one item per run, zero MESA deliveries"
+      ],
+      "blockers": [
+        "Live MESA HTTP contract and server-side idempotency could not be verified because no endpoint or MESA source access was available."
+      ]
+    }
+  },
+  "mesa_contract": {
+    "source": "explicit_configuration_and_local_mock_contract",
+    "verified_by_live_http": "LIVE_MESA_NOT_VERIFIED",
+    "assumptions": [],
+    "unknowns": [
+      "Live MESA health, publish, and mutation-status paths",
+      "Live MESA request and response schemas",
+      "Live MESA asynchronous mutation state semantics",
+      "Live MESA server-side idempotency and duplicate suppression behavior"
+    ],
+    "policy": "Unknown routes are never guessed; all three routes must be explicitly configured from a documented or live-verified contract."
+  },
+  "invariants": {
+    "immutable_artifacts": true,
+    "version_record_isolation": true,
+    "deterministic_canonical_spans": true,
+    "quality_gate_release_guard": true,
+    "citation_lifecycle_enforced": true,
+    "certified_parser_auto_approval": true,
+    "mesa_v4_publisher_ledger": true,
+    "mesa_cross_release_dedup": true,
+    "mesa_api_key_secret_isolation": true,
+    "manual_push_gate_enforced": true,
+    "explicit_mesa_contract_required": true,
+    "mesa_live_contract_verified": false
+  },
+  "handoff": {
+    "next_phase": null,
+    "summary": "Prompt 5 final adversarial audit is complete. Local MESA_Data behavior is hardened and 304/304 tests pass; overall status remains partially_ready because the live external MESA contract is unavailable and was not fabricated.",
+    "must_verify": [
+      "Ensure live deployment environment configures MESA_DATA_MESA_API_KEY securely.",
+      "Configure documented MESA routes and verify health, publish, polling, COMMITTED truth, and server-side idempotency against a live endpoint."
+    ]
+  },
+  "last_updated_at": "2026-08-29T15:13:48Z"
+}

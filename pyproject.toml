@@ -40,6 +40,7 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "httpx2>=0.1.0",
     "mypy>=2.3.0",
     "pip-audit>=2.10.1",
     "pytest>=9.1.1",
@@ -59,4 +60,3 @@ ignore = ["BLE001", "B008", "DTZ007", "E501", "W293", "W291"]
 markers = [
     "scale: Large-scale or heavy benchmark tests processing thousands of records",
 ]
-

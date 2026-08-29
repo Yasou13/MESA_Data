@@ -268,9 +268,11 @@ def _run_harvest_batch_impl(
                     started_at=pipe_start_iso,
                     finished_at=pipe_finish_iso,
                     result="succeeded" if pipe_success else "failed",
-                    error_code=None
-                    if pipe_success
-                    else ("PIPELINE_FAILED" if pipe_res.status == "failed" else "UNEXPECTED_PIPELINE_STATUS"),
+                    error_code=(
+                        None
+                        if pipe_success
+                        else ("PIPELINE_FAILED" if pipe_res.status == "failed" else "UNEXPECTED_PIPELINE_STATUS")
+                    ),
                     error_message=None if pipe_success else f"Pipeline status: {pipe_res.status}",
                     artifact_id=artifact_id,
                     db_path=db_path,

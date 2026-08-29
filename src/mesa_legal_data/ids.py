@@ -58,7 +58,7 @@ def build_decision_id(
         return f"tr:case-law:{safe_court}:unknown:sha256-{artifact_sha256[:16]}"
 
 
-def build_citation_id(source_record_id: str, start: int, end: int, target_id: str) -> str:
-    raw = f"{source_record_id}:{start}:{end}:{target_id}"
+def build_citation_id(source_record_id: str, start: int, end: int, target_id: str | None) -> str:
+    raw = f"{source_record_id}:{start}:{end}:{target_id or 'unresolved'}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return f"citation:sha256:{digest}"

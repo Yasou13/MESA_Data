@@ -558,9 +558,66 @@ def web_cmd(
     typer.secho(
         f"Starting MESA Web Admin on http://{host}:{port} ...",
         fg=typer.colors.GREEN,
-        bold=True,
     )
-    uvicorn.run("mesa_legal_data.web.app:create_app", factory=True, host=host, port=port, reload=reload)
+    uvicorn.run("mesa_legal_data.web.app:create_app", host=host, port=port, reload=reload, factory=True)
+
+
+@app.command("sync")
+def sync_cmd(
+    source_id: str = typer.Option("resmi_gazete", "--source", help="Source ID to synchronize"),
+    max_items: int = typer.Option(20, "--max-items", help="Maximum items to fetch and process"),
+):
+    """
+    Executes idempotent synchronization pipeline:
+    discover -> fetch -> process -> quality -> auto approve -> sample queue -> ready.
+    Stops before MESA push (does NOT push to MESA).
+    """
+    from mesa_legal_data.catalog import get_connection
+    from mesa_legal_data.catalog import migrate as migrate_catalog
+    from mesa_legal_data.harvest.config import load_harvest_config
+    from mesa_legal_data.harvest.migrations import apply_harvest_migrations
+    from mesa_legal_data.harvest.service import run_collection_until_pause
+
+    if max_items < 1:
+        raise typer.BadParameter("--max-items must be at least 1")
+
+    migrate_catalog()
+    apply_harvest_migrations()
+
+    typer.secho("=== Starting MESA Legal Data Synchronization Pipeline ===", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"Source: {source_id} | Max items limit: {max_items}")
+
+    cfg = load_harvest_config()
+    if source_id in cfg.sources:
+        cfg.sources[source_id].budget.new_urls_per_run = max_items
+    cfg.runner.batch_size = max_items
+
+    res = run_collection_until_pause(
+        source_id=source_id,
+        harvest_cfg=cfg,
+        max_processed_items=max_items,
+    )
+
+    # Compute summary
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT count(*) FROM versions WHERE approval_status = 'approved'")
+    approved_count = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM versions WHERE approval_status = 'pending'")
+    pending_count = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM versions WHERE auto_approved = 1")
+    auto_approved_count = c.fetchone()[0]
+    conn.close()
+
+    typer.secho("\n=== Sync Summary ===", fg=typer.colors.GREEN, bold=True)
+    typer.echo(f"Items processed in batch : {res.get('processed', 0)}")
+    typer.echo(f"Auto-approved (all-time) : {auto_approved_count}")
+    typer.echo(f"Ready for MESA (approved): {approved_count}")
+    typer.echo(f"Needs Review             : {pending_count}")
+    typer.secho(
+        "Note: Pipeline stopped before MESA push (MESA push must be triggered manually via Web Panel).",
+        fg=typer.colors.YELLOW,
+    )
 
 
 if __name__ == "__main__":

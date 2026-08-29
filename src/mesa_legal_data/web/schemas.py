@@ -60,3 +60,37 @@ class IssueResolveRequest(BaseModel):
     status: str = Field(default="resolved")
     resolved_by: str = Field(default="web-user")
     resolution_note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class SourceSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    auto_approval_enabled: bool = False
+    weekly_sample_count: int = Field(default=10, ge=0, le=1000)
+
+
+class ParserCertifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    parser_name: str = Field(min_length=1, max_length=100)
+    parser_version: str = Field(min_length=1, max_length=50)
+    certified: bool = True
+    certified_by: Optional[str] = Field(default="operator", max_length=100)
+
+
+class MesaTargetSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str = Field(min_length=5, max_length=500)
+    tenant_id: str = Field(min_length=1, max_length=100)
+    workspace_id: str = Field(min_length=1, max_length=100)
+    dataset_id: str = Field(min_length=1, max_length=100)
+    agent_id: str = Field(min_length=1, max_length=100)
+    content_limit_chars: int = Field(default=32768, ge=1024, le=1048576)
+    health_path: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
+    publish_path: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
+    mutation_status_path_template: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
+
+
+class MesaPublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_key: str = Field(default="default")
+    release_id: Optional[str] = None

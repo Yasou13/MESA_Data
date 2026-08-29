@@ -271,7 +271,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
                 COUNT(DISTINCT a.artifact_id) as artifact_count,
                 MAX(a.retrieved_at) as latest_retrieved_at
             FROM spool.selected_records sr
-            JOIN records r ON r.record_id = sr.record_id
+            JOIN records r ON r.record_id = sr.record_id AND r.version_id = sr.version_id
             JOIN versions v ON v.version_id = r.version_id
             JOIN artifacts a ON a.artifact_id = v.artifact_id
             LEFT JOIN sources s ON s.source_id = a.source_id
@@ -344,24 +344,24 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             )
 
             item_cur = spool_conn.cursor()
-            item_cur.execute("SELECT record_id, record_sha256 FROM payload_spool")
+            item_cur.execute("SELECT record_id, record_sha256, version_id FROM selected_records")
             item_batch = []
             while True:
                 rows = item_cur.fetchmany(batch_size)
                 if not rows:
                     break
                 for r in rows:
-                    item_batch.append((release_id, r[0], r[1]))
+                    item_batch.append((release_id, r[0], r[1], r[2]))
                     if len(item_batch) >= batch_size:
                         conn.executemany(
-                            "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
+                            "INSERT INTO release_items (release_id, record_id, record_sha256, version_id) VALUES (?, ?, ?, ?)",
                             item_batch,
                         )
                         item_batch.clear()
 
             if item_batch:
                 conn.executemany(
-                    "INSERT INTO release_items (release_id, record_id, record_sha256) VALUES (?, ?, ?)",
+                    "INSERT INTO release_items (release_id, record_id, record_sha256, version_id) VALUES (?, ?, ?, ?)",
                     item_batch,
                 )
                 item_batch.clear()

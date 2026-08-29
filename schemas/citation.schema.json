@@ -18,9 +18,11 @@
     "id": { "type": "string" },
     "record_type": { "type": "string", "const": "citation" },
     "source_record_id": { "type": "string" },
-    "target_legislation_id": { "type": "string" },
+    "target_legislation_id": { "type": ["string", "null"] },
     "target_article_id": { "type": ["string", "null"] },
     "raw_text": { "type": "string" },
+    "citation_status": { "type": "string", "enum": ["EXTRACTED", "RESOLVED", "UNRESOLVED", "HUMAN_VERIFIED"] },
+    "relation_hint": { "type": ["string", "null"], "enum": ["amends", "repeals", "adds", null] },
     "source_span": {
       "type": ["object", "null"],
       "properties": {
