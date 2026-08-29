@@ -1,6 +1,6 @@
 # MESA Legal Data
 
-MESA Legal Data; MESA hukuk ekosistemi için resmî mevzuat, içtihat ve hukuki atıf verilerini toplayan, ham dosyaları değiştiremez biçimde saklayan, ayrıştıran, kanonikleştiren, doğrulayan ve MESA staging veritabanına aktaran uçtan uca veri platformudur.
+MESA Legal Data; resmî mevzuat, içtihat ve hukuki atıf verilerini otomatik toplayan, ham dosyaları değiştiremez biçimde saklayan, kanonikleştiren ve kalite kapılarından geçiren veri platformudur. Güvenli koşulları sağlayan sürümler otomatik onaylanabilir; istisnalar insan incelemesine gider. Gerçek MESA gönderimi yalnız insan başlatınca, otomatik oluşturulup doğrulanan immutable release paketinden yapılır. Yerel staging yalnız development aracıdır ve gerçek MESA değildir.
 
 ---
 
@@ -15,13 +15,14 @@ Ham Veri Deposu (raw/ — Değişmez Artifact + SHA-256 + Metadata)
               ↓
 Ayrıştırma & Kanonikleştirme Pipeline'ı (parse → canonical JSONL)
               ↓
-Gizlilik Taraması & Hukuki Metadata Doğrulaması (Schema & Privacy)
+Kalite Kapıları + Gizlilik + Hukuki Metadata Doğrulaması
               ↓
-İnsan Onayı (Human Review — approve / reject)
+Güvenli Otomatik Onay / İnsan İstisna İncelemesi
               ↓
-Release Derleme & Doğrulama (build → verify → publish)
+Immutable Release (otomatik build → verify → frozen summary → insan onayı)
               ↓
-MESA Staging DB (Atomik, Idempotent Import & Provenance)
+Gerçek MESA Publisher (idempotent, yalnız COMMITTED başarı)
+              └─ Yerel Development Staging (ayrı, isteğe bağlı)
 ```
 
 ---
@@ -62,13 +63,14 @@ uv run mesa-data harvest maintenance
 ### Güvenlik & Politika
 - Keşif ve indirmeler yalnızca `config/sources.yaml` ve `config/harvest.yaml` dosyalarında izin verilen resmi kaynaklarda çalışır.
 - İndirme işlemleri SSRF, MIME türü, boyut sınırı (~50 MB) ve hız sınırı denetimlerinden geçer.
-- Otomatik onay veya yayınlama yapılmaz; tüm veriler insan onayı (`review`) süzgecinden geçer.
+- Yalnız sertifikalı kaynak/parser ve PASS kalite koşullarını sağlayan sürümler güvenli biçimde otomatik onaylanabilir; diğerleri insan incelemesine gider.
+- MESA'ya gönderim hiçbir zaman otomatik başlamaz.
 
 ---
 
 ## Web Yönetim Paneli (FastAPI + HTML/CSS/JS)
 
-MESA Legal Data, tüm veri toplama, orkestrasyon, inceleme, release ve staging aktarım işlemlerini yönetebileceğiniz web tabanlı bir arayüze sahiptir.
+MESA Legal Data, veri toplama, kalite/istisna incelemesi, immutable release ve insan başlatmalı gerçek MESA gönderimini yönetebileceğiniz web tabanlı bir arayüze sahiptir. Panel normal akışta kullanıcıdan release ID istemez; exact release ve manifest özetini otomatik hazırlar.
 
 ### Web Panelini Başlatma
 ```bash
@@ -116,7 +118,7 @@ uv run mesa-data release build --release-id release-v1.0
 uv run mesa-data release verify --release-id release-v1.0
 uv run mesa-data release publish --release-id release-v1.0
 
-# E. MESA Staging DB Import
+# E. Yalnız geliştirme amaçlı yerel staging importu (gerçek MESA değildir)
 uv run mesa-data release import --release-id release-v1.0
 
 # F. İzlenebilirlik Sorgusu

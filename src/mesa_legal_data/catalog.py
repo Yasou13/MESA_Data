@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -188,9 +188,11 @@ def _normalize_legal_date(raw_date: str | None) -> str | None:
     if not raw_date:
         return None
     cleaned = str(raw_date).strip()
-    if len(cleaned) >= 10 and cleaned[:4].isdigit() and cleaned[4] == "-" and cleaned[7] == "-":
-        return cleaned[:10]
-    return None
+    candidate = cleaned[:10]
+    try:
+        return date.fromisoformat(candidate).isoformat()
+    except ValueError:
+        return None
 
 
 def upsert_document(
@@ -254,7 +256,8 @@ def recompute_document_current_version(
         """SELECT v.version_id, v.version_kind, v.snapshot_date, v.effective_from,
                   v.effective_to, v.canonical_sha256, v.revision_number,
                   v.supersedes_version_id, v.approval_status, v.quality_status,
-                  v.validation_status, v.created_at, a.metadata_json, a.retrieved_at, a.last_modified
+                  v.validation_status, v.created_at, v.auto_approved,
+                  a.metadata_json, a.retrieved_at, a.last_modified
            FROM versions v
            LEFT JOIN artifacts a ON a.artifact_id = v.artifact_id
            WHERE v.document_id = ?""",
@@ -267,9 +270,9 @@ def recompute_document_current_version(
     parsed_versions = []
     for r in rows:
         meta_dict: dict[str, Any] = {}
-        if r[12]:
+        if r[13]:
             try:
-                meta_dict = json.loads(r[12])
+                meta_dict = json.loads(r[13])
             except Exception:
                 pass
 
@@ -296,6 +299,7 @@ def recompute_document_current_version(
                 "quality_status": r[9],
                 "validation_status": r[10],
                 "created_at": r[11],
+                "auto_approved": bool(r[12]),
             }
         )
 
@@ -317,7 +321,9 @@ def recompute_document_current_version(
         and v["legal_date"] == chosen["legal_date"]
         and v["canonical_sha256"] != chosen["canonical_sha256"]
     ]
-    if same_date_candidates and not chosen.get("supersedes_version_id"):
+    ambiguity_group = [chosen, *same_date_candidates]
+    has_explicit_supersession = any(item.get("supersedes_version_id") for item in ambiguity_group)
+    if same_date_candidates and not has_explicit_supersession:
         doc_cur = conn.cursor()
         doc_cur.execute("SELECT current_version_id FROM documents WHERE document_id = ?", (document_id,))
         existing_doc = doc_cur.fetchone()
@@ -326,6 +332,37 @@ def recompute_document_current_version(
         existing_in_candidates = next((v for v in same_date_candidates if v["version_id"] == existing_cur_id), None)
         if existing_in_candidates:
             chosen = existing_in_candidates
+
+        # Same authoritative date plus different content has no safe automatic
+        # ordering. Preserve the existing current choice, revoke only automatic
+        # approvals, and create explicit version-scoped review evidence.
+        now = datetime.now(UTC).isoformat()
+        for ambiguous in ambiguity_group:
+            ambiguous_id = ambiguous["version_id"]
+            issue_id = "iss-version-date-" + hashlib.sha256(ambiguous_id.encode("utf-8")).hexdigest()[:16]
+            conn.execute(
+                """INSERT OR IGNORE INTO validation_issues (
+                       issue_id, subject_type, subject_id, version_id, record_instance_id,
+                       severity, code, message, details_json, status, opened_at
+                   ) VALUES (?, 'version', ?, ?, NULL, 'error', 'VERSION_DATE_AMBIGUITY',
+                             'Different content shares the same authoritative legal date without explicit supersession',
+                             ?, 'open', ?)""",
+                (
+                    issue_id,
+                    ambiguous_id,
+                    ambiguous_id,
+                    json.dumps({"legal_date": chosen["legal_date"], "document_id": document_id}),
+                    now,
+                ),
+            )
+            conn.execute(
+                """UPDATE versions
+                   SET approval_status = 'pending', auto_approved = 0
+                   WHERE version_id = ? AND auto_approved = 1""",
+                (ambiguous_id,),
+            )
+            if ambiguous.get("auto_approved"):
+                ambiguous["approval_status"] = "pending"
 
     chosen_version_id = chosen["version_id"]
 
@@ -460,6 +497,72 @@ def insert_artifact(
     metadata_json: str | None = None,
 ):
     with transaction(conn):
+        existing_row = conn.execute(
+            "SELECT artifact_id, document_id, metadata_json FROM artifacts WHERE sha256 = ?",
+            (sha256,),
+        ).fetchone()
+        if existing_row:
+            if existing_row[1] and document_id and existing_row[1] != document_id:
+                raise CatalogError(
+                    "ARTIFACT_DOCUMENT_COLLISION: identical payload is already bound to a different document"
+                )
+
+            try:
+                existing_meta = json.loads(existing_row[2] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                existing_meta = {}
+            try:
+                incoming_meta = json.loads(metadata_json or "{}")
+            except (TypeError, json.JSONDecodeError):
+                incoming_meta = {}
+
+            conflicts: dict[str, dict[str, Any]] = {}
+            changed = False
+            for key in ("publication_date", "source_date", "snapshot_date", "decision_date"):
+                incoming_value = incoming_meta.get(key)
+                existing_value = existing_meta.get(key)
+                if not incoming_value:
+                    continue
+                if not existing_value:
+                    existing_meta[key] = incoming_value
+                    changed = True
+                elif existing_value != incoming_value:
+                    conflicts[key] = {"existing": existing_value, "incoming": incoming_value}
+
+            if changed:
+                conn.execute(
+                    "UPDATE artifacts SET metadata_json = ? WHERE artifact_id = ?",
+                    (json.dumps(existing_meta), existing_row[0]),
+                )
+            if conflicts:
+                issue_id = (
+                    "iss-metadata-"
+                    + hashlib.sha256(f"{existing_row[0]}:{sorted(conflicts)}".encode("utf-8")).hexdigest()[:16]
+                )
+                conn.execute(
+                    """INSERT OR IGNORE INTO validation_issues (
+                           issue_id, subject_type, subject_id, version_id, record_instance_id,
+                           severity, code, message, details_json, status, opened_at
+                       ) VALUES (?, 'artifact', ?, NULL, NULL, 'error', 'ARTIFACT_METADATA_CONFLICT',
+                                 'Conflicting authoritative metadata was not overwritten', ?, 'open', ?)""",
+                    (
+                        issue_id,
+                        existing_row[0],
+                        json.dumps(conflicts, sort_keys=True),
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+                conn.execute(
+                    """UPDATE versions
+                       SET approval_status = 'pending', auto_approved = 0,
+                           quality_status = CASE WHEN quality_status = 'PASS' THEN 'REVIEW' ELSE quality_status END
+                       WHERE artifact_id = ?""",
+                    (existing_row[0],),
+                )
+                if existing_row[1]:
+                    recompute_document_current_version(conn, existing_row[1])
+            return
+
         conn.execute(
             """INSERT INTO artifacts (artifact_id, document_id, source_id, source_url, retrieved_at, fetch_method, http_status, declared_content_type, detected_content_type, byte_size, sha256, raw_path, etag, last_modified, transport_status, error_code, metadata_json)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -866,6 +969,7 @@ class ReleaseRecordRef:
     canonical_path: str
     canonical_line: int
     version_id: str
+    document_id: str
 
 
 def iter_records_for_release(
@@ -884,9 +988,11 @@ def iter_records_for_release(
               AND v.quality_status = 'PASS'
               AND v.privacy_status IN ('clean', 'approved')
         )
-        SELECT r.record_id, r.record_type, r.record_sha256, r.canonical_path, r.canonical_line, r.version_id
+        SELECT r.record_id, r.record_type, r.record_sha256, r.canonical_path, r.canonical_line,
+               r.version_id, v.document_id
         FROM records r
         JOIN eligible_versions ev ON r.version_id = ev.version_id
+        JOIN versions v ON v.version_id = r.version_id
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
         ORDER BY r.canonical_path ASC, r.canonical_line ASC
@@ -903,6 +1009,7 @@ def iter_records_for_release(
                 canonical_path=r[3],
                 canonical_line=r[4],
                 version_id=r[5],
+                document_id=r[6],
             )
 
 
@@ -915,6 +1022,7 @@ def list_records_for_release(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "canonical_path": ref.canonical_path,
             "canonical_line": ref.canonical_line,
             "record_sha256": ref.record_sha256,
+            "document_id": ref.document_id,
         }
         for ref in iter_records_for_release(conn)
     ]
@@ -1000,7 +1108,11 @@ def list_open_blocking_issues_for_version(conn: sqlite3.Connection, version_id: 
                  version_id = ? 
                  OR (subject_type = 'version' AND subject_id = ?)
                  OR record_instance_id IN (SELECT record_instance_id FROM records WHERE version_id = ?)
-                 OR (subject_type = 'record' AND subject_id IN (SELECT record_id FROM records WHERE version_id = ?))
+                 OR (
+                     subject_type = 'record'
+                     AND subject_id IN (SELECT record_id FROM records WHERE version_id = ?)
+                     AND (SELECT count(*) FROM records all_instances WHERE all_instances.record_id = validation_issues.subject_id) = 1
+                 )
                  OR (subject_type = 'record' AND subject_id IN (SELECT record_instance_id FROM records WHERE version_id = ?))
              )""",
         (version_id, version_id, version_id, version_id, version_id),
@@ -1141,8 +1253,11 @@ def approve_record_with_checks(
     rec_inst_id = rec.get("record_instance_id") or f"{rec['version_id']}:{rec['record_id']}"
     rec_ver_id = rec["version_id"]
 
-    blockers = list_open_blocking_issues(conn, subject_id=record_id)
-    blockers += list_open_blocking_issues(conn, subject_id=rec_inst_id)
+    blockers = list_open_blocking_issues(conn, subject_id=rec_inst_id)
+    instance_count = conn.execute("SELECT count(*) FROM records WHERE record_id = ?", (record_id,)).fetchone()[0]
+    if instance_count == 1:
+        blockers += list_open_blocking_issues(conn, subject_id=record_id)
+    blockers = list({blocker["issue_id"]: blocker for blocker in blockers}.values())
     if blockers:
         raise BlockingValidationIssueExists(f"Cannot approve record {record_id}: open blocker issues exist: {blockers}")
 
@@ -1844,6 +1959,13 @@ def create_record_revision(
     status: str = "draft",
     revision_id: str | None = None,
 ) -> str:
+    record_match = conn.execute(
+        """SELECT 1 FROM records
+           WHERE version_id = ? AND record_id = ? AND record_sha256 = ?""",
+        (version_id, original_record_id, original_record_sha256),
+    ).fetchone()
+    if not record_match:
+        raise CatalogError(f"Record revision identity does not match version {version_id}: {original_record_id}")
     if not revision_id:
         revision_id = f"rev-{uuid.uuid4().hex[:12]}"
     now = datetime.now(UTC).isoformat()
@@ -1943,8 +2065,9 @@ def approve_record_revision(
     with transaction(conn):
         conn.execute("UPDATE record_revisions SET status = 'approved' WHERE revision_id = ?", (revision_id,))
         conn.execute(
-            "UPDATE records SET approval_status = 'approved', validation_status = 'valid' WHERE record_id = ?",
-            (rev["revised_record_id"] or rev["original_record_id"],),
+            """UPDATE records SET approval_status = 'approved', validation_status = 'valid'
+               WHERE version_id = ? AND record_id = ?""",
+            (rev["version_id"], rev["revised_record_id"] or rev["original_record_id"]),
         )
         log_audit_event(
             conn,

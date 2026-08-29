@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from mesa_legal_data.catalog import (
     approve_record_with_checks,
     approve_version_streaming,
+    get_artifact,
     get_connection,
     get_db_path,
     get_document,
@@ -30,6 +31,7 @@ from mesa_legal_data.harvest.queue import _check_canonical_committed
 from mesa_legal_data.harvest.service_bridge import run_pipeline_item
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.pipeline import process_artifact_pipeline
+from mesa_legal_data.publisher.client import MesaClientError
 from mesa_legal_data.publisher.engine import build_delivery_plan, execute_publish_delivery
 from mesa_legal_data.publisher.ledger import upsert_mesa_target_settings
 from mesa_legal_data.publisher.models import DeliveryStatus, MesaTargetSettings
@@ -98,6 +100,85 @@ def _helper_create_law_artifact(
     )
     conn.close()
     return artifact_id
+
+
+def test_final_panel_confirmation_binds_exact_release_manifest_and_target(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    doc_id = "tr:legislation:law:panel-frozen-final"
+    art_v1 = _helper_create_law_artifact(
+        tmp_path,
+        doc_id,
+        "<html><body><h1>Panel V1</h1><p><b>Madde 1-</b> Frozen.</p></body></html>",
+        "art-panel-final-v1",
+        pub_date="2026-01-01",
+    )
+    process_artifact_pipeline(art_v1)
+    conn = get_connection()
+    v1 = get_version_for_artifact(conn, art_v1)
+    assert v1 is not None
+    approve_version_streaming(conn, version_id=v1["version_id"], reviewer="auditor")
+    conn.close()
+
+    client = TestClient(create_app())
+    prepared_response = client.post("/api/publisher/prepare?target_key=default", headers=WEB_HEADERS)
+    assert prepared_response.status_code == 200
+    prepared = prepared_response.json()["data"]
+    assert prepared["release_id"]
+    assert len(prepared["manifest_sha256"]) == 64
+    assert len(prepared["target_config_sha256"]) == 64
+
+    # Live catalog changes after the confirmation summary was created.
+    art_v2 = _helper_create_law_artifact(
+        tmp_path,
+        doc_id,
+        "<html><body><h1>Panel V2</h1><p><b>Madde 1-</b> Live changed.</p></body></html>",
+        "art-panel-final-v2",
+        pub_date="2026-02-01",
+    )
+    process_artifact_pipeline(art_v2)
+    conn = get_connection()
+    v2 = get_version_for_artifact(conn, art_v2)
+    assert v2 is not None
+    approve_version_streaming(conn, version_id=v2["version_id"], reviewer="auditor")
+    conn.close()
+
+    bad_response = client.post(
+        "/api/publisher/publish",
+        headers=WEB_HEADERS,
+        json={
+            "target_key": prepared["target_key"],
+            "release_id": prepared["release_id"],
+            "manifest_sha256": "0" * 64,
+            "target_config_sha256": prepared["target_config_sha256"],
+        },
+    )
+    assert bad_response.status_code == 409
+
+    captured: dict[str, Any] = {}
+
+    def fake_submit(conn, *, operation_type, requested_by, input_dict):
+        captured.update(input_dict)
+        return "op-frozen-final"
+
+    monkeypatch.setattr("mesa_legal_data.operations.submit_operation", fake_submit)
+    monkeypatch.setattr(
+        "mesa_legal_data.publisher.client.MesaClient.run_preflight_checks",
+        lambda self, **kwargs: type("Report", (), {"overall_status": "PASS", "checks": []})(),
+    )
+    response = client.post(
+        "/api/publisher/publish",
+        headers=WEB_HEADERS,
+        json={
+            "target_key": prepared["target_key"],
+            "release_id": prepared["release_id"],
+            "manifest_sha256": prepared["manifest_sha256"],
+            "target_config_sha256": prepared["target_config_sha256"],
+        },
+    )
+    assert response.status_code == 200
+    assert captured["release_id"] == prepared["release_id"]
+    frozen_chunks, _ = build_delivery_plan(release_id=captured["release_id"])
+    assert {chunk.version_id for chunk, _ in frozen_chunks} == {v1["version_id"]}
 
 
 def test_master_a_chronology_current_version_selection(tmp_path, monkeypatch):
@@ -718,4 +799,131 @@ def test_master_af_target_settings_contract_truthful_status(tmp_path, monkeypatc
 
     retrieved = get_mesa_target_settings(conn, "prod")
     assert retrieved.contract_source == "configured"
+    conn.close()
+
+
+def test_final_release_plan_is_frozen_version_aware_and_revocation_guarded(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    doc_id = "tr:legislation:law:frozen-final"
+    article = "<p><b>Madde 9-</b> Aynı madde metni.</p>"
+
+    art_v1 = _helper_create_law_artifact(
+        tmp_path,
+        doc_id,
+        f"<html><body><h1>V1</h1>{article}</body></html>",
+        "art-frozen-v1",
+        pub_date="2026-01-01",
+    )
+    process_artifact_pipeline(art_v1)
+    conn = get_connection()
+    v1 = get_version_for_artifact(conn, art_v1)
+    assert v1 is not None
+    approve_version_streaming(conn, version_id=v1["version_id"], reviewer="auditor")
+    conn.close()
+
+    art_v2 = _helper_create_law_artifact(
+        tmp_path,
+        doc_id,
+        f"<html><body><h1>V2 changed heading</h1>{article}</body></html>",
+        "art-frozen-v2",
+        pub_date="2026-02-01",
+    )
+    process_artifact_pipeline(art_v2)
+    conn = get_connection()
+    v2 = get_version_for_artifact(conn, art_v2)
+    assert v2 is not None
+    approve_version_streaming(conn, version_id=v2["version_id"], reviewer="auditor")
+
+    # Reproduce the dangerous equality case: the same logical Article 9 and
+    # hash are present in both versions. A record_id+hash join would leak v1.
+    r2 = conn.execute(
+        "SELECT canonical_path, canonical_line, record_sha256 FROM records WHERE version_id = ? AND record_type = 'article'",
+        (v2["version_id"],),
+    ).fetchone()
+    assert r2 is not None
+    conn.execute(
+        """UPDATE records SET canonical_path = ?, canonical_line = ?, record_sha256 = ?
+           WHERE version_id = ? AND record_type = 'article'""",
+        (r2[0], r2[1], r2[2], v1["version_id"]),
+    )
+    conn.close()
+
+    release_id = "rel-frozen-final"
+    build_release(release_id=release_id)
+
+    # Mutate the live catalog after the human-visible release was frozen.
+    art_v3 = _helper_create_law_artifact(
+        tmp_path,
+        doc_id,
+        "<html><body><h1>V3</h1><p><b>Madde 9-</b> Yeni canlı metin.</p></body></html>",
+        "art-frozen-v3",
+        pub_date="2026-03-01",
+    )
+    process_artifact_pipeline(art_v3)
+    conn = get_connection()
+    v3 = get_version_for_artifact(conn, art_v3)
+    assert v3 is not None
+    approve_version_streaming(conn, version_id=v3["version_id"], reviewer="auditor")
+    conn.close()
+
+    chunks, _ = build_delivery_plan(release_id=release_id)
+    assert chunks
+    assert {chunk.version_id for chunk, _ in chunks} == {v2["version_id"]}
+    assert all("Yeni canlı metin" not in chunk.content for chunk, _ in chunks)
+
+    conn = get_connection()
+    conn.execute("UPDATE releases SET status = 'revoked' WHERE release_id = ?", (release_id,))
+    conn.close()
+    with pytest.raises(MesaClientError, match="lifecycle status revoked"):
+        build_delivery_plan(release_id=release_id)
+
+
+def test_final_invalid_calendar_dates_and_metadata_fill_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    doc_id = "tr:legislation:law:calendar-final"
+    html = "<html><body><h1>Date Law</h1><p><b>Madde 1-</b> Metin.</p></body></html>"
+
+    art_invalid = _helper_create_law_artifact(
+        tmp_path, doc_id, html, "art-invalid-date", source_id="resmi_gazete", pub_date="2026-02-31"
+    )
+    process_artifact_pipeline(art_invalid)
+    conn = get_connection()
+    invalid_version = get_version_for_artifact(conn, art_invalid)
+    assert invalid_version is not None
+    assert "unknown-date" in invalid_version["version_id"]
+    assert invalid_version["approval_status"] == "pending"
+    assert invalid_version["quality_status"] != "PASS"
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM validation_issues WHERE version_id = ? AND code = 'LEGAL_DATE_INVALID'",
+            (invalid_version["version_id"],),
+        ).fetchone()[0]
+        == 1
+    )
+    conn.close()
+
+    # Identical immutable bytes may gain a missing authoritative date, but an
+    # existing value is never silently overwritten by a conflicting value.
+    meta_doc = "tr:legislation:law:metadata-final"
+    meta_html = "<html><body><h1>Metadata Law</h1><p><b>Madde 1-</b> Ayrı metin.</p></body></html>"
+    first = _helper_create_law_artifact(tmp_path, meta_doc, meta_html, "art-meta-first")
+    _helper_create_law_artifact(tmp_path, meta_doc, meta_html, "art-meta-second", pub_date="2026-08-10")
+    conn = get_connection()
+    stored = get_artifact(conn, first)
+    assert stored is not None
+    assert json.loads(stored["metadata_json"])["publication_date"] == "2026-08-10"
+    conn.close()
+
+    _helper_create_law_artifact(tmp_path, meta_doc, meta_html, "art-meta-third", pub_date="2026-08-11")
+    conn = get_connection()
+    stored = get_artifact(conn, first)
+    assert stored is not None
+    assert json.loads(stored["metadata_json"])["publication_date"] == "2026-08-10"
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM validation_issues WHERE subject_id = ? AND code = 'ARTIFACT_METADATA_CONFLICT'",
+            (first,),
+        ).fetchone()[0]
+        == 1
+    )
     conn.close()

@@ -13,6 +13,7 @@ const state = {
   harvestPollTimer: null,
   activeReviewTab: "pending",
   issueFilterSubjectId: null,
+  preparedMesaRelease: null,
 };
 
 const VIEW_DESCRIPTIONS = {
@@ -122,7 +123,7 @@ function humanTerm(term) {
     warning: "Uyarı",
     verified: "Doğrulandı",
     published: "Yayınlandı",
-    imported: "MESA'ya aktarıldı",
+    imported: "Yerel staging'e aktarıldı",
     revoked: "Geri çekildi",
     open: "Çözüm bekliyor",
     resolved: "Çözüldü",
@@ -517,7 +518,7 @@ async function loadHomeView() {
       nextBtn.onclick = () => switchView("collect");
     } else {
       nextTitle.textContent = "Tüm veriler güncel ve hazır";
-      nextDesc.textContent = "Onaylanan verileri dosya olarak indirebilir veya MESA'ya aktarabilirsiniz.";
+      nextDesc.textContent = "Onaylanan verileri immutable release olarak hazırlayıp insan onayıyla MESA'ya gönderebilirsiniz.";
       nextBtn.textContent = "Dışa Aktar";
       nextBtn.onclick = () => switchView("export");
     }
@@ -1738,18 +1739,24 @@ async function handleMesaPreflight() {
 
 async function handleMesaPublishTrigger() {
   try {
-    const summary = await apiRequest("/api/publisher/ready-summary");
-    const settings = await apiRequest("/api/publisher/settings");
+    const prepared = await apiRequest("/api/publisher/prepare?target_key=default", { method: "POST" });
+    const summary = prepared.summary;
+    const settings = prepared.target;
+    state.preparedMesaRelease = prepared;
 
     const elDocs = document.getElementById("confirm-mesa-docs");
     const elVers = document.getElementById("confirm-mesa-versions");
     const elChunks = document.getElementById("confirm-mesa-chunks");
     const elTarget = document.getElementById("confirm-mesa-target");
+    const elRelease = document.getElementById("confirm-mesa-release");
+    const elManifest = document.getElementById("confirm-mesa-manifest");
 
     if (elDocs) elDocs.textContent = `${summary.ready_documents} belge`;
     if (elVers) elVers.textContent = `${summary.ready_versions} versiyon`;
     if (elChunks) elChunks.textContent = `${summary.estimated_chunks} chunk (${summary.new_chunks_to_send} yeni gönderilecek)`;
     if (elTarget) elTarget.textContent = `${settings.tenant_id} / ${settings.workspace_id} / ${settings.dataset_id} (${settings.base_url})`;
+    if (elRelease) elRelease.textContent = prepared.release_id;
+    if (elManifest) elManifest.textContent = prepared.manifest_sha256;
 
     showModal("modal-mesa-confirm");
   } catch (err) {
@@ -1758,6 +1765,11 @@ async function handleMesaPublishTrigger() {
 }
 
 async function handleMesaConfirmPublish() {
+  const prepared = state.preparedMesaRelease;
+  if (!prepared) {
+    showToast("Doğrulanmış yayın paketi bulunamadı. Özeti yeniden hazırlayın.", "warning");
+    return;
+  }
   hideModal("modal-mesa-confirm");
   const boxProg = document.getElementById("box-mesa-delivery-progress");
   const boxPartial = document.getElementById("box-mesa-partial-failure");
@@ -1769,9 +1781,15 @@ async function handleMesaConfirmPublish() {
     const res = await apiRequest("/api/publisher/publish", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target_key: "default" }),
+      body: JSON.stringify({
+        target_key: prepared.target_key,
+        release_id: prepared.release_id,
+        manifest_sha256: prepared.manifest_sha256,
+        target_config_sha256: prepared.target_config_sha256,
+      }),
     });
 
+    state.preparedMesaRelease = null;
     activeMesaDeliveryId = res.delivery_id;
     showToast(`MESA aktarımı başlatıldı (Teslimat: ${activeMesaDeliveryId}).`, "info");
     startMesaDeliveryPolling(activeMesaDeliveryId);
@@ -1970,7 +1988,7 @@ async function runMesaTransferSequence() {
     await apiRequest(`/api/releases/${releaseId}/import-staging`, { method: "POST" });
 
     statusText.textContent = "✓ Yerel Development Staging release paketi oluşturuldu.";
-    showToast("Onaylı kayıtlar yerel development staging ortamına aktarıldı. (MESA v4 publisher entegrasyonu sonraki aşamada tamamlanacaktır)", "success");
+    showToast("Onaylı kayıtlar yalnız yerel development staging ortamına aktarıldı.", "success");
   } catch (err) {
     console.error("Staging release error:", err);
     statusText.textContent = `İşlem tamamlanamadı: ${err.message}`;

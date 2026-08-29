@@ -1,8 +1,9 @@
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
@@ -35,6 +36,7 @@ from mesa_legal_data.publisher.client import MesaClient
 from mesa_legal_data.publisher.engine import (
     build_delivery_plan,
     retry_delivery_failures,
+    target_config_sha256,
 )
 from mesa_legal_data.publisher.ledger import (
     get_delivery,
@@ -78,7 +80,9 @@ def ok_response(data: Any = None) -> Dict[str, Any]:
     return {"ok": True, "data": data}
 
 
-def error_response(code: str, message: str, status_code: int = 400, details: Optional[Dict[str, Any]] = None):
+def error_response(
+    code: str, message: str, status_code: int = 400, details: Optional[Dict[str, Any]] = None
+) -> NoReturn:
     raise HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message, "details": details or {}},
@@ -1671,7 +1675,6 @@ async def publish_release_endpoint(release_id: str):
 
 
 @router.post("/releases/{release_id:path}/import")
-@router.post("/releases/{release_id:path}/import-to-mesa")
 @router.post("/releases/{release_id:path}/import-to-staging")
 @router.post("/releases/{release_id:path}/import-staging")
 async def import_release_endpoint(release_id: str):
@@ -2197,14 +2200,65 @@ def get_publisher_ready_summary_endpoint(target_key: str = "default"):
     return ok_response(summary.model_dump())
 
 
+@router.post("/publisher/prepare")
+async def prepare_publisher_release_endpoint(target_key: str = "default"):
+    """Freeze, verify, and summarize the exact release a human will confirm."""
+    async with write_lock.acquire_write():
+        release_id = f"release-mesa-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        try:
+            build_release(release_id=release_id)
+            verify_release(release_id)
+            conn = get_connection()
+            release = get_release(conn, release_id)
+            settings = get_mesa_target_settings(conn, target_key)
+            conn.close()
+            if not release or release["status"] != "verified":
+                error_response("RELEASE_NOT_VERIFIED", "Frozen release did not reach verified status", status_code=409)
+            _, summary = build_delivery_plan(target_key=target_key, release_id=release_id)
+            return ok_response(
+                {
+                    "release_id": release_id,
+                    "manifest_sha256": release["manifest_sha256"],
+                    "target_key": target_key,
+                    "target_config_sha256": target_config_sha256(settings),
+                    "target": {
+                        "base_url": settings.base_url,
+                        "tenant_id": settings.tenant_id,
+                        "workspace_id": settings.workspace_id,
+                        "dataset_id": settings.dataset_id,
+                    },
+                    "summary": summary.model_dump(),
+                }
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            error_response("RELEASE_PREPARE_FAILED", str(exc), status_code=400)
+
+
 @router.post("/publisher/publish")
 def start_publisher_delivery_endpoint(req: MesaPublishRequest):
     from mesa_legal_data.operations import submit_operation
 
     conn = get_connection()
     target_settings = get_mesa_target_settings(conn, req.target_key)
+    release = get_release(conn, req.release_id)
+    if not release:
+        conn.close()
+        error_response("RELEASE_NOT_FOUND", f"Release {req.release_id} not found", status_code=404)
+    if release["status"] not in ("verified", "published"):
+        conn.close()
+        error_response(
+            "RELEASE_STATUS_INVALID", f"Release status {release['status']} is not publishable", status_code=409
+        )
+    if release["manifest_sha256"] != req.manifest_sha256:
+        conn.close()
+        error_response("RELEASE_CONFIRMATION_MISMATCH", "Confirmed release manifest does not match", status_code=409)
+    if target_config_sha256(target_settings) != req.target_config_sha256:
+        conn.close()
+        error_response("TARGET_CONFIRMATION_MISMATCH", "MESA target changed after confirmation", status_code=409)
     client = MesaClient(settings=target_settings)
-    _, summary = build_delivery_plan(target_key=req.target_key)
+    _, summary = build_delivery_plan(target_key=req.target_key, release_id=req.release_id)
 
     report = client.run_preflight_checks(
         ready_documents_count=summary.ready_documents,
@@ -2228,6 +2282,7 @@ def start_publisher_delivery_endpoint(req: MesaPublishRequest):
             "delivery_id": delivery_id,
             "release_id": req.release_id,
             "target_key": req.target_key,
+            "target_config_sha256": req.target_config_sha256,
         },
     )
     conn.close()

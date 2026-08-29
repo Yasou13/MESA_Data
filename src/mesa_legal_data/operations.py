@@ -230,6 +230,7 @@ def _run_operation_task(operation_id: str):
                 delivery_id=del_id,
                 release_id=rel_id,
                 target_key=target_key,
+                expected_target_config_sha256=inp.get("target_config_sha256"),
                 progress_callback=progress_cb,
                 is_cancelled_cb=is_cancelled_cb,
             )

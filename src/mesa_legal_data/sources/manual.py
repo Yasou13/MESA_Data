@@ -262,6 +262,27 @@ def import_manual_url(
                 stable_key=doc_key,
                 lifecycle_status="fetched",
             )
+            insert_artifact(
+                conn=conn,
+                artifact_id=existing["artifact_id"],
+                document_id=document_id,
+                source_id=existing["source_id"],
+                source_url=existing["source_url"],
+                retrieved_at=existing["retrieved_at"],
+                fetch_method=existing["fetch_method"],
+                http_status=existing["http_status"],
+                declared_content_type=existing["declared_content_type"],
+                detected_content_type=existing["detected_content_type"],
+                byte_size=existing["byte_size"],
+                sha256=artifact_sha256,
+                raw_path=existing["raw_path"],
+                etag=existing["etag"],
+                last_modified=existing["last_modified"],
+                transport_status=existing["transport_status"],
+                error_code=existing["error_code"],
+                metadata_json=json.dumps({"publication_date": publication_date}),
+            )
+            refreshed = get_artifact(conn, artifact_id) or existing
             conn.close()
             return FetchedArtifact(
                 artifact_id=artifact_id,
@@ -278,7 +299,7 @@ def import_manual_url(
                 raw_path=existing["raw_path"],
                 transport_status=existing.get("transport_status", "verified"),
                 is_duplicate=True,
-                metadata={},
+                metadata=json.loads(refreshed.get("metadata_json") or "{}"),
             )
 
         ext = ".html" if "html" in detected_mime else (".pdf" if "pdf" in detected_mime else ".bin")

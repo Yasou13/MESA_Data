@@ -214,7 +214,7 @@ def test_release(db_conn):
     )
     insert_record(db_conn, rec_id, ver_id, "t", "p", 1, "h", "v", "a")
 
-    add_release_item(db_conn, rel_id, rec_id, "hashA")
+    add_release_item(db_conn, rel_id, rec_id, "h", version_id=ver_id)
 
     cursor = db_conn.cursor()
     cursor.execute("SELECT count(*) FROM release_items WHERE release_id = ?", (rel_id,))

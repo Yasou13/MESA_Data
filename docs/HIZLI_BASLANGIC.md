@@ -39,7 +39,9 @@ Web arayüzünde herhangi bir teknik terim veya karmaşık ayar bilmenize gerek 
 ### Adım 3: Dışa Aktar
 1. Sol menüden **Dışa Aktar** ekranına gidin.
 2. **"Dosya olarak indir"**: JSONL (model eğitimi ve veri bilimi için) veya CSV (Excel için) biçimini seçip **"Dışa aktarmayı oluştur"** butonuna tıklayın.
-3. **"MESA'ya aktar"**: Tek tıkla doğrulanmış paketi MESA veri havuzuna gönderin.
+3. **"MESA'ya gönder"**: Panel uygun güncel sürümlerden immutable release'i otomatik oluşturur ve doğrular. Release ID, manifest SHA-256 ve hedefi gösteren frozen özeti onayladığınızda yalnız o exact paket gerçek MESA publisher'a verilir. Onaydan sonra katalog değişse bile gönderim kapsamı değişmez.
+
+> **Not:** “Yerel Development Staging / Yerel Staging'e Aktar” ayrı bir geliştirme aracıdır; gerçek MESA gönderimi değildir.
 
 ---
 

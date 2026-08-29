@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -86,6 +87,7 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
     }
 
     seen_record_ids: set[str] = set()
+    payload_identities: dict[str, tuple[str, str]] = {}
 
     for r_type, (rel_path, expected_count) in type_to_file.items():
         jsonl_path = release_dir / rel_path
@@ -115,11 +117,54 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
                 if r_id in seen_record_ids:
                     raise ReleaseVerificationError(f"Duplicate record ID '{r_id}' found in release in {rel_path}")
                 seen_record_ids.add(r_id)
+                payload_identities[r_id] = (r_type, hashlib.sha256(line.encode("utf-8")).hexdigest())
 
         if actual_count != expected_count:
             raise ReleaseVerificationError(
                 f"Count mismatch in {rel_path}: expected {expected_count}, found {actual_count} lines"
             )
+
+    # The release-owned identity index binds every payload to its exact legal
+    # version and document. Publisher planning consumes this verified file,
+    # never a reconstructed live-catalog join.
+    index_path = release_dir / "data/release-index.jsonl"
+    if not index_path.exists():
+        # Legacy release packages predate publisher-bound version identity.
+        # They remain verifiable for local archival/import, but the MESA
+        # publisher rejects them because it requires this frozen index.
+        return True
+
+    indexed_ids: set[str] = set()
+    indexed_instances: set[tuple[str, str]] = set()
+    with open(index_path, "r", encoding="utf-8") as f:
+        for idx, line in enumerate(f, start=1):
+            try:
+                item = json.loads(line)
+                record_id = item["record_id"]
+                record_type = item["record_type"]
+                record_sha256 = item["record_sha256"]
+                payload_sha256 = item["payload_sha256"]
+                version_id = item["version_id"]
+                document_id = item["document_id"]
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise ReleaseVerificationError(f"Invalid release index entry at line {idx}: {exc}") from exc
+            if not all(
+                isinstance(value, str) and value
+                for value in (record_id, record_type, record_sha256, payload_sha256, version_id, document_id)
+            ):
+                raise ReleaseVerificationError(f"Empty or non-string release index identity at line {idx}")
+            if record_id in indexed_ids or (version_id, record_id) in indexed_instances:
+                raise ReleaseVerificationError(
+                    f"Duplicate release index identity at line {idx}: {version_id}/{record_id}"
+                )
+            expected_payload = payload_identities.get(record_id)
+            if expected_payload != (record_type, payload_sha256):
+                raise ReleaseVerificationError(f"Release index does not match payload for record '{record_id}'")
+            indexed_ids.add(record_id)
+            indexed_instances.add((version_id, record_id))
+
+    if indexed_ids != seen_record_ids:
+        raise ReleaseVerificationError("Release index membership does not exactly match packaged payloads")
 
     return True
 

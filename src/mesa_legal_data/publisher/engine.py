@@ -2,6 +2,7 @@ import hashlib
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 from mesa_legal_data.catalog import get_connection
@@ -25,6 +26,102 @@ from mesa_legal_data.publisher.models import (
     MutationState,
     SourceChunk,
 )
+
+_RELEASE_TYPE_FILES = {
+    "legislation": "data/legislation.jsonl",
+    "article": "data/articles.jsonl",
+    "decision": "data/decisions.jsonl",
+    "citation": "data/citations.jsonl",
+}
+
+
+def target_config_sha256(settings) -> str:
+    """Hash the exact non-secret MESA target configuration confirmed by a human."""
+    payload = {
+        "target_key": settings.target_key,
+        "base_url": settings.base_url,
+        "tenant_id": settings.tenant_id,
+        "workspace_id": settings.workspace_id,
+        "dataset_id": settings.dataset_id,
+        "agent_id": settings.agent_id,
+        "content_limit_chars": settings.content_limit_chars,
+        "contract_source": settings.contract_source,
+        "health_path": settings.health_path,
+        "publish_path": settings.publish_path,
+        "mutation_status_path_template": settings.mutation_status_path_template,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _load_frozen_release_versions(conn, release_id: str, data_root: Path) -> list[dict[str, Any]]:
+    """Load exact publisher input from the verified immutable release package."""
+    from mesa_legal_data.catalog import get_release
+    from mesa_legal_data.release.verifier import verify_release
+
+    release = get_release(conn, release_id)
+    if not release:
+        raise MesaClientError(f"Release {release_id} does not exist")
+    if release["status"] not in {"verified", "published"}:
+        raise MesaClientError(
+            f"Release {release_id} cannot be published to MESA from lifecycle status {release['status']}"
+        )
+    if not verify_release(release_id):
+        raise MesaClientError(f"Cannot build delivery plan from unverified or invalid release {release_id}")
+
+    release_dir = data_root / "releases" / release_id
+    index_path = release_dir / "data/release-index.jsonl"
+    if not index_path.exists():
+        raise MesaClientError(f"Release {release_id} lacks frozen publisher version identity")
+
+    payloads: dict[str, tuple[str, str, dict[str, Any]]] = {}
+    for record_type, rel_path in _RELEASE_TYPE_FILES.items():
+        path = release_dir / rel_path
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                record_id = item.get("id")
+                if not isinstance(record_id, str) or not record_id:
+                    raise MesaClientError(f"Release {release_id} contains a payload without record identity")
+                payloads[record_id] = (record_type, hashlib.sha256(line.encode("utf-8")).hexdigest(), item)
+
+    versions: dict[str, dict[str, Any]] = {}
+    index_identities: set[tuple[str, str, str]] = set()
+    with open(index_path, "r", encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            idx = json.loads(line)
+            record_id = idx["record_id"]
+            record_type = idx["record_type"]
+            record_sha256 = idx["record_sha256"]
+            payload_sha256 = idx["payload_sha256"]
+            version_id = idx["version_id"]
+            document_id = idx["document_id"]
+            payload = payloads.get(record_id)
+            if payload is None or payload[:2] != (record_type, payload_sha256):
+                raise MesaClientError(f"Release {release_id} publisher index mismatch for {record_id}")
+            index_identities.add((version_id, record_id, record_sha256))
+            version = versions.setdefault(
+                version_id,
+                {"version_id": version_id, "document_id": document_id, "packaged_records": []},
+            )
+            if version["document_id"] != document_id:
+                raise MesaClientError(f"Release {release_id} maps version {version_id} to multiple documents")
+            version["packaged_records"].append(payload[2])
+
+    db_rows = conn.execute(
+        "SELECT version_id, record_id, record_sha256 FROM release_items WHERE release_id = ?",
+        (release_id,),
+    ).fetchall()
+    if {(row[0], row[1], row[2]) for row in db_rows} != index_identities:
+        raise MesaClientError(f"Release {release_id} catalog membership does not match its frozen package")
+
+    return [versions[key] for key in sorted(versions)]
 
 
 def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
@@ -80,24 +177,11 @@ def build_delivery_plan(
     data_root = load_settings().data_root_path
 
     if release_id:
-        from mesa_legal_data.release.verifier import verify_release
-
-        if not verify_release(release_id):
+        try:
+            versions = _load_frozen_release_versions(conn, release_id, data_root)
+        except Exception:
             conn.close()
-            raise MesaClientError(f"Cannot build delivery plan from unverified or invalid release {release_id}")
-
-        c_ver = conn.cursor()
-        c_ver.execute(
-            """SELECT DISTINCT r.version_id, v.document_id, d.family
-               FROM release_items ri
-               JOIN records r ON r.record_id = ri.record_id AND r.record_sha256 = ri.record_sha256
-               JOIN versions v ON v.version_id = r.version_id
-               JOIN documents d ON d.document_id = v.document_id
-               WHERE ri.release_id = ?""",
-            (release_id,),
-        )
-        version_rows = c_ver.fetchall()
-        versions = [{"version_id": r[0], "document_id": r[1], "family": r[2]} for r in version_rows]
+            raise
         blocked_count = 0
     else:
         versions, blocked_count = get_ready_versions_and_content(conn)
@@ -113,17 +197,35 @@ def build_delivery_plan(
         v_id = v_info["version_id"]
         canonical_text = ""
         records: list[dict[str, Any]] = []
-        c_cur = conn.cursor()
         if release_id:
-            c_cur.execute(
-                """SELECT r.record_id, r.record_type, r.canonical_path, r.canonical_line, r.record_sha256
-                   FROM release_items ri
-                   JOIN records r ON r.record_id = ri.record_id AND r.record_sha256 = ri.record_sha256
-                   WHERE ri.release_id = ? AND r.version_id = ?
-                   ORDER BY r.canonical_path, r.canonical_line""",
-                (release_id, v_id),
-            )
+            packaged_records = v_info["packaged_records"]
+            for item in packaged_records:
+                record_type = item.get("record_type")
+                record_id = item.get("id")
+                if record_type == "legislation":
+                    canonical_text = item.get("full_text") or ""
+                elif record_type == "decision":
+                    canonical_text = item.get("text") or ""
+                elif record_type == "article":
+                    span = item.get("source_span") or {}
+                    records.append(
+                        {
+                            "record_id": record_id,
+                            "record_type": "article",
+                            "char_start": span.get("char_start"),
+                            "char_end": span.get("char_end"),
+                            "ordinal": item.get("ordinal", 0),
+                            "title": item.get("heading"),
+                            "article_number": item.get("article_number"),
+                            "content": item.get("text") or "",
+                        }
+                    )
+            if not canonical_text.strip():
+                conn.close()
+                raise MesaClientError(f"Release {release_id} version {v_id} has no canonical document text")
+            rec_rows = []
         else:
+            c_cur = conn.cursor()
             c_cur.execute(
                 """SELECT record_id, record_type, canonical_path, canonical_line, record_sha256
                    FROM records
@@ -131,7 +233,7 @@ def build_delivery_plan(
                    ORDER BY canonical_path, canonical_line""",
                 (v_id,),
             )
-        rec_rows = c_cur.fetchall()
+            rec_rows = c_cur.fetchall()
 
         try:
             lines_by_path: dict[str, list[str]] = {}
@@ -217,6 +319,7 @@ def execute_publish_delivery(
     delivery_id: str | None = None,
     release_id: str | None = None,
     target_key: str = "default",
+    expected_target_config_sha256: str | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     is_cancelled_cb: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -231,6 +334,9 @@ def execute_publish_delivery(
     """
     conn = get_connection()
     target_settings = get_mesa_target_settings(conn, target_key)
+    if expected_target_config_sha256 and target_config_sha256(target_settings) != expected_target_config_sha256:
+        conn.close()
+        raise MesaClientError("MESA target configuration changed after human confirmation")
     client = MesaClient(settings=target_settings)
 
     if not delivery_id:
@@ -254,12 +360,20 @@ def execute_publish_delivery(
         raise MesaClientError(f"Publisher preflight failed: {failures}")
 
     # 2. Create delivery in ledger
+    release_manifest_sha256 = None
+    if release_id:
+        manifest_row = conn.execute(
+            "SELECT manifest_sha256 FROM releases WHERE release_id = ?", (release_id,)
+        ).fetchone()
+        release_manifest_sha256 = manifest_row[0] if manifest_row else None
     create_delivery(
         conn,
         delivery_id=delivery_id,
         release_id=release_id,
         target_key=target_key,
         total_items=total_items,
+        target_config_sha256=target_config_sha256(target_settings),
+        release_manifest_sha256=release_manifest_sha256,
     )
 
     update_delivery_progress(
@@ -276,11 +390,18 @@ def execute_publish_delivery(
     skipped_count = 0
     last_err = None
     cancelled_early = False
+    release_invalidated = False
 
     for idx, (chunk, is_already_done) in enumerate(chunk_tuples, start=1):
         if is_cancelled_cb and is_cancelled_cb():
             cancelled_early = True
             break
+        if release_id:
+            status_row = conn.execute("SELECT status FROM releases WHERE release_id = ?", (release_id,)).fetchone()
+            if not status_row or status_row[0] not in ("verified", "published"):
+                release_invalidated = True
+                last_err = f"Release {release_id} is no longer in a publishable lifecycle state"
+                break
 
         item_id = f"item-{uuid.uuid4().hex[:12]}"
         idemp_key = generate_idempotency_key(
@@ -412,6 +533,10 @@ def execute_publish_delivery(
     awaiting_count = cursor.fetchone()[0]
     if cancelled_early or (is_cancelled_cb and is_cancelled_cb()):
         final_delivery_status = DeliveryStatus.CANCELLED.value
+    elif release_invalidated:
+        final_delivery_status = (
+            DeliveryStatus.PARTIAL.value if committed_count > 0 or skipped_count > 0 else DeliveryStatus.FAILED.value
+        )
     elif awaiting_count:
         final_delivery_status = DeliveryStatus.AWAITING_MUTATION.value
     elif total_items == 0:
@@ -459,6 +584,26 @@ def retry_delivery_failures(
         raise ValueError(f"Delivery {delivery_id} not found")
 
     target_settings = get_mesa_target_settings(conn, delivery.get("target_key", "default"))
+    expected_target_hash = delivery.get("target_config_sha256")
+    if expected_target_hash and target_config_sha256(target_settings) != expected_target_hash:
+        conn.close()
+        raise MesaClientError("MESA target configuration changed after human confirmation")
+    release_id = delivery.get("release_id")
+    if release_id:
+        from mesa_legal_data.release.verifier import verify_release
+
+        release_row = conn.execute(
+            "SELECT status, manifest_sha256 FROM releases WHERE release_id = ?", (release_id,)
+        ).fetchone()
+        expected_manifest = delivery.get("release_manifest_sha256")
+        if (
+            not release_row
+            or release_row[0] not in ("verified", "published")
+            or (expected_manifest and release_row[1] != expected_manifest)
+        ):
+            conn.close()
+            raise MesaClientError("Confirmed release is no longer publishable")
+        verify_release(release_id)
     client = MesaClient(settings=target_settings)
 
     failed_items = list_failed_delivery_items(conn, delivery_id)

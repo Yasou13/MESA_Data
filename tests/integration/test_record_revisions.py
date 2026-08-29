@@ -67,6 +67,37 @@ def test_record_revision_flow(tmp_path, monkeypatch):
     rec_after = get_record(conn, "rec-orig-1")
     assert rec_after["approval_status"] == "approved"
 
+    # The same logical record in another version must not be approved by a
+    # revision decision scoped to ver-rev-1.
+    c.execute(
+        """INSERT INTO artifacts (artifact_id, document_id, source_id, source_url, retrieved_at, fetch_method, http_status, declared_content_type, detected_content_type, byte_size, sha256, raw_path, transport_status, metadata_json)
+           VALUES ('art-rev-2', 'doc-rev-1', 'mevzuat', 'https://example.com/rev2.html', '2026-08-06T00:00:00Z', 'manual', 200, 'text/html', 'text/html', 10, 'sha-rev-2', 'raw/rev2.html', 'fetched', '{}')"""
+    )
+    c.execute(
+        """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at, revision_number)
+           VALUES ('ver-rev-2', 'doc-rev-1', 'art-rev-2', 'snapshot', 'canonical/rev2.jsonl', 1, 'sha-ver-rev-2', 'test_parser', '1.0', '1.0', 'valid', 'clean', 'pending', '2026-08-06T00:00:00Z', 2)"""
+    )
+    c.execute(
+        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('rec-orig-1', 'ver-rev-2', 'article', 'canonical/rev2.jsonl', 1, 'sha-rec-orig-2', 'valid', 'pending', '2026-08-06T00:00:00Z')"""
+    )
+    c.execute("UPDATE records SET approval_status = 'pending' WHERE version_id = 'ver-rev-1'")
+    scoped_rev = create_record_revision(
+        conn,
+        original_record_id="rec-orig-1",
+        original_record_sha256="sha-rec-orig-1",
+        revised_record_id="rec-orig-1",
+        revised_record_sha256="sha-rec-scoped",
+        version_id="ver-rev-1",
+        change_type="scope_check",
+        patch_json="{}",
+        reason="Version isolation",
+        created_by="editor_1",
+    )
+    approve_record_revision(conn, scoped_rev, reviewer="lead_editor")
+    statuses = dict(conn.execute("SELECT version_id, approval_status FROM records WHERE record_id = 'rec-orig-1'"))
+    assert statuses == {"ver-rev-1": "approved", "ver-rev-2": "pending"}
+
     # 3. Reject another revision
     rev_id2 = create_record_revision(
         conn,

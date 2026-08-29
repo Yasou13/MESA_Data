@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,15 @@ from mesa_legal_data.validators import (
 
 class InvalidStateTransition(Exception):
     pass
+
+
+def _valid_legal_date(raw_date: Any) -> str | None:
+    if not raw_date:
+        return None
+    try:
+        return date.fromisoformat(str(raw_date).strip()[:10]).isoformat()
+    except ValueError:
+        return None
 
 
 ALLOWED_TRANSITIONS = {
@@ -211,13 +221,17 @@ def process_artifact_pipeline(
     ret_at = art_row.get("retrieved_at") if art_row else None
 
     pub_date_missing = False
+    legal_date_invalid = False
     if v_kind == "original_publication":
         raw_ver_date = meta_dict.get("publication_date") or meta_dict.get("source_date")
         if not raw_ver_date:
             pub_date_missing = True
             ver_date = "unknown-date"
         else:
-            ver_date = str(raw_ver_date)[:10]
+            normalized_date = _valid_legal_date(raw_ver_date)
+            legal_date_invalid = normalized_date is None
+            pub_date_missing = legal_date_invalid
+            ver_date = normalized_date or "unknown-date"
     elif fam == "decision":
         dec_parsed_pre = parse_decision_text(canonical_text)
         raw_ver_date = (
@@ -230,7 +244,9 @@ def process_artifact_pipeline(
             raw_ver_date = str(last_mod)[:10]
         elif not raw_ver_date and ret_at:
             raw_ver_date = str(ret_at)[:10]
-        ver_date = str(raw_ver_date)[:10] if raw_ver_date else "unknown-date"
+        normalized_date = _valid_legal_date(raw_ver_date)
+        legal_date_invalid = bool(raw_ver_date) and normalized_date is None
+        ver_date = normalized_date or "unknown-date"
     else:
         raw_ver_date = (
             meta_dict.get("snapshot_date")
@@ -239,7 +255,9 @@ def process_artifact_pipeline(
             or (str(last_mod)[:10] if last_mod else None)
             or (str(ret_at)[:10] if ret_at else None)
         )
-        ver_date = str(raw_ver_date)[:10] if raw_ver_date else "unknown-date"
+        normalized_date = _valid_legal_date(raw_ver_date)
+        legal_date_invalid = bool(raw_ver_date) and normalized_date is None
+        ver_date = normalized_date or "unknown-date"
 
     # Deterministic Version ID based on document_id, version_date, and artifact_sha256
     if fam == "legislation":
@@ -260,7 +278,7 @@ def process_artifact_pipeline(
         "source_id": art_row["source_id"],
         "source_url": art_row["source_url"],
         "retrieved_at": art_row["retrieved_at"],
-        "publication_date": meta_dict.get("publication_date"),
+        "publication_date": _valid_legal_date(meta_dict.get("publication_date")),
         "artifact_sha256": art_row["sha256"],
         "artifact_path": art_row["raw_path"],
     }
@@ -321,7 +339,7 @@ def process_artifact_pipeline(
                 doc_type = "law"
 
             pub_info = None
-            pub_d = meta_dict.get("publication_date")
+            pub_d = _valid_legal_date(meta_dict.get("publication_date"))
             if pub_d:
                 pub_info = {"date": str(pub_d)}
 
@@ -531,12 +549,22 @@ def process_artifact_pipeline(
     )
 
     quality_status = quality_report.decision
-    quality_json = json.dumps(quality_report.to_dict())
+    quality_data = quality_report.to_dict()
 
     # Publication date missing for original publication cannot PASS
     if pub_date_missing and v_kind == "original_publication":
         if quality_status == "PASS":
             quality_status = "REVIEW"
+        quality_data["decision"] = quality_status
+        quality_data["checks"].append(
+            {
+                "group": "METADATA",
+                "name": "publication_date_present",
+                "status": "REVIEW",
+                "message": "Authoritative publication date is missing",
+                "details": {},
+            }
+        )
         open_issue(
             conn,
             issue_id=f"iss-{uuid.uuid4().hex[:8]}",
@@ -548,6 +576,33 @@ def process_artifact_pipeline(
             message="Authoritative publication date is missing for original publication",
             details_json=json.dumps({"source_id": art_row.get("source_id")}),
         )
+
+    if legal_date_invalid:
+        if quality_status == "PASS":
+            quality_status = "REVIEW"
+        quality_data["decision"] = quality_status
+        quality_data["checks"].append(
+            {
+                "group": "METADATA",
+                "name": "legal_date_calendar_valid",
+                "status": "REVIEW",
+                "message": "Authoritative legal date is not a real calendar date",
+                "details": {"raw_date": str(raw_ver_date)},
+            }
+        )
+        open_issue(
+            conn,
+            issue_id=f"iss-{uuid.uuid4().hex[:8]}",
+            subject_type="version",
+            subject_id=version_id,
+            version_id=version_id,
+            severity="error",
+            code="LEGAL_DATE_INVALID",
+            message="Authoritative legal date is not a real calendar date",
+            details_json=json.dumps({"raw_date": str(raw_ver_date)}),
+        )
+
+    quality_json = json.dumps(quality_data)
 
     # Release Guard & Lifecycle Determination
     if quality_status == "BLOCK":
@@ -647,7 +702,7 @@ def process_artifact_pipeline(
         # Step 9b: Safe Auto-Approval Evaluation
         auto_approved = False
         auto_reason = ""
-        if quality_status != "BLOCK" and val_status == "valid" and not pub_date_missing:
+        if quality_status != "BLOCK" and val_status == "valid" and not pub_date_missing and not legal_date_invalid:
             try:
                 auto_approved, auto_reason = evaluate_auto_approval(
                     conn,

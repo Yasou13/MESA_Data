@@ -252,6 +252,14 @@ def test_control_6_same_date_different_content_deterministic_safe(tmp_path, monk
     # The existing current version (v_a) must be preserved deterministically rather than arbitrary silent switch
     doc_b = get_document(conn, doc_id)
     assert doc_b["current_version_id"] == v_a["version_id"]
+    assert v_b["auto_approved"] is False
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM validation_issues WHERE version_id = ? AND code = 'VERSION_DATE_AMBIGUITY'",
+            (v_b["version_id"],),
+        ).fetchone()[0]
+        == 1
+    )
     conn.close()
 
 
@@ -575,8 +583,19 @@ def test_control_21_to_24_validation_issue_version_and_document_scoping(tmp_path
         version_id=v1["version_id"],
         record_instance_id=r1_inst,
     )
+    open_issue(
+        conn,
+        issue_id=f"iss-{uuid.uuid4().hex[:8]}",
+        subject_type="record",
+        subject_id=f"{doc_id}:article:9",
+        severity="blocker",
+        code="LEGACY_UNSCOPED_ARTICLE_BLOCKER",
+        message="Historical blocker without version identity",
+        details_json="{}",
+    )
 
-    # v2 Article 9 must NOT be blocked and can be approved
+    # v2 Article 9 must NOT be blocked by either v1's scoped issue or the
+    # ambiguous legacy logical-record issue, and can be approved.
     approve_record_with_checks(
         conn,
         record_id=f"{doc_id}:article:9",
@@ -864,9 +883,11 @@ def test_control_41_to_43_harvest_pilot_budget_and_throttle_enforcement(tmp_path
     art_1 = _helper_create_law_artifact(tmp_path, doc_id, html, "art-harv-1", pub_date="2026-01-01")
     process_artifact_pipeline(art_1)
 
-    # Ingest artifact 2 with same content (duplicate SHA) -> raises IntegrityError on sha256 UNIQUE
-    with pytest.raises(sqlite3.IntegrityError):
-        _helper_create_law_artifact(tmp_path, doc_id, html, "art-harv-2", pub_date="2026-01-01")
+    # Ingest artifact 2 with the same bytes: the immutable artifact is reused.
+    _helper_create_law_artifact(tmp_path, doc_id, html, "art-harv-2", pub_date="2026-01-01")
+    conn = get_connection()
+    assert conn.execute("SELECT count(*) FROM artifacts WHERE document_id = ?", (doc_id,)).fetchone()[0] == 1
+    conn.close()
 
 
 # ==============================================================================
@@ -1083,7 +1104,7 @@ def test_control_57_and_58_fresh_and_upgrade_database_integrity(tmp_path):
     )
     migrations_dir = Path("migrations")
     for mig_file in sorted(migrations_dir.glob("*.sql")):
-        if "0010" in mig_file.name:
+        if "0010" in mig_file.name or "0011" in mig_file.name:
             continue
         sql = mig_file.read_text(encoding="utf-8")
         conn_up.executescript(sql)
@@ -1108,12 +1129,24 @@ def test_control_57_and_58_fresh_and_upgrade_database_integrity(tmp_path):
            VALUES ('art_up', 'doc_up', 'test_src', 'http://a.b/1', '2026-01-01', 'manual', 200, 'text/html', 'text/html', 10, 'sha_art_up', 'raw.html', 'fetched', '{}')"""
     )
     conn_up.execute(
+        """INSERT INTO artifacts (artifact_id, document_id, source_id, source_url, retrieved_at, fetch_method, http_status, declared_content_type, detected_content_type, byte_size, sha256, raw_path, transport_status, metadata_json)
+           VALUES ('art_up_2', 'doc_up', 'test_src', 'http://a.b/2', '2026-02-01', 'manual', 200, 'text/html', 'text/html', 10, 'sha_art_up_2', 'raw2.html', 'fetched', '{}')"""
+    )
+    conn_up.execute(
         """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at)
            VALUES ('v_up', 'doc_up', 'art_up', 'consolidated_snapshot', 'c.jsonl', 1, 'sha_up', 'legislation', '1.0.0', 'v1', 'valid', 'clean', 'approved', '2026-01-01')"""
     )
     conn_up.execute(
+        """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at, revision_number)
+           VALUES ('v_up_2', 'doc_up', 'art_up_2', 'consolidated_snapshot', 'c2.jsonl', 1, 'sha_up_2', 'legislation', '1.0.0', 'v1', 'valid', 'clean', 'approved', '2026-02-01', 2)"""
+    )
+    conn_up.execute(
         """INSERT INTO records (record_instance_id, version_id, record_id, record_type, canonical_path, canonical_line, record_sha256, approval_status, validation_status, created_at)
            VALUES ('v_up:doc_up:article:1', 'v_up', 'doc_up:article:1', 'article', 'c.jsonl', 1, 'sha_rec_up', 'approved', 'valid', '2026-01-01')"""
+    )
+    conn_up.execute(
+        """INSERT INTO records (record_instance_id, version_id, record_id, record_type, canonical_path, canonical_line, record_sha256, approval_status, validation_status, created_at)
+           VALUES ('v_up_2:doc_up:article:1', 'v_up_2', 'doc_up:article:1', 'article', 'c2.jsonl', 1, 'sha_rec_up', 'approved', 'valid', '2026-02-01')"""
     )
     conn_up.execute(
         """INSERT INTO record_reviews (record_id, record_sha256, decision, reviewer, note, reviewed_at)
@@ -1122,6 +1155,17 @@ def test_control_57_and_58_fresh_and_upgrade_database_integrity(tmp_path):
     conn_up.execute(
         """INSERT INTO validation_issues (issue_id, subject_type, subject_id, severity, code, message, details_json, status, opened_at)
            VALUES ('iss_up', 'version', 'v_up', 'warning', 'WARN_CODE', 'msg', '{}', 'open', '2026-01-01')"""
+    )
+    conn_up.execute(
+        """INSERT INTO releases (release_id, release_path, status, schema_version, created_at, manifest_sha256, counts_json, source_snapshot_json)
+           VALUES ('rel_up', 'releases/rel_up', 'verified', '1.0.0', '2026-01-01', 'manifest_up', '{}', '[]')"""
+    )
+    conn_up.execute(
+        "INSERT INTO release_items (release_id, record_id, record_sha256, version_id) VALUES ('rel_up', 'doc_up:article:1', 'sha_rec_up', 'v_up')"
+    )
+    conn_up.execute(
+        """INSERT INTO mesa_deliveries (delivery_id, release_id, target_key, status, started_at, total_items, committed_items, failed_items, skipped_items, created_at)
+           VALUES ('del_up', 'rel_up', 'default', 'PLANNED', '2026-01-01', 1, 0, 0, 0, '2026-01-01')"""
     )
     conn_up.commit()
     conn_up.close()
@@ -1145,12 +1189,14 @@ def test_control_57_and_58_fresh_and_upgrade_database_integrity(tmp_path):
     row = cur_mig.fetchone()
     assert row is not None
     assert row[0] is not None and len(row[0]) > 0
-    assert row[1] == "v_up:doc_up:article:1"
-    assert row[2] == "v_up"
+    assert row[1].startswith("legacy-ambiguous:")
+    assert row[2] == "legacy-version-unscoped"
 
     # Verify validation issue has version_id populated
     cur_mig.execute("SELECT version_id FROM validation_issues WHERE issue_id = 'iss_up'")
     assert cur_mig.fetchone()[0] == "v_up"
+    assert cur_mig.execute("SELECT count(*) FROM releases WHERE release_id = 'rel_up'").fetchone()[0] == 1
+    assert cur_mig.execute("SELECT count(*) FROM mesa_deliveries WHERE delivery_id = 'del_up'").fetchone()[0] == 1
     conn_mig.close()
 
 
