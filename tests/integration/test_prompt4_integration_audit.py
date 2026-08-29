@@ -240,7 +240,9 @@ def test_kontrol_2_canonical_spans_and_coverage_honest():
         assert art.char_start is not None and art.char_end is not None
         assert art.char_start < art.char_end
         slice_text = canonical_text[art.char_start : art.char_end]
-        assert slice_text.startswith(f"{'EK ' if art.article_kind == 'additional' else 'GEÇİCİ ' if art.article_kind == 'temporary' else ''}MADDE {art.article_number}")
+        assert slice_text.startswith(
+            f"{'EK ' if art.article_kind == 'additional' else 'GEÇİCİ ' if art.article_kind == 'temporary' else ''}MADDE {art.article_number}"
+        )
 
     # Coverage computation
     spans = [(a.char_start, a.char_end) for a in parsed.articles if a.char_start is not None and a.char_end is not None]
@@ -748,9 +750,9 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
     c_abs = audit_env["data_root"] / c_rel
     c_abs.parent.mkdir(parents=True, exist_ok=True)
     canonical_text = "MADDE 1 - Görev kuralları kamu düzenindendir."
-    canonical_line = json.dumps(
-        {"id": doc_id, "record_type": "legislation", "full_text": canonical_text}, sort_keys=True
-    ) + "\n"
+    canonical_line = (
+        json.dumps({"id": doc_id, "record_type": "legislation", "full_text": canonical_text}, sort_keys=True) + "\n"
+    )
     c_abs.write_text(canonical_line, encoding="utf-8")
     canonical_hash = hashlib.sha256(canonical_line.encode()).hexdigest()
 

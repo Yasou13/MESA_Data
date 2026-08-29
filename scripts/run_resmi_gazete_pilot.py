@@ -242,9 +242,8 @@ def run_pilot():
         active_after_rollback = cur.fetchone()[0]
         stg_final.close()
         print(f"✓ Active release after rollback: {active_after_rollback}")
-        assert active_after_rollback == baseline_release_id, (
-            f"Expected active release {baseline_release_id}, got {active_after_rollback}"
-        )
+        rollback_mismatch = f"Expected active release {baseline_release_id}, got {active_after_rollback}"
+        assert active_after_rollback == baseline_release_id, rollback_mismatch
 
         # Verify provenance after rollback: tracked_record_id is no longer in active release
         prov_post_rollback = get_record_provenance(tracked_record_id)

@@ -153,9 +153,7 @@ def extract_citations(text: str) -> list[Citation]:
                 char_end=end,
                 # A syntactically valid number is only a resolution candidate
                 # unless it belongs to the deterministic legislation registry.
-                citation_status=(
-                    "RESOLVED" if law_num in KNOWN_LEGISLATION_NUMBERS else "EXTRACTED"
-                ),
+                citation_status=("RESOLVED" if law_num in KNOWN_LEGISLATION_NUMBERS else "EXTRACTED"),
                 relation_hint=relation,
             )
         )

@@ -72,14 +72,17 @@ def client(tmp_path, monkeypatch):
     c_rel_path = "canonical/legislation/6100.jsonl"
     c_abs_path = data_root / c_rel_path
     c_abs_path.parent.mkdir(parents=True, exist_ok=True)
-    canonical_line = json.dumps(
-        {
-            "id": doc_id,
-            "record_type": "legislation",
-            "full_text": "MADDE 1- Görev kamu düzenine ilişkindir.",
-        },
-        sort_keys=True,
-    ) + "\n"
+    canonical_line = (
+        json.dumps(
+            {
+                "id": doc_id,
+                "record_type": "legislation",
+                "full_text": "MADDE 1- Görev kamu düzenine ilişkindir.",
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
     c_abs_path.write_text(canonical_line, encoding="utf-8")
     canonical_hash = hashlib.sha256(canonical_line.encode()).hexdigest()
 

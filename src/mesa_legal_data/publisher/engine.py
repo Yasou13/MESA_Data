@@ -37,8 +37,7 @@ def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
     blocked_count = cursor.fetchone()[0]
 
     # 2. Fetch approved versions
-    cursor.execute(
-        """WITH eligible AS (
+    cursor.execute("""WITH eligible AS (
                SELECT v.*,
                       ROW_NUMBER() OVER (
                           PARTITION BY v.document_id
@@ -55,8 +54,7 @@ def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
            FROM eligible v
            JOIN documents d ON v.document_id = d.document_id
            WHERE v.version_rank = 1
-           ORDER BY v.created_at ASC"""
-    )
+           ORDER BY v.created_at ASC""")
     rows = cursor.fetchall()
     version_items = [
         {

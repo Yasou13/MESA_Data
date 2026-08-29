@@ -389,9 +389,7 @@ def insert_version(
                 artifact_id,
                 canonical_sha256,
             ):
-                raise CatalogError(
-                    f"Immutable version collision for {version_id}: existing identity/content differs"
-                )
+                raise CatalogError(f"Immutable version collision for {version_id}: existing identity/content differs")
             return
         else:
             if revision_number is not None:
@@ -649,8 +647,7 @@ def iter_records_for_release(
     batch_size: int = 1000,
 ) -> Iterator[ReleaseRecordRef]:
     cursor = conn.cursor()
-    cursor.execute(
-        """
+    cursor.execute("""
         WITH eligible_versions AS (
             SELECT v.version_id,
                    ROW_NUMBER() OVER (
@@ -669,8 +666,7 @@ def iter_records_for_release(
         WHERE r.approval_status = 'approved'
           AND r.validation_status = 'valid'
         ORDER BY r.canonical_path ASC, r.canonical_line ASC
-        """
-    )
+        """)
     while True:
         rows = cursor.fetchmany(batch_size)
         if not rows:

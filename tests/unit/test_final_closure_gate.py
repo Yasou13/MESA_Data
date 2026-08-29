@@ -464,13 +464,11 @@ def test_post_staging_pre_audit_crash_reconciles_on_rerun(tmp_path, monkeypatch)
     conn_c = sqlite3.connect(cat_db)
     conn_c.execute("CREATE TABLE releases (release_id TEXT PRIMARY KEY, status TEXT NOT NULL);")
     conn_c.execute("INSERT INTO releases VALUES ('rel-rec-1', 'published')")
-    conn_c.execute(
-        """
+    conn_c.execute("""
         CREATE TABLE mesa_imports (
             import_id INTEGER PRIMARY KEY, release_id TEXT UNIQUE, status TEXT, target_db_path TEXT, imported_at TEXT, record_counts_json TEXT, error_summary TEXT
         );
-        """
-    )
+        """)
     conn_c.commit()
     conn_c.close()
 
