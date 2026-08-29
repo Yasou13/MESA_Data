@@ -353,6 +353,11 @@ def _run_harvest_batch_impl(
                 current_attempt, sbe.code, max_attempts=harvest_cfg.runner.max_attempts
             )
 
+            # A content-address collision across logical documents is a data
+            # correctness conflict, not a transient transport condition.
+            if sbe.code == "ARTIFACT_DOCUMENT_COLLISION":
+                should_retry = False
+
             if should_retry:
                 update_item_status(
                     item_id,
@@ -366,7 +371,12 @@ def _run_harvest_batch_impl(
             else:
                 target_terminal = (
                     ItemStatus.BLOCKED
-                    if sbe.code in ("SOURCE_HOST_NOT_ALLOWED", "PRIVATE_IP_NOT_ALLOWED")
+                    if sbe.code
+                    in (
+                        "SOURCE_HOST_NOT_ALLOWED",
+                        "PRIVATE_IP_NOT_ALLOWED",
+                        "ARTIFACT_DOCUMENT_COLLISION",
+                    )
                     else ItemStatus.FAILED
                 )
                 update_item_status(

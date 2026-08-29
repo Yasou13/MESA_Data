@@ -105,7 +105,9 @@ def test_different_url_same_sha_idempotent(tmp_path: Path, monkeypatch: pytest.M
     # First item should be needs_review
     assert up_item1.status == ItemStatus.NEEDS_REVIEW.value
 
-    # Second item should be marked DUPLICATE without retry loop
-    assert up_item2.status == ItemStatus.DUPLICATE.value
+    # A same-payload different-document collision must be explicit and terminal;
+    # it must never silently point Document 2 at Document 1's artifact.
+    assert up_item2.status == ItemStatus.BLOCKED.value
     assert up_item2.attempts == 1
     assert up_item2.next_retry_at is None
+    assert up_item2.last_error_code == "ARTIFACT_DOCUMENT_COLLISION"

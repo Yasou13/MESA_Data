@@ -608,10 +608,10 @@ def test_flagged_privacy_human_approval_resolves_eligibility(tmp_path, monkeypat
         INSERT INTO versions (
             version_id, document_id, artifact_id, version_kind, snapshot_date,
             canonical_path, canonical_line, canonical_sha256, parser_name, parser_version,
-            schema_version, validation_status, privacy_status, approval_status, created_at
+            schema_version, validation_status, privacy_status, approval_status, created_at, quality_status
         ) VALUES ('ver-flagged', 'doc1', 'art1', 'consolidated_snapshot', '2026-08-11',
                   'canonical/test.jsonl', 1, 'hash1', 'parser', '1.0',
-                  '1.0.0', 'valid', 'flagged', 'pending', ?)
+                  '1.0.0', 'valid', 'flagged', 'pending', ?, 'PASS')
         """,
         (now,),
     )
@@ -625,6 +625,8 @@ def test_flagged_privacy_human_approval_resolves_eligibility(tmp_path, monkeypat
         """,
         (now,),
     )
+    conn.commit()
+    conn.execute("UPDATE documents SET current_version_id = 'ver-flagged' WHERE document_id = 'doc1'")
     conn.commit()
 
     # Before approval: record must NOT be in release selection

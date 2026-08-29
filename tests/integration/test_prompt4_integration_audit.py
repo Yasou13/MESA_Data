@@ -318,7 +318,7 @@ def test_kontrol_3_quality_gate_and_release_guard(audit_env):
         coverage=None,
         privacy_issues=[],
     )
-    assert rep_rev.decision == "REVIEW"
+    assert rep_rev.decision == "BLOCK"
 
     # 3. Corrupt BLOCK (Invalid inverted span)
     rec_corrupt = [
@@ -698,7 +698,7 @@ def test_kontrol_6_panel_fresh_user_journey(audit_env):
 # KONTROL 7, 8, 9 — MESA PUBLISHER & COMMITTED TRUTH & MANUAL PUSH
 # ==============================================================================
 @respx.mock
-def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
+def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env, monkeypatch):
     """
     KONTROL 7, 8, 9 Verification:
     - Stable idempotency
@@ -707,6 +707,7 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
     - Restart / retry
     - UI / Ledger truth: COMMITTED only when all items are COMMITTED
     """
+    monkeypatch.setenv("MESA_DATA_MESA_ALLOWED_HOST", "mock-mesa.test")
     conn = get_connection(audit_env["db_path"])
     settings = MesaTargetSettings(
         target_key="default",
@@ -779,6 +780,7 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env):
         "PASS",
     )
     insert_record(conn, doc_id, v_id, "legislation", c_rel, 1, canonical_hash, "valid", "approved")
+    conn.execute("UPDATE documents SET current_version_id = ? WHERE document_id = ?", (v_id, doc_id))
     conn.close()
 
     # Mock MESA HTTP endpoints

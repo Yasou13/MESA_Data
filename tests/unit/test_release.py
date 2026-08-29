@@ -87,10 +87,11 @@ def test_release_lifecycle_cli(tmp_path, monkeypatch):
     rec_sha = hashlib.sha256(line_str.encode("utf-8")).hexdigest()
 
     conn.execute(
-        """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, snapshot_date, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at)
-           VALUES ('ver1', 'doc1', 'art1', 'snapshot', '2026-08-11', 'canonical/test.jsonl', 1, ?, 'p', '1', '1.0.0', 'valid', 'clean', 'approved', ?)""",
+        """INSERT INTO versions (version_id, document_id, artifact_id, version_kind, snapshot_date, canonical_path, canonical_line, canonical_sha256, parser_name, parser_version, schema_version, validation_status, privacy_status, approval_status, created_at, quality_status)
+           VALUES ('ver1', 'doc1', 'art1', 'snapshot', '2026-08-11', 'canonical/test.jsonl', 1, ?, 'p', '1', '1.0.0', 'valid', 'clean', 'approved', ?, 'PASS')""",
         (rec_sha, now),
     )
+    conn.execute("UPDATE documents SET current_version_id = 'ver1' WHERE document_id = 'doc1'")
     conn.execute(
         """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
            VALUES ('rec1', 'ver1', 'legislation', 'canonical/test.jsonl', 1, ?, 'valid', 'approved', ?)""",

@@ -56,7 +56,10 @@ def test_release_tamper_detection(tmp_path, monkeypatch):
 
     raw_file = tmp_path / "raw" / "tamper.html"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
-    raw_file.write_text("<!DOCTYPE html><html><body><h1>Release Tamper</h1></body></html>", encoding="utf-8")
+    raw_file.write_text(
+        "<!DOCTYPE html><html><body><h1>Release Tamper</h1><p>MADDE 1- Geçerli test hükmü.</p></body></html>",
+        encoding="utf-8",
+    )
     with open(raw_file, "rb") as f:
         sha = hash_stream(f)
 
