@@ -370,7 +370,9 @@ def get_document_mesa_status(conn: sqlite3.Connection, document_id: str) -> dict
     )
     counts = dict((r[0], r[1]) for r in cursor.fetchall())
     if not counts:
-        return {"status": "Update Pending", "committed_count": 0, "failed_count": 0, "total_chunks": 0}
+        cursor.execute("SELECT 1 FROM mesa_delivery_items WHERE document_id = ? LIMIT 1", (document_id,))
+        status = "Update Pending" if cursor.fetchone() else "Not Sent"
+        return {"status": status, "committed_count": 0, "failed_count": 0, "total_chunks": 0}
 
     total = sum(counts.values())
     committed = counts.get("COMMITTED", 0) + counts.get("SKIPPED", 0)

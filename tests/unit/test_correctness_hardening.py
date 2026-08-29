@@ -4,6 +4,7 @@ from mesa_legal_data.catalog import get_connection, insert_artifact, insert_vers
 from mesa_legal_data.parsers.coverage import compute_parsing_coverage
 from mesa_legal_data.publisher.client import MesaClient
 from mesa_legal_data.publisher.engine import get_ready_versions_and_content
+from mesa_legal_data.publisher.ledger import create_delivery, get_document_mesa_status, insert_delivery_item
 from mesa_legal_data.publisher.models import MesaTargetSettings
 from mesa_legal_data.quality import evaluate_quality
 
@@ -92,4 +93,11 @@ def test_only_current_version_is_publishable(tmp_path):
     ready, blocked = get_ready_versions_and_content(conn)
     assert ready == []
     assert blocked == 0
+
+    create_delivery(conn, delivery_id="old-delivery", release_id=None, target_key="default", total_items=1)
+    insert_delivery_item(
+        conn, item_id="old-item", delivery_id="old-delivery", document_id=doc_id, version_id="v1",
+        chunk_id="chunk-1", content_hash="content", idempotency_key="stable", remote_state="COMMITTED", payload_json="{}",
+    )
+    assert get_document_mesa_status(conn, doc_id)["status"] == "Update Pending"
     conn.close()
