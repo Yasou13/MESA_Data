@@ -216,13 +216,15 @@
       ],
       "commits": [
         "a6656bb fix: harden parsing and version correctness",
-        "c20aa17 fix: secure current-version MESA publishing"
+        "c20aa17 fix: secure current-version MESA publishing",
+        "71f4306 fix: report MESA state from current version"
       ],
       "migrations": ["0009_correctness_hardening.sql"],
       "tests": [
         {"name": "focused correctness regression", "command": "MESA_DATA_MESA_ALLOWED_HOST=mock-mesa.internal UV_CACHE_DIR=/tmp/mesa-data-uv-cache uv run pytest -q tests/unit/test_correctness_hardening.py tests/unit/test_quality_gate.py tests/unit/test_catalog_release_iterator.py tests/unit/test_publisher_client_and_ledger.py tests/integration/test_mesa_v4_publisher_e2e.py", "result": "19 passed"},
         {"name": "compile", "command": "UV_CACHE_DIR=/tmp/mesa-data-uv-cache uv run python -m compileall -q src/mesa_legal_data", "result": "passed"},
         {"name": "ruff", "command": "UV_CACHE_DIR=/tmp/mesa-data-uv-cache uv run ruff check src tests", "result": "passed"}
+        ,{"name": "current-version MESA status regression", "command": "MESA_DATA_MESA_ALLOWED_HOST=mock-mesa.internal UV_CACHE_DIR=/tmp/mesa-data-uv-cache uv run pytest -q tests/unit/test_correctness_hardening.py tests/unit/test_publisher_client_and_ledger.py", "result": "10 passed"}
       ],
       "blockers": ["The all-test pytest invocation did not complete within the desktop command window and is not recorded as passed."],
       "unverified": ["MESA live HTTP payload and server-side mutation contract remain UNVERIFIED because no live endpoint or MESA source code is available."]
