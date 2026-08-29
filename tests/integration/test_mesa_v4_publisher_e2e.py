@@ -123,6 +123,7 @@ def setup_publisher_env(tmp_path, monkeypatch):
         revision_number=1,
         quality_status="PASS",
     )
+    conn.execute("UPDATE documents SET current_version_id = ? WHERE document_id = ?", (v_id, doc_id))
 
     for line_number, record in enumerate(records, start=1):
         insert_record(

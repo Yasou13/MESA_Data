@@ -32,29 +32,24 @@ def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
     Fetches approved versions ready for publishing, and count of blocked versions.
     """
     cursor = conn.cursor()
-    # 1. Count blocked versions
-    cursor.execute("SELECT count(*) FROM versions WHERE quality_status = 'BLOCK'")
+    # Only the true current version can make a document publishable.  Historical
+    # blocked or approved versions must not affect another current document.
+    cursor.execute(
+        """SELECT count(*) FROM documents d JOIN versions v ON v.version_id = d.current_version_id
+           WHERE v.quality_status = 'BLOCK'"""
+    )
     blocked_count = cursor.fetchone()[0]
 
     # 2. Fetch approved versions
-    cursor.execute("""WITH eligible AS (
-               SELECT v.*,
-                      ROW_NUMBER() OVER (
-                          PARTITION BY v.document_id
-                          ORDER BY COALESCE(v.revision_number, 1) DESC, v.created_at DESC
-                      ) AS version_rank
-               FROM versions v
-               WHERE v.approval_status = 'approved'
-                 AND v.validation_status = 'valid'
-                 AND v.privacy_status IN ('clean', 'approved')
-                 AND (v.quality_status IS NULL OR v.quality_status != 'BLOCK')
-           )
-           SELECT v.version_id, v.document_id, v.canonical_path, v.canonical_sha256,
-                  v.revision_number, d.family
-           FROM eligible v
-           JOIN documents d ON v.document_id = d.document_id
-           WHERE v.version_rank = 1
-           ORDER BY v.created_at ASC""")
+    cursor.execute("""SELECT v.version_id, v.document_id, v.canonical_path, v.canonical_sha256,
+                             v.revision_number, d.family
+                      FROM documents d
+                      JOIN versions v ON v.version_id = d.current_version_id
+                      WHERE v.approval_status = 'approved'
+                        AND v.validation_status = 'valid'
+                        AND v.privacy_status IN ('clean', 'approved')
+                        AND v.quality_status = 'PASS'
+                      ORDER BY v.created_at ASC""")
     rows = cursor.fetchall()
     version_items = [
         {
@@ -317,6 +312,8 @@ def execute_publish_delivery(
                         final_item_state = polled_state
                         break
                     poll_attempts += 1
+                if final_item_state in (MutationState.QUEUED.value, MutationState.PROCESSING.value):
+                    final_item_state = MutationState.AWAITING_MUTATION.value
 
             if final_item_state == MutationState.COMMITTED.value:
                 committed_count += 1
@@ -335,6 +332,14 @@ def execute_publish_delivery(
                     remote_state=MutationState.REJECTED.value,
                     remote_mutation_id=remote_mutation_id,
                     last_error=last_err,
+                )
+            elif final_item_state == MutationState.AWAITING_MUTATION.value:
+                update_delivery_item_state(
+                    conn,
+                    item_id=item_id,
+                    remote_state=MutationState.AWAITING_MUTATION.value,
+                    remote_mutation_id=remote_mutation_id,
+                    last_error="Local poll window elapsed; remote mutation is still pending",
                 )
             else:
                 failed_count += 1
@@ -360,7 +365,12 @@ def execute_publish_delivery(
             )
 
     # 3. Compute final delivery status
-    if total_items == 0:
+    cursor = conn.cursor()
+    cursor.execute("SELECT count(*) FROM mesa_delivery_items WHERE delivery_id = ? AND remote_state = 'AWAITING_MUTATION'", (delivery_id,))
+    awaiting_count = cursor.fetchone()[0]
+    if awaiting_count:
+        final_delivery_status = DeliveryStatus.AWAITING_MUTATION.value
+    elif total_items == 0:
         final_delivery_status = DeliveryStatus.COMMITTED.value
     elif failed_count == 0:
         final_delivery_status = DeliveryStatus.COMMITTED.value
@@ -377,7 +387,7 @@ def execute_publish_delivery(
         failed_items=failed_count,
         skipped_items=skipped_count,
         last_error=last_err,
-        finished=True,
+        finished=final_delivery_status != DeliveryStatus.AWAITING_MUTATION.value,
     )
     conn.close()
 
@@ -429,9 +439,14 @@ def retry_delivery_failures(
             remote_state=MutationState.SENDING.value,
         )
 
-        pub_res = client.publish_source_chunk(chunk, idempotency_key=idemp_key)
-        remote_mutation_id = pub_res.get("mutation_id")
-        final_state = pub_res.get("state", MutationState.FAILED.value)
+        remote_mutation_id = item.get("remote_mutation_id")
+        if item.get("remote_state") == MutationState.AWAITING_MUTATION.value and remote_mutation_id:
+            pub_res = client.get_mutation_status(remote_mutation_id)
+            final_state = pub_res.get("state", MutationState.FAILED.value)
+        else:
+            pub_res = client.publish_source_chunk(chunk, idempotency_key=idemp_key)
+            remote_mutation_id = pub_res.get("mutation_id")
+            final_state = pub_res.get("state", MutationState.FAILED.value)
 
         if final_state in (MutationState.QUEUED.value, MutationState.PROCESSING.value):
             update_delivery_item_state(
@@ -453,6 +468,8 @@ def retry_delivery_failures(
                     if polled_state != MutationState.COMMITTED.value:
                         last_err = poll_res.get("error") or last_err
                     break
+            if final_state in (MutationState.QUEUED.value, MutationState.PROCESSING.value):
+                final_state = MutationState.AWAITING_MUTATION.value
 
         if final_state == MutationState.COMMITTED.value:
             retried_success += 1
@@ -461,6 +478,14 @@ def retry_delivery_failures(
                 item_id=item_id,
                 remote_state=MutationState.COMMITTED.value,
                 remote_mutation_id=remote_mutation_id,
+            )
+        elif final_state == MutationState.AWAITING_MUTATION.value:
+            update_delivery_item_state(
+                conn,
+                item_id=item_id,
+                remote_state=MutationState.AWAITING_MUTATION.value,
+                remote_mutation_id=remote_mutation_id,
+                last_error="Local poll window elapsed; remote mutation is still pending",
             )
         else:
             retried_failed += 1
@@ -495,7 +520,10 @@ def retry_delivery_failures(
     failed = counts.get("FAILED", 0) + counts.get("REJECTED", 0)
     skipped = counts.get("SKIPPED", 0)
 
-    if failed == 0:
+    awaiting = counts.get("AWAITING_MUTATION", 0)
+    if awaiting:
+        new_status = DeliveryStatus.AWAITING_MUTATION.value
+    elif failed == 0:
         new_status = DeliveryStatus.COMMITTED.value
     elif committed > 0 or skipped > 0:
         new_status = DeliveryStatus.PARTIAL.value
@@ -510,7 +538,7 @@ def retry_delivery_failures(
         failed_items=failed,
         skipped_items=skipped,
         last_error=last_err,
-        finished=True,
+        finished=new_status != DeliveryStatus.AWAITING_MUTATION.value,
     )
     conn.close()
 
