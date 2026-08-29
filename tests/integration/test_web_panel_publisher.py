@@ -120,6 +120,7 @@ def client(tmp_path, monkeypatch):
         validation_status="valid",
         approval_status="approved",
     )
+    conn.execute("UPDATE documents SET current_version_id = ? WHERE document_id = ?", (v_id, doc_id))
     conn.close()
 
     app = create_app()
