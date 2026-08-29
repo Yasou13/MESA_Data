@@ -22,6 +22,7 @@
     "article_number": { "type": "string" },
     "article_kind": { "type": "string" },
     "heading": { "type": ["string", "null"] },
+    "ordinal": { "type": ["integer", "null"], "minimum": 1 },
     "text": { "type": "string" },
     "structure": {
       "type": ["object", "null"],
@@ -55,6 +56,7 @@
         "source_id": { "type": "string" },
         "source_url": { "type": "string" },
         "retrieved_at": { "type": "string" },
+        "publication_date": { "type": ["string", "null"] },
         "artifact_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
         "artifact_path": { "type": ["string", "null"] }
       },

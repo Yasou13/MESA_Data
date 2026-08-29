@@ -21,6 +21,10 @@ from mesa_legal_data.storage import atomic_write
 from mesa_legal_data.storage_paths import build_raw_path, secure_slug
 
 
+class ArtifactDocumentCollisionError(ValueError):
+    """The immutable payload already belongs to another logical document."""
+
+
 def import_manual_file(
     file_path: Path,
     source_id: str,
@@ -185,6 +189,7 @@ def import_manual_url(
     document_type: str = "law",
     jurisdiction: str = "TR",
     title: str | None = None,
+    publication_date: str | None = None,
     stable_key: str | None = None,
     sources_yaml_path: Path | None = None,
 ) -> FetchedArtifact:
@@ -239,6 +244,11 @@ def import_manual_url(
                 except OSError:
                     pass
 
+            if existing.get("document_id") and existing["document_id"] != document_id:
+                conn.close()
+                raise ArtifactDocumentCollisionError(
+                    "ARTIFACT_DOCUMENT_COLLISION: identical payload is already bound to a different document"
+                )
             doc_key = stable_key if stable_key else secure_slug(document_id)
             upsert_document(
                 conn=conn,
@@ -305,6 +315,7 @@ def import_manual_url(
             "sha256": artifact_sha256,
             "etag": headers.get("etag"),
             "last_modified": headers.get("last-modified"),
+            "publication_date": publication_date,
             "collector_version": "1.0.0",
             "access_policy_version": policy.policy_version,
         }

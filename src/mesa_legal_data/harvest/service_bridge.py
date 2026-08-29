@@ -4,7 +4,7 @@ from mesa_legal_data.content_types import ContentTypeError, SizeLimitError
 from mesa_legal_data.harvest.models import CollectResult, HarvestItem, PipelineResult
 from mesa_legal_data.pipeline import InvalidStateTransition, process_artifact_pipeline
 from mesa_legal_data.schema_validation import SchemaValidationError
-from mesa_legal_data.sources.manual import import_manual_url
+from mesa_legal_data.sources.manual import ArtifactDocumentCollisionError, import_manual_url
 from mesa_legal_data.sources.url_fetcher import (
     SourcePolicyError,
     SSRFError,
@@ -34,6 +34,7 @@ def collect_url_item(item: HarvestItem, sources_yaml_path: Path | None = None) -
             jurisdiction="TR",
             title=item.title,
             stable_key=item.document_id,
+            publication_date=item.publication_date,
             sources_yaml_path=sources_yaml_path,
         )
         return CollectResult(
@@ -70,6 +71,8 @@ def collect_url_item(item: HarvestItem, sources_yaml_path: Path | None = None) -
                 err_code = "HTTP_429"
             elif any(s in err_msg for s in ("500", "502", "503", "504")):
                 err_code = "HTTP_SERVER_ERROR"
+        elif isinstance(e, ArtifactDocumentCollisionError):
+            err_code = "ARTIFACT_DOCUMENT_COLLISION"
         else:
             if "Host" in err_msg and "not allowed" in err_msg:
                 err_code = "SOURCE_HOST_NOT_ALLOWED"

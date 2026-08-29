@@ -17,6 +17,7 @@ from mesa_legal_data.catalog import (
     insert_record,
     insert_version,
     open_issue,
+    replace_derived_version_output,
     transaction,
     update_artifact_transport_status,
     update_document_status,
@@ -37,6 +38,8 @@ from mesa_legal_data.parsers import (
     parse_pdf,
 )
 from mesa_legal_data.parsers.coverage import compute_parsing_coverage
+from mesa_legal_data.parsers.legislation import PARSER_NAME as LEGISLATION_PARSER_NAME
+from mesa_legal_data.parsers.legislation import PARSER_VERSION as LEGISLATION_PARSER_VERSION
 from mesa_legal_data.parsers.text_normalizer import normalize_text
 from mesa_legal_data.quality import evaluate_quality
 from mesa_legal_data.schema_validation import validate_record
@@ -84,6 +87,7 @@ def process_artifact_pipeline(
     sha256: str | None = None,
     byte_size: int | None = None,
     detected_mime: str | None = None,
+    force_reprocess: bool = False,
 ) -> str:
     """
     Orchestrates end-to-end processing of an artifact:
@@ -234,17 +238,20 @@ def process_artifact_pipeline(
         "source_id": art_row["source_id"],
         "source_url": art_row["source_url"],
         "retrieved_at": art_row["retrieved_at"],
+        "publication_date": meta_dict.get("publication_date"),
         "artifact_sha256": art_row["sha256"],
         "artifact_path": art_row["raw_path"],
     }
+    parser_name = LEGISLATION_PARSER_NAME if fam == "legislation" else f"{fam}_parser"
+    parser_version = LEGISLATION_PARSER_VERSION if fam == "legislation" else "1.0.0"
     provenance_obj = {
-        "parser_name": f"{fam}_parser",
-        "parser_version": "1.0.0",
-        "pipeline_run_id": f"artifact:{artifact_id}:{fam}_parser:1.0.0",
+        "parser_name": parser_name,
+        "parser_version": parser_version,
+        "pipeline_run_id": f"artifact:{artifact_id}:{parser_name}:{parser_version}",
     }
 
     existing_version = get_version(conn, version_id)
-    if existing_version:
+    if existing_version and not force_reprocess:
         if existing_version["artifact_id"] != artifact_id or existing_version["document_id"] != doc_id:
             finish_run(
                 conn,
@@ -344,6 +351,7 @@ def process_artifact_pipeline(
                     "article_number": a.article_number,
                     "article_kind": a.article_kind,
                     "heading": a.heading,
+                    "ordinal": a.ordinal,
                     "text": a.text,
                     "structure": None,
                     "status": "active",
@@ -496,8 +504,8 @@ def process_artifact_pipeline(
         canonical_text=canonical_text,
         coverage=coverage_result,
         privacy_issues=privacy_issues,
-        parser_name=f"{fam}_parser",
-        parser_version="1.0.0",
+        parser_name=parser_name,
+        parser_version=parser_version,
     )
 
     quality_status = quality_report.decision
@@ -528,7 +536,7 @@ def process_artifact_pipeline(
         records_by_type.setdefault(rt, []).append(r)
 
     canonical_locations = []
-    canonical_write_id = "version-" + hashlib.sha256(f"{version_id}:parser:1.0.0".encode()).hexdigest()[:20]
+    canonical_write_id = "version-" + hashlib.sha256(f"{version_id}:parser:{parser_version}".encode()).hexdigest()[:20]
     for rt, r_list in records_by_type.items():
         locs = write_canonical_part(r_list, rt, canonical_write_id)
         canonical_locations.extend(locs)
@@ -539,28 +547,45 @@ def process_artifact_pipeline(
         c_path = first_loc.relative_path if first_loc else ""
         c_sha = first_loc.record_sha256 if first_loc else expected_sha
 
-        insert_version(
-            conn=conn,
-            version_id=version_id,
-            document_id=doc_id or "tr:legislation:unknown",
-            artifact_id=artifact_id,
-            version_kind=v_kind,
-            snapshot_date=ver_date,
-            effective_from=None,
-            effective_to=None,
-            canonical_path=c_path,
-            canonical_line=1,
-            canonical_sha256=c_sha,
-            parser_name=f"{fam}_parser",
-            parser_version="1.0.0",
-            schema_version="1.0.0",
-            validation_status=val_status,
-            privacy_status=privacy_status,
-            approval_status="pending",
-            quality_status=quality_status,
-            quality_json=quality_json,
-            supersedes_version_id=meta_dict.get("supersedes_version_id"),
-        )
+        if existing_version:
+            replace_derived_version_output(
+                conn,
+                version_id=version_id,
+                document_id=doc_id or "tr:legislation:unknown",
+                artifact_id=artifact_id,
+                canonical_path=c_path,
+                canonical_line=1,
+                canonical_sha256=c_sha,
+                parser_name=parser_name,
+                parser_version=parser_version,
+                validation_status=val_status,
+                privacy_status=privacy_status,
+                quality_status=quality_status,
+                quality_json=quality_json,
+            )
+        else:
+            insert_version(
+                conn=conn,
+                version_id=version_id,
+                document_id=doc_id or "tr:legislation:unknown",
+                artifact_id=artifact_id,
+                version_kind=v_kind,
+                snapshot_date=ver_date,
+                effective_from=None,
+                effective_to=None,
+                canonical_path=c_path,
+                canonical_line=1,
+                canonical_sha256=c_sha,
+                parser_name=parser_name,
+                parser_version=parser_version,
+                schema_version="1.0.0",
+                validation_status=val_status,
+                privacy_status=privacy_status,
+                approval_status="pending",
+                quality_status=quality_status,
+                quality_json=quality_json,
+                supersedes_version_id=meta_dict.get("supersedes_version_id"),
+            )
 
         for loc in canonical_locations:
             insert_record(
@@ -587,8 +612,8 @@ def process_artifact_pipeline(
                     conn,
                     version_id=version_id,
                     source_id=art_row.get("source_id", "manual"),
-                    parser_name=f"{fam}_parser",
-                    parser_version="1.0.0",
+                    parser_name=parser_name,
+                    parser_version=parser_version,
                     quality_decision=quality_status,
                     has_privacy_blocker=(privacy_status == "flagged"),
                     schema_valid=True,
@@ -597,8 +622,17 @@ def process_artifact_pipeline(
                     final_status = "approved"
                     if doc_id:
                         update_document_status(conn, doc_id, "approved", current_version_id=version_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                open_issue(
+                    conn,
+                    issue_id=f"iss-{uuid.uuid4().hex[:8]}",
+                    subject_type="version",
+                    subject_id=version_id,
+                    severity="error",
+                    code="AUTO_APPROVAL_EVALUATION_FAILED",
+                    message=str(exc),
+                    details_json=json.dumps({"parser_name": parser_name, "parser_version": parser_version}),
+                )
 
     # Step 10: Finish Run with Real Counters
     counters = {
