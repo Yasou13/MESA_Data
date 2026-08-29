@@ -136,6 +136,7 @@ def test_regression_mux_cert_001_mesa_transfer_route(client, tmp_path, monkeypat
     preserves release verification checks, and successfully imports published releases.
     """
     import hashlib
+    import json
 
     from mesa_legal_data.catalog import (
         approve_version_streaming,
@@ -184,7 +185,7 @@ def test_regression_mux_cert_001_mesa_transfer_route(client, tmp_path, monkeypat
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json=json.dumps({"publication_date": "2026-08-01"}),
     )
     conn.close()
 

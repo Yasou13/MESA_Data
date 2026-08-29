@@ -28,7 +28,11 @@ def test_env(tmp_path, monkeypatch):
 
 
 def create_sample_artifact(
-    tmp_path: Path, filename: str, content: str, source_id: str = "mevzuat"
+    tmp_path: Path,
+    filename: str,
+    content: str,
+    source_id: str = "mevzuat",
+    publication_date: str = "2026-05-10",
 ) -> tuple[str, str, str]:
     raw_dir = tmp_path / "raw" / "legislation" / source_id / "2026"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -47,7 +51,7 @@ def create_sample_artifact(
         None,
         source_id,
         f"https://example.com/{filename}",
-        "2026-05-10T10:00:00Z",
+        f"{publication_date}T10:00:00Z",
         "manual",
         200,
         "text/html",
@@ -59,7 +63,7 @@ def create_sample_artifact(
         None,
         "fetched",
         None,
-        json.dumps({"publication_date": "2026-05-10", "source_role": "consolidated_snapshot"}),
+        json.dumps({"publication_date": publication_date, "source_role": "consolidated_snapshot"}),
     )
     conn.close()
     return art_id, sha256, rel_path
@@ -168,7 +172,7 @@ def test_two_real_versions_same_document_isolation(test_env):
     <p><b>MADDE 1-</b> Amaç metni v1.</p>
     <p><b>MADDE 9-</b> Yurt dışına aktarım orijinal metin 2016.</p>
     </body></html>"""
-    art_id_1, _, _ = create_sample_artifact(test_env, "kvkk_2016.html", content_v1)
+    art_id_1, _, _ = create_sample_artifact(test_env, "kvkk_2016.html", content_v1, publication_date="2016-04-07")
     process_artifact_pipeline(artifact_id=art_id_1, document_id=doc_id)
 
     conn = get_connection()

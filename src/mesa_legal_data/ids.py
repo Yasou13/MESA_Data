@@ -20,7 +20,7 @@ def build_legislation_id(legislation_type: str, number: str) -> str:
 
 
 def build_legislation_version_id(document_id: str, snapshot_date: str, artifact_sha256: str) -> str:
-    short_hash = artifact_sha256[:8]
+    short_hash = artifact_sha256[:16]
     safe_date = snapshot_date.replace(" ", "")
     return f"{document_id}:version:{safe_date}:{short_hash}"
 

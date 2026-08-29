@@ -102,19 +102,17 @@ def run_pipeline_item(artifact_id: str) -> PipelineResult:
         version_id = None
         record_count = None
         try:
-            from mesa_legal_data.catalog import get_artifact, get_connection, get_document
+            from mesa_legal_data.catalog import get_connection, get_version_for_artifact
 
             conn = get_connection()
-            art = get_artifact(conn, artifact_id)
-            if art and art.get("document_id"):
-                doc = get_document(conn, art["document_id"])
-                if doc and doc.get("current_version_id"):
-                    version_id = doc["current_version_id"]
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM records WHERE version_id = ?", (version_id,))
-                    row = cursor.fetchone()
-                    if row:
-                        record_count = row[0]
+            ver = get_version_for_artifact(conn, artifact_id)
+            if ver:
+                version_id = ver["version_id"]
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM records WHERE version_id = ?", (version_id,))
+                row = cursor.fetchone()
+                if row:
+                    record_count = row[0]
             conn.close()
         except Exception:
             pass
