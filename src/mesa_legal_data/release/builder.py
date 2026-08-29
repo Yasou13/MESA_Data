@@ -75,6 +75,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             canonical_path TEXT NOT NULL,
             canonical_line INTEGER NOT NULL,
             version_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
             PRIMARY KEY (canonical_path, canonical_line)
         );
 
@@ -82,6 +83,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
             record_type TEXT NOT NULL,
             record_id TEXT NOT NULL,
             record_sha256 TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             PRIMARY KEY (record_type, record_id)
         );
@@ -100,18 +102,19 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
                     ref.canonical_path,
                     ref.canonical_line,
                     ref.version_id,
+                    ref.document_id,
                 )
             )
             if len(selected_batch) >= batch_size:
                 spool_conn.executemany(
-                    "INSERT INTO selected_records (record_id, record_type, record_sha256, canonical_path, canonical_line, version_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO selected_records (record_id, record_type, record_sha256, canonical_path, canonical_line, version_id, document_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     selected_batch,
                 )
                 selected_batch.clear()
 
         if selected_batch:
             spool_conn.executemany(
-                "INSERT INTO selected_records (record_id, record_type, record_sha256, canonical_path, canonical_line, version_id) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO selected_records (record_id, record_type, record_sha256, canonical_path, canonical_line, version_id, document_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 selected_batch,
             )
             selected_batch.clear()
@@ -224,11 +227,14 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
                             )
 
                         det_payload = json_str_deterministic(rec_obj)
-                        payload_batch.append((expected_r_type, expected_r_id, expected_hash, det_payload))
+                        payload_sha256 = hashlib.sha256((det_payload + "\n").encode("utf-8")).hexdigest()
+                        payload_batch.append(
+                            (expected_r_type, expected_r_id, expected_hash, payload_sha256, det_payload)
+                        )
 
                         if len(payload_batch) >= batch_size:
                             spool_conn.executemany(
-                                "INSERT INTO payload_spool (record_type, record_id, record_sha256, payload_json) VALUES (?, ?, ?, ?)",
+                                "INSERT INTO payload_spool (record_type, record_id, record_sha256, payload_sha256, payload_json) VALUES (?, ?, ?, ?, ?)",
                                 payload_batch,
                             )
                             payload_batch.clear()
@@ -243,7 +249,7 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
 
         if payload_batch:
             spool_conn.executemany(
-                "INSERT INTO payload_spool (record_type, record_id, record_sha256, payload_json) VALUES (?, ?, ?, ?)",
+                "INSERT INTO payload_spool (record_type, record_id, record_sha256, payload_sha256, payload_json) VALUES (?, ?, ?, ?, ?)",
                 payload_batch,
             )
             payload_batch.clear()
@@ -286,6 +292,43 @@ def build_release(release_id: str | None = None) -> dict[str, Any]:
 
             with open(out_file, "rb") as f:
                 file_manifest_entries[fn] = hash_stream(f)
+
+        # Frozen publisher identity index. This is part of the verified package,
+        # so delivery planning never has to reconstruct version membership from
+        # the mutable live catalog after human confirmation.
+        index_file = building_dir / "data/release-index.jsonl"
+        index_cur = spool_conn.cursor()
+        index_cur.execute(
+            """SELECT sr.record_id, sr.record_type, sr.record_sha256, ps.payload_sha256,
+                      sr.version_id, sr.document_id
+               FROM selected_records sr
+               JOIN payload_spool ps
+                 ON ps.record_type = sr.record_type AND ps.record_id = sr.record_id
+               ORDER BY sr.version_id, sr.record_type, sr.record_id"""
+        )
+        with open(index_file, "w", encoding="utf-8") as f:
+            while True:
+                rows = index_cur.fetchmany(batch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    f.write(
+                        json_str_deterministic(
+                            {
+                                "record_id": row[0],
+                                "record_type": row[1],
+                                "record_sha256": row[2],
+                                "payload_sha256": row[3],
+                                "version_id": row[4],
+                                "document_id": row[5],
+                            }
+                        )
+                        + "\n"
+                    )
+            f.flush()
+            os.fsync(f.fileno())
+        with open(index_file, "rb") as f:
+            file_manifest_entries["data/release-index.jsonl"] = hash_stream(f)
 
         # 5. Copy schema files
         project_schemas_dir = Path(__file__).parent.parent.parent.parent / "schemas"

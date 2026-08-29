@@ -93,4 +93,6 @@ class MesaTargetSettingsUpdateRequest(BaseModel):
 class MesaPublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_key: str = Field(default="default")
-    release_id: Optional[str] = None
+    release_id: str = Field(min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]+$")
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    target_config_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")

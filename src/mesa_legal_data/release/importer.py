@@ -181,7 +181,7 @@ def import_release_to_staging(release_id: str, batch_size: int = 2000) -> dict[s
     # 2. Stream JSONL records in batches derived strictly from authenticated manifest entries
     jsonl_files: list[Path] = []
     for rel_p in sorted(files_dict.keys()):
-        if rel_p.startswith("data/") and rel_p.endswith(".jsonl"):
+        if rel_p.startswith("data/") and rel_p.endswith(".jsonl") and rel_p != "data/release-index.jsonl":
             p = release_dir / rel_p
             if p.exists() and not p.is_symlink():
                 jsonl_files.append(p)

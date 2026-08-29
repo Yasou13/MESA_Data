@@ -72,13 +72,17 @@ Onaylanmış verileri sistemden çıkarma ve paylaşma ekranıdır:
   - **CSV:** Excel ve tablo araçları için uygun format.
   - Oluşturulan dosyalar geçmiş tablosundan doğrudan indirilebilir.
 - **MESA’ya Aktar:**
-  - Onaylı verileri doğrulanmış bir paket olarak MESA aktarım havuzuna gönderir.
+  - Uygun güncel sürümlerden immutable release'i otomatik oluşturur ve kriptografik olarak doğrular.
+  - Onay penceresi exact release ID, manifest SHA-256 ve MESA hedefini gösterir; kullanıcıdan manuel release ID istenmez.
+  - İnsan onayından sonra yalnız bu frozen paket gönderilir. Katalogdaki daha yeni bir sürüm aynı gönderime sessizce eklenmez.
+  - Yalnız tüm gerekli mutation'lar `COMMITTED` olduğunda tam başarı gösterilir; `PARTIAL` ve `AWAITING_MUTATION` ayrı durumlardır.
 
 ### 6. Gelişmiş (Yönetim Menüsü)
 Teknik kullanıcılar ve sistem yöneticileri için ek araçlar sunar:
 - **Kaynaklar:** Resmî kurum erişim limitleri ve kuralları.
 - **Veri Gezgini:** Ham kanonik kayıtları ayrıntılı arama ve inceleme.
 - **Release Geçmişi:** Oluşturulan sürümlerin doğrulama, yayınlama ve geri alma süreçleri.
+- **Yerel Development Staging:** Release paketini yalnız yerel geliştirme veritabanına aktarır; gerçek MESA ile karıştırılmamalıdır.
 - **Arka Plan İşlemleri:** Uzun süren sistem görevlerinin durum takibi.
 - **İşlem Geçmişi (Audit):** Sistemde yapılan tüm değişikliklerin işlem günlüğü.
 - **Sistem:** Sistem sağlık taraması (Doctor) ve veritabanı yedekleme (Backup).

@@ -86,13 +86,28 @@ def create_delivery(
     release_id: str | None,
     target_key: str,
     total_items: int,
+    target_config_sha256: str | None = None,
+    release_manifest_sha256: str | None = None,
 ) -> None:
     now_iso = datetime.now(UTC).isoformat()
     with transaction(conn):
         conn.execute(
-            """INSERT INTO mesa_deliveries (delivery_id, release_id, target_key, status, started_at, total_items, committed_items, failed_items, skipped_items, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?)""",
-            (delivery_id, release_id, target_key, DeliveryStatus.PLANNED.value, now_iso, total_items, now_iso),
+            """INSERT INTO mesa_deliveries (
+                   delivery_id, release_id, target_key, status, started_at, total_items,
+                   committed_items, failed_items, skipped_items, created_at,
+                   target_config_sha256, release_manifest_sha256
+               ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?)""",
+            (
+                delivery_id,
+                release_id,
+                target_key,
+                DeliveryStatus.PLANNED.value,
+                now_iso,
+                total_items,
+                now_iso,
+                target_config_sha256,
+                release_manifest_sha256,
+            ),
         )
 
 
@@ -211,7 +226,8 @@ def list_deliveries(conn: sqlite3.Connection, limit: int = 20, offset: int = 0) 
     cursor = conn.cursor()
     cursor.execute(
         """SELECT delivery_id, release_id, target_key, status, started_at, finished_at,
-                  total_items, committed_items, failed_items, skipped_items, last_error, created_at
+                  total_items, committed_items, failed_items, skipped_items, last_error, created_at,
+                  target_config_sha256, release_manifest_sha256
            FROM mesa_deliveries ORDER BY created_at DESC LIMIT ? OFFSET ?""",
         (limit, offset),
     )
@@ -230,6 +246,8 @@ def list_deliveries(conn: sqlite3.Connection, limit: int = 20, offset: int = 0) 
             "skipped_items": r[9],
             "last_error": r[10],
             "created_at": r[11],
+            "target_config_sha256": r[12],
+            "release_manifest_sha256": r[13],
         }
         for r in rows
     ]
@@ -239,7 +257,8 @@ def get_delivery(conn: sqlite3.Connection, delivery_id: str) -> dict[str, Any] |
     cursor = conn.cursor()
     cursor.execute(
         """SELECT delivery_id, release_id, target_key, status, started_at, finished_at,
-                  total_items, committed_items, failed_items, skipped_items, last_error, created_at
+                  total_items, committed_items, failed_items, skipped_items, last_error, created_at,
+                  target_config_sha256, release_manifest_sha256
            FROM mesa_deliveries WHERE delivery_id = ?""",
         (delivery_id,),
     )
@@ -259,6 +278,8 @@ def get_delivery(conn: sqlite3.Connection, delivery_id: str) -> dict[str, Any] |
         "skipped_items": r[9],
         "last_error": r[10],
         "created_at": r[11],
+        "target_config_sha256": r[12],
+        "release_manifest_sha256": r[13],
     }
 
 
