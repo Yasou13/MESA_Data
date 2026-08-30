@@ -93,8 +93,8 @@ def test_release_lifecycle_cli(tmp_path, monkeypatch):
     )
     conn.execute("UPDATE documents SET current_version_id = 'ver1' WHERE document_id = 'doc1'")
     conn.execute(
-        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-           VALUES ('rec1', 'ver1', 'legislation', 'canonical/test.jsonl', 1, ?, 'valid', 'approved', ?)""",
+        """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('ver1:rec1', 'rec1', 'ver1', 'legislation', 'canonical/test.jsonl', 1, ?, 'valid', 'approved', ?)""",
         (rec_sha, now),
     )
     conn.commit()

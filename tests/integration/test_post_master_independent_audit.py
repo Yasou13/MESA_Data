@@ -1104,7 +1104,7 @@ def test_control_57_and_58_fresh_and_upgrade_database_integrity(tmp_path):
     )
     migrations_dir = Path("migrations")
     for mig_file in sorted(migrations_dir.glob("*.sql")):
-        if "0010" in mig_file.name or "0011" in mig_file.name:
+        if any(v in mig_file.name for v in ("0010", "0011", "0012")):
             continue
         sql = mig_file.read_text(encoding="utf-8")
         conn_up.executescript(sql)

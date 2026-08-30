@@ -39,8 +39,8 @@ def test_annotations_issues_and_quarantine(tmp_path, monkeypatch):
            VALUES ('ver-q1', 'doc-q1', 'art-q1', 'snapshot', 'canonical/q1.jsonl', 1, 'sha-ver-q1', 'test_parser', '1.0', '1.0', 'valid', 'clean', 'pending', '2026-08-05T00:00:00Z')"""
     )
     c.execute(
-        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-           VALUES ('rec-q1', 'ver-q1', 'article', 'canonical/q1.jsonl', 1, 'sha-rec-q1', 'invalid', 'pending', '2026-08-05T00:00:00Z')"""
+        """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('ver-q1:rec-q1', 'rec-q1', 'ver-q1', 'article', 'canonical/q1.jsonl', 1, 'sha-rec-q1', 'invalid', 'pending', '2026-08-05T00:00:00Z')"""
     )
 
     # 1. Add Annotation
