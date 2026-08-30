@@ -717,8 +717,9 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env, monkeyp
         dataset_id="tr_legislation",
         agent_id="publisher",
         contract_source="configured",
-        health_path="/v4/health",
-        publish_path="/v4/sources/chunks",
+        health_path="/health",
+        session_start_path="/v4/sessions/start",
+        publish_path="/v4/memory/insert",
         mutation_status_path_template="/v4/mutations/{mutation_id}",
     )
     upsert_mesa_target_settings(conn, settings)
@@ -784,10 +785,17 @@ def test_kontrol_7_8_9_publisher_contract_and_committed_truth(audit_env, monkeyp
     conn.close()
 
     # Mock MESA HTTP endpoints
-    respx.get("https://mock-mesa.test/v4/health").respond(200, json={"status": "ok"})
-    respx.post("https://mock-mesa.test/v4/sources/chunks").respond(
-        200, json={"mutation_id": "mut-hmk-1", "state": "COMMITTED"}
+    respx.get("https://mock-mesa.test/health").respond(200, json={"status": "ok"})
+    respx.post("https://mock-mesa.test/v4/sessions/start").respond(
+        201, json={"status": "started", "session_id": "sess-hmk"}
     )
+    respx.post("https://mock-mesa.test/v4/memory/insert").respond(
+        202, json={"mutation_id": "mut-hmk-1", "status": "accepted"}
+    )
+    respx.get("https://mock-mesa.test/v4/mutations/mut-hmk-1").respond(
+        200, json={"mutation_id": "mut-hmk-1", "candidate_id": "cand", "state": "COMMITTED"}
+    )
+    respx.post("https://mock-mesa.test/v4/sessions/sess-hmk/end").respond(200, json={"status": "ended"})
 
     # 1. First publish -> COMMITTED
     del1 = execute_publish_delivery(delivery_id="del-audit-1")

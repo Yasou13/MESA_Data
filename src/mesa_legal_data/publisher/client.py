@@ -39,20 +39,18 @@ class MesaClient:
     def is_api_key_configured(self) -> bool:
         return bool(self._api_key and self._api_key.strip())
 
-    def _get_headers(self, idempotency_key: str | None = None) -> dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "MESA-Legal-Data-Publisher/1.0",
         }
         if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        if idempotency_key:
-            headers["Idempotency-Key"] = idempotency_key
+            headers["X-API-Key"] = self._api_key
         return headers
 
     def target_safety_error(self) -> str | None:
-        """Validate the target before a request can carry Authorization."""
+        """Validate the target before a request can carry the API key."""
         try:
             parsed = urlparse(self.settings.base_url)
         except ValueError:
@@ -80,6 +78,7 @@ class MesaClient:
             self.settings.contract_source in ("configured", "live_verified")
             and self.settings.base_url
             and self.settings.health_path.startswith("/")
+            and self.settings.session_start_path.startswith("/")
             and self.settings.publish_path.startswith("/")
             and self.settings.mutation_status_path_template.startswith("/")
             and "{mutation_id}" in self.settings.mutation_status_path_template
@@ -93,6 +92,18 @@ class MesaClient:
         state_upper = raw_state.strip().upper()
         if state_upper in ("ACCEPTED", "RECEIVED"):
             return MutationState.QUEUED.value, None
+        if state_upper in (
+            "EXTRACTED",
+            "VALIDATED",
+            "SQL_APPLIED",
+            "VECTOR_APPLIED",
+            "GRAPH_APPLIED",
+            "RETRY_PENDING",
+            "ROLLING_BACK",
+        ):
+            return MutationState.PROCESSING.value, None
+        if state_upper in ("DEAD_LETTER", "BLOCKED", "ROLLED_BACK"):
+            return MutationState.FAILED.value, None
         if state_upper in MutationState.__members__:
             return state_upper, None
         return MutationState.FAILED.value, f"Unknown MESA mutation state: {raw_state}"
@@ -324,32 +335,105 @@ class MesaClient:
             total_canonical_bytes=total_canonical_bytes,
         )
 
+    def start_session(self) -> dict[str, Any]:
+        """Create one MESA V4 session scoped to this delivery target."""
+        if not self.is_contract_configured:
+            return {"session_id": None, "error": "MESA HTTP contract is unknown"}
+        target_error = self.target_safety_error()
+        if target_error:
+            return {"session_id": None, "error": target_error}
+        payload = {
+            "tenant_id": self.settings.tenant_id,
+            "workspace_id": self.settings.workspace_id,
+            "dataset_ids": [self.settings.dataset_id],
+            "agent_id": self.settings.agent_id,
+        }
+        try:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
+                response = client.post(
+                    f"{self.settings.base_url.rstrip('/')}{self.settings.session_start_path}",
+                    json=payload,
+                    headers=self._get_headers(),
+                )
+                if response.status_code == 201:
+                    data = response.json()
+                    session_id = data.get("session_id")
+                    if isinstance(session_id, str) and session_id:
+                        return {"session_id": session_id, "message": data.get("status", "started")}
+                    return {"session_id": None, "error": "MESA session start response omitted session_id"}
+                return {"session_id": None, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+        except Exception as exc:
+            return {"session_id": None, "error": f"Transport failure starting session: {exc}"}
+
+    def end_session(self, session_id: str) -> dict[str, Any]:
+        """End a session only once no mutation needs it for status access."""
+        if not session_id or not self.settings.session_end_path_template:
+            return {"ended": False, "error": "Missing session_id or session end route"}
+        path = self.settings.session_end_path_template.replace("{session_id}", session_id)
+        try:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
+                response = client.post(f"{self.settings.base_url.rstrip('/')}{path}", headers=self._get_headers())
+                return {
+                    "ended": response.status_code in (200, 202),
+                    "error": None
+                    if response.status_code in (200, 202)
+                    else f"HTTP {response.status_code}: {response.text[:200]}",
+                }
+        except Exception as exc:
+            return {"ended": False, "error": f"Transport failure ending session: {exc}"}
+
+    def build_memory_insert_payload(
+        self,
+        chunk: SourceChunk,
+        *,
+        session_id: str,
+        idempotency_key: str,
+        finalize_revision: bool,
+    ) -> dict[str, Any]:
+        """Map a frozen source chunk to the strict V4MemoryInsertRequest shape."""
+        metadata = {
+            **chunk.metadata,
+            "mesa_data_chunk_type": chunk.chunk_type,
+            "mesa_data_char_start": chunk.char_start,
+            "mesa_data_char_end": chunk.char_end,
+            "mesa_data_content_hash": chunk.content_hash,
+        }
+        source_ref = metadata.get("authoritative_source_ref") or metadata.get("source_url")
+        if not isinstance(source_ref, str) or not source_ref.strip():
+            source_ref = f"mesa-data://releases/{metadata.get('release_id', 'current')}/documents/{chunk.document_id}/revisions/{chunk.version_id}/chunks/{chunk.chunk_id}"
+        return {
+            "session_id": session_id,
+            "dataset_id": self.settings.dataset_id,
+            "document_id": chunk.document_id,
+            "revision_id": chunk.version_id,
+            "chunk_id": chunk.chunk_id,
+            "title": chunk.title or f"Document {chunk.document_id} chunk {chunk.ordinal}",
+            "source_ref": source_ref,
+            "content": chunk.content,
+            "evidence_span": "",
+            "revision_number": int(metadata.get("revision_number", 1)),
+            "chunk_ordinal": chunk.ordinal,
+            "finalize_revision": finalize_revision,
+            "supersedes_revision_id": metadata.get("supersedes_revision_id"),
+            "metadata": metadata,
+            "idempotency_key": idempotency_key,
+        }
+
     def publish_source_chunk(
         self,
         chunk: SourceChunk,
         idempotency_key: str,
+        *,
+        session_id: str,
+        finalize_revision: bool,
     ) -> dict[str, Any]:
-        """
-        Submits a single source chunk mutation to MESA v4 HTTP API.
-        Returns dictionary with mutation_id, state (COMMITTED, QUEUED, etc.), and message.
-        """
-        payload = {
-            "tenant_id": self.settings.tenant_id,
-            "workspace_id": self.settings.workspace_id,
-            "dataset_id": self.settings.dataset_id,
-            "agent_id": self.settings.agent_id,
-            "document_id": chunk.document_id,
-            "version_id": chunk.version_id,
-            "chunk_id": chunk.chunk_id,
-            "chunk_type": chunk.chunk_type,
-            "title": chunk.title,
-            "char_start": chunk.char_start,
-            "char_end": chunk.char_end,
-            "ordinal": chunk.ordinal,
-            "content": chunk.content,
-            "content_hash": chunk.content_hash,
-            "metadata": chunk.metadata,
-        }
+        """Submit one strict V4MemoryInsertRequest to MESA."""
+        payload = self.build_memory_insert_payload(
+            chunk,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+            finalize_revision=finalize_revision,
+        )
 
         if not self.is_contract_configured:
             return {
@@ -363,7 +447,7 @@ class MesaClient:
             return {"mutation_id": None, "state": MutationState.FAILED.value, "message": target_error}
 
         url = f"{self.settings.base_url.rstrip('/')}{self.settings.publish_path}"
-        headers = self._get_headers(idempotency_key=idempotency_key)
+        headers = self._get_headers()
 
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:

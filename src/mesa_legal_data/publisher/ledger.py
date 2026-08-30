@@ -15,7 +15,8 @@ def get_mesa_target_settings(conn: sqlite3.Connection, target_key: str = "defaul
     cursor = conn.cursor()
     cursor.execute(
         """SELECT target_key, base_url, tenant_id, workspace_id, dataset_id, agent_id, content_limit_chars, updated_at,
-                  contract_source, health_path, publish_path, mutation_status_path_template
+                  contract_source, health_path, session_start_path, publish_path,
+                  mutation_status_path_template, session_end_path_template
            FROM mesa_target_settings WHERE target_key = ?""",
         (target_key,),
     )
@@ -32,8 +33,10 @@ def get_mesa_target_settings(conn: sqlite3.Connection, target_key: str = "defaul
             updated_at=row[7],
             contract_source=row[8],
             health_path=row[9],
-            publish_path=row[10],
-            mutation_status_path_template=row[11],
+            session_start_path=row[10],
+            publish_path=row[11],
+            mutation_status_path_template=row[12],
+            session_end_path_template=row[13],
         )
     # Return sensible default
     return MesaTargetSettings(target_key=target_key)
@@ -47,9 +50,10 @@ def upsert_mesa_target_settings(conn: sqlite3.Connection, settings: MesaTargetSe
             """INSERT INTO mesa_target_settings (
                    target_key, base_url, tenant_id, workspace_id, dataset_id, agent_id,
                    content_limit_chars, updated_at, contract_source, health_path,
-                   publish_path, mutation_status_path_template
+                   session_start_path, publish_path, mutation_status_path_template,
+                   session_end_path_template
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(target_key) DO UPDATE SET
                    base_url = excluded.base_url,
                    tenant_id = excluded.tenant_id,
@@ -60,8 +64,10 @@ def upsert_mesa_target_settings(conn: sqlite3.Connection, settings: MesaTargetSe
                    updated_at = excluded.updated_at,
                    contract_source = excluded.contract_source,
                    health_path = excluded.health_path,
+                   session_start_path = excluded.session_start_path,
                    publish_path = excluded.publish_path,
-                   mutation_status_path_template = excluded.mutation_status_path_template""",
+                   mutation_status_path_template = excluded.mutation_status_path_template,
+                   session_end_path_template = excluded.session_end_path_template""",
             (
                 settings.target_key,
                 settings.base_url,
@@ -73,8 +79,10 @@ def upsert_mesa_target_settings(conn: sqlite3.Connection, settings: MesaTargetSe
                 now_iso,
                 settings.contract_source,
                 settings.health_path,
+                settings.session_start_path,
                 settings.publish_path,
                 settings.mutation_status_path_template,
+                settings.session_end_path_template,
             ),
         )
 
@@ -134,6 +142,15 @@ def update_delivery_progress(
                    finished_at = COALESCE(?, finished_at)
                WHERE delivery_id = ?""",
             (status, committed_items, failed_items, skipped_items, last_error, now_iso, delivery_id),
+        )
+
+
+def set_delivery_remote_session(conn: sqlite3.Connection, *, delivery_id: str, remote_session_id: str) -> None:
+    """Persist the non-secret remote session identity for safe retry recovery."""
+    with transaction(conn):
+        conn.execute(
+            "UPDATE mesa_deliveries SET remote_session_id = ? WHERE delivery_id = ?",
+            (remote_session_id, delivery_id),
         )
 
 
@@ -227,7 +244,7 @@ def list_deliveries(conn: sqlite3.Connection, limit: int = 20, offset: int = 0) 
     cursor.execute(
         """SELECT delivery_id, release_id, target_key, status, started_at, finished_at,
                   total_items, committed_items, failed_items, skipped_items, last_error, created_at,
-                  target_config_sha256, release_manifest_sha256
+                  target_config_sha256, release_manifest_sha256, remote_session_id
            FROM mesa_deliveries ORDER BY created_at DESC LIMIT ? OFFSET ?""",
         (limit, offset),
     )
@@ -248,6 +265,7 @@ def list_deliveries(conn: sqlite3.Connection, limit: int = 20, offset: int = 0) 
             "created_at": r[11],
             "target_config_sha256": r[12],
             "release_manifest_sha256": r[13],
+            "remote_session_id": r[14],
         }
         for r in rows
     ]
@@ -258,7 +276,7 @@ def get_delivery(conn: sqlite3.Connection, delivery_id: str) -> dict[str, Any] |
     cursor.execute(
         """SELECT delivery_id, release_id, target_key, status, started_at, finished_at,
                   total_items, committed_items, failed_items, skipped_items, last_error, created_at,
-                  target_config_sha256, release_manifest_sha256
+                  target_config_sha256, release_manifest_sha256, remote_session_id
            FROM mesa_deliveries WHERE delivery_id = ?""",
         (delivery_id,),
     )
@@ -280,6 +298,7 @@ def get_delivery(conn: sqlite3.Connection, delivery_id: str) -> dict[str, Any] |
         "created_at": r[11],
         "target_config_sha256": r[12],
         "release_manifest_sha256": r[13],
+        "remote_session_id": r[14],
     }
 
 

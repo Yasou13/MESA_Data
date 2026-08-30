@@ -34,11 +34,13 @@ class MesaTargetSettings(BaseModel):
     workspace_id: str = Field(default="legal")
     dataset_id: str = Field(default="tr_legislation")
     agent_id: str = Field(default="mesa_data_publisher")
-    content_limit_chars: int = Field(default=32768, ge=1024, le=1048576)
+    content_limit_chars: int = Field(default=32768, ge=1024, le=32768)
     contract_source: Literal["unknown", "configured", "live_verified"] = "unknown"
-    health_path: str = ""
-    publish_path: str = ""
-    mutation_status_path_template: str = ""
+    health_path: str = "/health"
+    session_start_path: str = "/v4/sessions/start"
+    publish_path: str = "/v4/memory/insert"
+    mutation_status_path_template: str = "/v4/mutations/{mutation_id}"
+    session_end_path_template: str = "/v4/sessions/{session_id}/end"
     api_key_configured: bool = Field(default=False)
     updated_at: str | None = None
 

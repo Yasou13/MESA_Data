@@ -1512,8 +1512,10 @@ async function loadExportView() {
       const elAgent = document.getElementById("mesa-target-agent");
       const elLimit = document.getElementById("mesa-target-limit");
       const elHealthPath = document.getElementById("mesa-health-path");
+      const elSessionStartPath = document.getElementById("mesa-session-start-path");
       const elPublishPath = document.getElementById("mesa-publish-path");
       const elMutationPath = document.getElementById("mesa-mutation-path");
+      const elSessionEndPath = document.getElementById("mesa-session-end-path");
       const badgeKey = document.getElementById("badge-mesa-key");
 
       if (elUrl && targetSettings.base_url) elUrl.value = targetSettings.base_url;
@@ -1523,8 +1525,10 @@ async function loadExportView() {
       if (elAgent && targetSettings.agent_id) elAgent.value = targetSettings.agent_id;
       if (elLimit && targetSettings.content_limit_chars) elLimit.value = targetSettings.content_limit_chars;
       if (elHealthPath) elHealthPath.value = targetSettings.health_path || "";
+      if (elSessionStartPath) elSessionStartPath.value = targetSettings.session_start_path || "";
       if (elPublishPath) elPublishPath.value = targetSettings.publish_path || "";
       if (elMutationPath) elMutationPath.value = targetSettings.mutation_status_path_template || "";
+      if (elSessionEndPath) elSessionEndPath.value = targetSettings.session_end_path_template || "";
 
       if (badgeKey) {
         if (targetSettings.api_key_configured) {
@@ -1634,8 +1638,10 @@ async function handleMesaSaveSettings() {
   const agent = document.getElementById("mesa-target-agent")?.value.trim();
   const limit = parseInt(document.getElementById("mesa-target-limit")?.value || "32768", 10);
   const healthPath = document.getElementById("mesa-health-path")?.value.trim() || "";
+  const sessionStartPath = document.getElementById("mesa-session-start-path")?.value.trim() || "";
   const publishPath = document.getElementById("mesa-publish-path")?.value.trim() || "";
   const mutationPath = document.getElementById("mesa-mutation-path")?.value.trim() || "";
+  const sessionEndPath = document.getElementById("mesa-session-end-path")?.value.trim() || "";
 
   if (!url || !tenant || !ws || !ds || !agent) {
     showToast("Lütfen tüm zorunlu hedef alanlarını doldurunuz.", "warning");
@@ -1655,8 +1661,10 @@ async function handleMesaSaveSettings() {
         agent_id: agent,
         content_limit_chars: limit,
         health_path: healthPath,
+        session_start_path: sessionStartPath,
         publish_path: publishPath,
         mutation_status_path_template: mutationPath,
+        session_end_path_template: sessionEndPath,
       }),
     });
     showToast("MESA hedef ayarları kaydedildi.", "success");

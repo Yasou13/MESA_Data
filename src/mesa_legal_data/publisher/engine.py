@@ -17,6 +17,7 @@ from mesa_legal_data.publisher.ledger import (
     insert_delivery_item,
     is_chunk_already_committed,
     list_failed_delivery_items,
+    set_delivery_remote_session,
     update_delivery_item_state,
     update_delivery_progress,
 )
@@ -47,8 +48,10 @@ def target_config_sha256(settings) -> str:
         "content_limit_chars": settings.content_limit_chars,
         "contract_source": settings.contract_source,
         "health_path": settings.health_path,
+        "session_start_path": settings.session_start_path,
         "publish_path": settings.publish_path,
         "mutation_status_path_template": settings.mutation_status_path_template,
+        "session_end_path_template": settings.session_end_path_template,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -285,6 +288,25 @@ def build_delivery_plan(
             content_limit_chars=target_settings.content_limit_chars,
         )
 
+        provenance = conn.execute(
+            """SELECT v.revision_number, v.supersedes_version_id, a.source_url, a.source_id, a.sha256
+               FROM versions v JOIN artifacts a ON a.artifact_id = v.artifact_id
+               WHERE v.version_id = ?""",
+            (v_id,),
+        ).fetchone()
+        for chunk_index, chunk in enumerate(chunks):
+            chunk.metadata.update(
+                {
+                    "release_id": release_id,
+                    "revision_number": provenance[0] if provenance else 1,
+                    "supersedes_revision_id": provenance[1] if provenance else None,
+                    "source_url": provenance[2] if provenance else None,
+                    "source_id": provenance[3] if provenance else None,
+                    "artifact_sha256": provenance[4] if provenance else None,
+                    "is_final_chunk": chunk_index == len(chunks) - 1,
+                }
+            )
+
         for chunk in chunks:
             total_bytes += len(chunk.content.encode("utf-8"))
             is_committed = is_chunk_already_committed(
@@ -376,6 +398,26 @@ def execute_publish_delivery(
         release_manifest_sha256=release_manifest_sha256,
     )
 
+    remote_session_id: str | None = None
+    if any(not is_already_done for _, is_already_done in chunk_tuples):
+        session_res = client.start_session()
+        remote_session_id = session_res.get("session_id")
+        if not remote_session_id:
+            error = session_res.get("error") or "MESA session start failed"
+            update_delivery_progress(
+                conn,
+                delivery_id=delivery_id,
+                status=DeliveryStatus.FAILED.value,
+                committed_items=0,
+                failed_items=0,
+                skipped_items=0,
+                last_error=error,
+                finished=True,
+            )
+            conn.close()
+            raise MesaClientError(f"MESA session start failed: {error}")
+        set_delivery_remote_session(conn, delivery_id=delivery_id, remote_session_id=remote_session_id)
+
     update_delivery_progress(
         conn,
         delivery_id=delivery_id,
@@ -446,7 +488,12 @@ def execute_publish_delivery(
             )
 
             # Submit chunk to MESA v4
-            pub_res = client.publish_source_chunk(chunk, idempotency_key=idemp_key)
+            pub_res = client.publish_source_chunk(
+                chunk,
+                idempotency_key=idemp_key,
+                session_id=remote_session_id or "",
+                finalize_revision=bool(chunk.metadata.get("is_final_chunk")),
+            )
             remote_mutation_id = pub_res.get("mutation_id")
             initial_state = pub_res.get("state", MutationState.FAILED.value)
 
@@ -558,6 +605,10 @@ def execute_publish_delivery(
         last_error=last_err,
         finished=final_delivery_status not in (DeliveryStatus.AWAITING_MUTATION.value, DeliveryStatus.SENDING.value),
     )
+    if final_delivery_status == DeliveryStatus.COMMITTED.value and remote_session_id:
+        # Current MESA checks mutation status through the session, so end only
+        # after every item is terminal and no retry/poll needs it.
+        client.end_session(remote_session_id)
     conn.close()
     return {
         "delivery_id": delivery_id,
@@ -611,6 +662,15 @@ def retry_delivery_failures(
         conn.close()
         return {"delivery_id": delivery_id, "retried_count": 0, "message": "No failed items eligible for retry"}
 
+    remote_session_id = delivery.get("remote_session_id")
+    if not remote_session_id:
+        session_res = client.start_session()
+        remote_session_id = session_res.get("session_id")
+        if not remote_session_id:
+            conn.close()
+            raise MesaClientError(f"MESA session start failed: {session_res.get('error') or 'missing session_id'}")
+        set_delivery_remote_session(conn, delivery_id=delivery_id, remote_session_id=remote_session_id)
+
     retried_success = 0
     retried_failed = 0
     last_err = None
@@ -632,7 +692,12 @@ def retry_delivery_failures(
             pub_res = client.get_mutation_status(remote_mutation_id)
             final_state = pub_res.get("state", MutationState.FAILED.value)
         else:
-            pub_res = client.publish_source_chunk(chunk, idempotency_key=idemp_key)
+            pub_res = client.publish_source_chunk(
+                chunk,
+                idempotency_key=idemp_key,
+                session_id=remote_session_id,
+                finalize_revision=bool(chunk.metadata.get("is_final_chunk")),
+            )
             remote_mutation_id = pub_res.get("mutation_id")
             final_state = pub_res.get("state", MutationState.FAILED.value)
 
@@ -728,6 +793,8 @@ def retry_delivery_failures(
         last_error=last_err,
         finished=new_status != DeliveryStatus.AWAITING_MUTATION.value,
     )
+    if new_status == DeliveryStatus.COMMITTED.value and remote_session_id:
+        client.end_session(remote_session_id)
     conn.close()
 
     return {
