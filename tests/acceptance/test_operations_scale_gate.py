@@ -88,9 +88,9 @@ def test_operations_scale_gate(tmp_path, monkeypatch):
                 (v_id, i, i),
             )
             c.execute(
-                """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-                   VALUES (?, ?, 'article', 'canonical/scale.jsonl', ?, ?, 'valid', 'pending', '2026-08-05T00:00:00Z')""",
-                (r_id, v_id, i, rec_sha),
+                """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+                   VALUES (?, ?, ?, 'article', 'canonical/scale.jsonl', ?, ?, 'valid', 'pending', '2026-08-05T00:00:00Z')""",
+                (f"{v_id}:{r_id}", r_id, v_id, i, rec_sha),
             )
             f_canon.write(line_str)
 

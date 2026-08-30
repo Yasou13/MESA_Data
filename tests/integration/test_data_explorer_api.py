@@ -29,8 +29,8 @@ def test_data_explorer_search_and_facets(tmp_path, monkeypatch):
            VALUES ('ver-ex-1', 'doc-ex-1', 'art-ex-1', 'snapshot', 'canonical/ex1.jsonl', 1, 'sha-ver-ex-1', 'test_parser', '1.0', '1.0', 'valid', 'clean', 'approved', '2026-08-05T00:00:00Z')"""
     )
     c.execute(
-        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-           VALUES ('rec-ex-1', 'ver-ex-1', 'article', 'canonical/ex1.jsonl', 1, 'sha-rec-ex-1', 'valid', 'approved', '2026-08-05T00:00:00Z')"""
+        """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('ver-ex-1:rec-ex-1', 'rec-ex-1', 'ver-ex-1', 'article', 'canonical/ex1.jsonl', 1, 'sha-rec-ex-1', 'valid', 'approved', '2026-08-05T00:00:00Z')"""
     )
     conn.commit()
     conn.close()

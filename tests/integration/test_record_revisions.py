@@ -33,8 +33,8 @@ def test_record_revision_flow(tmp_path, monkeypatch):
            VALUES ('ver-rev-1', 'doc-rev-1', 'art-rev-1', 'snapshot', 'canonical/rev.jsonl', 1, 'sha-ver-rev-1', 'test_parser', '1.0', '1.0', 'valid', 'clean', 'pending', '2026-08-05T00:00:00Z')"""
     )
     c.execute(
-        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-           VALUES ('rec-orig-1', 'ver-rev-1', 'article', 'canonical/rev.jsonl', 1, 'sha-rec-orig-1', 'valid', 'pending', '2026-08-05T00:00:00Z')"""
+        """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('ver-rev-1:rec-orig-1', 'rec-orig-1', 'ver-rev-1', 'article', 'canonical/rev.jsonl', 1, 'sha-rec-orig-1', 'valid', 'pending', '2026-08-05T00:00:00Z')"""
     )
     conn.commit()
 
@@ -78,8 +78,8 @@ def test_record_revision_flow(tmp_path, monkeypatch):
            VALUES ('ver-rev-2', 'doc-rev-1', 'art-rev-2', 'snapshot', 'canonical/rev2.jsonl', 1, 'sha-ver-rev-2', 'test_parser', '1.0', '1.0', 'valid', 'clean', 'pending', '2026-08-06T00:00:00Z', 2)"""
     )
     c.execute(
-        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-           VALUES ('rec-orig-1', 'ver-rev-2', 'article', 'canonical/rev2.jsonl', 1, 'sha-rec-orig-2', 'valid', 'pending', '2026-08-06T00:00:00Z')"""
+        """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('ver-rev-2:rec-orig-1', 'rec-orig-1', 'ver-rev-2', 'article', 'canonical/rev2.jsonl', 1, 'sha-rec-orig-2', 'valid', 'pending', '2026-08-06T00:00:00Z')"""
     )
     c.execute("UPDATE records SET approval_status = 'pending' WHERE version_id = 'ver-rev-1'")
     scoped_rev = create_record_revision(

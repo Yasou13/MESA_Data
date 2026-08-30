@@ -104,13 +104,13 @@ def _seed_data(tmp_path):
     canon_file.write_text(line1 + line2, encoding="utf-8")
 
     conn.execute(
-        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-           VALUES ('rec-e2e-art-1', 'ver-e2e-1', 'article', 'canonical/e2e/article.jsonl', 1, ?, 'valid', 'pending', '2026-08-05T00:00:00Z')""",
+        """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('ver-e2e-1:rec-e2e-art-1', 'rec-e2e-art-1', 'ver-e2e-1', 'article', 'canonical/e2e/article.jsonl', 1, ?, 'valid', 'pending', '2026-08-05T00:00:00Z')""",
         (sha1,),
     )
     conn.execute(
-        """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-           VALUES ('rec-e2e-art-2', 'ver-e2e-1', 'article', 'canonical/e2e/article.jsonl', 2, ?, 'valid', 'pending', '2026-08-05T00:00:00Z')""",
+        """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+           VALUES ('ver-e2e-1:rec-e2e-art-2', 'rec-e2e-art-2', 'ver-e2e-1', 'article', 'canonical/e2e/article.jsonl', 2, ?, 'valid', 'pending', '2026-08-05T00:00:00Z')""",
         (sha2,),
     )
     conn.commit()

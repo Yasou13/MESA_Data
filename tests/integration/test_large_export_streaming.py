@@ -41,9 +41,9 @@ def test_large_export_streaming(tmp_path, monkeypatch):
         lines.append(json.dumps(rec_obj) + "\n")
         line_num = i + 1
         c.execute(
-            """INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-               VALUES (?, 'ver-bulk', 'article', 'canonical/bulk.jsonl', ?, ?, 'valid', 'approved', '2026-08-05T00:00:00Z')""",
-            (rec_id, line_num, f"sha-rec-{i}"),
+            """INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+               VALUES (?, ?, 'ver-bulk', 'article', 'canonical/bulk.jsonl', ?, ?, 'valid', 'approved', '2026-08-05T00:00:00Z')""",
+            (f"ver-bulk:{rec_id}", rec_id, line_num, f"sha-rec-{i}"),
         )
     canon_file.write_text("".join(lines), encoding="utf-8")
     conn.commit()

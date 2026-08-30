@@ -618,9 +618,9 @@ def test_flagged_privacy_human_approval_resolves_eligibility(tmp_path, monkeypat
     conn.execute(
         """
         INSERT INTO records (
-            record_id, version_id, record_type, canonical_path, canonical_line,
+            record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line,
             record_sha256, validation_status, approval_status, created_at
-        ) VALUES ('rec-flagged', 'ver-flagged', 'legislation', 'canonical/test.jsonl', 1,
+        ) VALUES ('ver-flagged:rec-flagged', 'rec-flagged', 'ver-flagged', 'legislation', 'canonical/test.jsonl', 1,
                   'hash1', 'valid', 'pending', ?)
         """,
         (now,),
@@ -763,8 +763,8 @@ def test_provenance_actual_membership(tmp_path, monkeypatch):
     )
     conn.execute(
         """
-        INSERT INTO records (record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
-        VALUES ('rec1', 'ver1', 'legislation', 'c/1', 1, 'h1', 'valid', 'approved', ?)
+        INSERT INTO records (record_instance_id, record_id, version_id, record_type, canonical_path, canonical_line, record_sha256, validation_status, approval_status, created_at)
+        VALUES ('ver1:rec1', 'rec1', 'ver1', 'legislation', 'c/1', 1, 'h1', 'valid', 'approved', ?)
         """,
         (now,),
     )
