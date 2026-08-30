@@ -607,7 +607,7 @@
                 </div>
                 <div class="form-group">
                   <label for="mesa-target-limit">Chunk Boyut Limiti (Karakter)</label>
-                  <input type="number" id="mesa-target-limit" value="32768" min="1024" max="1048576">
+                  <input type="number" id="mesa-target-limit" value="32768" min="1024" max="32768">
                 </div>
               </div>
 
@@ -620,15 +620,23 @@
                 <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px;">
                   <div class="form-group">
                     <label for="mesa-health-path">Health yolu</label>
-                    <input type="text" id="mesa-health-path" placeholder="/documented/health">
+                    <input type="text" id="mesa-health-path" placeholder="/health">
+                  </div>
+                  <div class="form-group">
+                    <label for="mesa-session-start-path">Session başlatma yolu</label>
+                    <input type="text" id="mesa-session-start-path" placeholder="/v4/sessions/start">
                   </div>
                   <div class="form-group">
                     <label for="mesa-publish-path">Publish yolu</label>
-                    <input type="text" id="mesa-publish-path" placeholder="/documented/publish">
+                    <input type="text" id="mesa-publish-path" placeholder="/v4/memory/insert">
                   </div>
                   <div class="form-group">
                     <label for="mesa-mutation-path">Mutation durum yolu</label>
-                    <input type="text" id="mesa-mutation-path" placeholder="/documented/mutations/{mutation_id}">
+                    <input type="text" id="mesa-mutation-path" placeholder="/v4/mutations/{mutation_id}">
+                  </div>
+                  <div class="form-group">
+                    <label for="mesa-session-end-path">Session kapatma yolu</label>
+                    <input type="text" id="mesa-session-end-path" placeholder="/v4/sessions/{session_id}/end">
                   </div>
                 </div>
               </details>

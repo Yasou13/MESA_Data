@@ -84,10 +84,12 @@ class MesaTargetSettingsUpdateRequest(BaseModel):
     workspace_id: str = Field(min_length=1, max_length=100)
     dataset_id: str = Field(min_length=1, max_length=100)
     agent_id: str = Field(min_length=1, max_length=100)
-    content_limit_chars: int = Field(default=32768, ge=1024, le=1048576)
-    health_path: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
-    publish_path: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
-    mutation_status_path_template: str = Field(default="", max_length=300, pattern=r"^(|/.*)$")
+    content_limit_chars: int = Field(default=32768, ge=1024, le=32768)
+    health_path: str = Field(default="/health", max_length=300, pattern=r"^/.*$")
+    session_start_path: str = Field(default="/v4/sessions/start", max_length=300, pattern=r"^/.*$")
+    publish_path: str = Field(default="/v4/memory/insert", max_length=300, pattern=r"^/.*$")
+    mutation_status_path_template: str = Field(default="/v4/mutations/{mutation_id}", max_length=300, pattern=r"^/.*$")
+    session_end_path_template: str = Field(default="/v4/sessions/{session_id}/end", max_length=300, pattern=r"^/.*$")
 
 
 class MesaPublishRequest(BaseModel):

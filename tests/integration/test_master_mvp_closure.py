@@ -512,7 +512,7 @@ def test_master_j_release_bound_delivery_plan_and_cancellation(tmp_path, monkeyp
     monkeypatch.setenv("MESA_DATA_MESA_API_KEY", "test_secret_api_key")
     monkeypatch.setenv("MESA_DATA_MESA_ALLOWED_HOST", "mock-mesa.internal")
 
-    respx.get("https://mock-mesa.internal/v4/health").mock(return_value=httpx.Response(200, json={"status": "ok"}))
+    respx.get("https://mock-mesa.internal/health").mock(return_value=httpx.Response(200, json={"status": "ok"}))
 
     doc_id = "tr:legislation:law:pub-rel-bound"
     html = """<html><body><h1>PUBLISH BOUND LAW</h1><p><b>Madde 1-</b> Yayınlanacak madde metni.</p></body></html>"""
@@ -529,11 +529,15 @@ def test_master_j_release_bound_delivery_plan_and_cancellation(tmp_path, monkeyp
         dataset_id="tr_legislation",
         agent_id="publisher",
         contract_source="configured",
-        health_path="/v4/health",
-        publish_path="/v4/sources/chunks",
+        health_path="/health",
+        session_start_path="/v4/sessions/start",
+        publish_path="/v4/memory/insert",
         mutation_status_path_template="/v4/mutations/{mutation_id}",
     )
     upsert_mesa_target_settings(conn, settings)
+    respx.post("https://mock-mesa.internal/v4/sessions/start").mock(
+        return_value=httpx.Response(201, json={"status": "started", "session_id": "sess-cancel"})
+    )
 
     ver = get_version_for_artifact(conn, art_id)
     assert ver is not None

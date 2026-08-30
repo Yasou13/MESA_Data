@@ -39,8 +39,9 @@ def client(tmp_path, monkeypatch):
             dataset_id="tr_legislation",
             agent_id="publisher",
             contract_source="configured",
-            health_path="/v4/health",
-            publish_path="/v4/sources/chunks",
+            health_path="/health",
+            session_start_path="/v4/sessions/start",
+            publish_path="/v4/memory/insert",
             mutation_status_path_template="/v4/mutations/{mutation_id}",
         ),
     )
@@ -147,9 +148,10 @@ def test_publisher_settings_and_preflight_endpoints(client):
             "workspace_id": "legal",
             "dataset_id": "tr_legislation",
             "agent_id": "publisher_v4",
-            "content_limit_chars": 65536,
-            "health_path": "/v4/health",
-            "publish_path": "/v4/sources/chunks",
+            "content_limit_chars": 32768,
+            "health_path": "/health",
+            "session_start_path": "/v4/sessions/start",
+            "publish_path": "/v4/memory/insert",
             "mutation_status_path_template": "/v4/mutations/{mutation_id}",
         },
     )
@@ -157,7 +159,7 @@ def test_publisher_settings_and_preflight_endpoints(client):
     upd_data = res_post.json()["data"]
     assert upd_data["base_url"] == "https://mesa-updated.internal"
     assert upd_data["tenant_id"] == "corp"
-    assert upd_data["content_limit_chars"] == 65536
+    assert upd_data["content_limit_chars"] == 32768
 
     # 3. GET Ready Summary
     res_sum = client.get("/api/publisher/ready-summary", headers=headers)

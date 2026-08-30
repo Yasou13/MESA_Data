@@ -40,8 +40,9 @@ def setup_publisher_env(tmp_path, monkeypatch):
         dataset_id="tr_legislation",
         agent_id="publisher",
         contract_source="configured",
-        health_path="/v4/health",
-        publish_path="/v4/sources/chunks",
+        health_path="/health",
+        session_start_path="/v4/sessions/start",
+        publish_path="/v4/memory/insert",
         mutation_status_path_template="/v4/mutations/{mutation_id}",
     )
     upsert_mesa_target_settings(conn, settings)
@@ -146,10 +147,17 @@ def setup_publisher_env(tmp_path, monkeypatch):
 @respx.mock
 def test_full_delivery_success_and_cross_release_dedup(setup_publisher_env):
     # Mock MESA endpoints
-    respx.get("https://mock-mesa.internal/v4/health").respond(200, json={"status": "ok"})
-    respx.post("https://mock-mesa.internal/v4/sources/chunks").respond(
-        200, json={"mutation_id": "mut-101", "state": "COMMITTED", "message": "Committed directly"}
+    respx.get("https://mock-mesa.internal/health").respond(200, json={"status": "ok"})
+    starts = respx.post("https://mock-mesa.internal/v4/sessions/start").respond(
+        201, json={"status": "started", "session_id": "sess-run-1"}
     )
+    inserts = respx.post("https://mock-mesa.internal/v4/memory/insert").respond(
+        202, json={"mutation_id": "mut-101", "status": "accepted"}
+    )
+    respx.get("https://mock-mesa.internal/v4/mutations/mut-101").respond(
+        200, json={"mutation_id": "mut-101", "candidate_id": "cand", "state": "COMMITTED"}
+    )
+    respx.post("https://mock-mesa.internal/v4/sessions/sess-run-1/end").respond(200, json={"status": "ended"})
 
     # First delivery
     del1 = execute_publish_delivery(delivery_id="del-run-1")
@@ -157,6 +165,8 @@ def test_full_delivery_success_and_cross_release_dedup(setup_publisher_env):
     assert del1["committed_items"] == 2
     assert del1["skipped_items"] == 0
     assert del1["failed_items"] == 0
+    assert starts.call_count == 1
+    assert inserts.call_count == 2
 
     # Second delivery (Cross-release dedup check: same content must be SKIPPED)
     del2 = execute_publish_delivery(delivery_id="del-run-2")
@@ -168,7 +178,10 @@ def test_full_delivery_success_and_cross_release_dedup(setup_publisher_env):
 
 @respx.mock
 def test_partial_failure_and_retry_workflow(setup_publisher_env):
-    respx.get("https://mock-mesa.internal/v4/health").respond(200, json={"status": "ok"})
+    respx.get("https://mock-mesa.internal/health").respond(200, json={"status": "ok"})
+    respx.post("https://mock-mesa.internal/v4/sessions/start").respond(
+        201, json={"status": "started", "session_id": "sess-partial"}
+    )
 
     # First call succeeds for chunk 1, fails for chunk 2
     call_count = 0
@@ -177,12 +190,15 @@ def test_partial_failure_and_retry_workflow(setup_publisher_env):
         nonlocal call_count
         call_count += 1
         payload = json.loads(request.content)
-        if payload.get("ordinal") == 1:
-            return httpx.Response(200, json={"mutation_id": "mut-1", "state": "COMMITTED"})
+        if payload.get("chunk_ordinal") == 1:
+            return httpx.Response(202, json={"mutation_id": "mut-1", "status": "accepted"})
         else:
             return httpx.Response(500, text="Internal server error")
 
-    respx.post("https://mock-mesa.internal/v4/sources/chunks").mock(side_effect=chunk_handler)
+    respx.post("https://mock-mesa.internal/v4/memory/insert").mock(side_effect=chunk_handler)
+    respx.get("https://mock-mesa.internal/v4/mutations/mut-1").respond(
+        200, json={"mutation_id": "mut-1", "candidate_id": "cand", "state": "COMMITTED"}
+    )
 
     # 1. Delivery results in PARTIAL
     del_res = execute_publish_delivery(delivery_id="del-partial-1")
@@ -191,9 +207,13 @@ def test_partial_failure_and_retry_workflow(setup_publisher_env):
     assert del_res["failed_items"] == 1
 
     # 2. Fix the server for retry
-    respx.post("https://mock-mesa.internal/v4/sources/chunks").mock(
-        return_value=httpx.Response(200, json={"mutation_id": "mut-2", "state": "COMMITTED"})
+    respx.post("https://mock-mesa.internal/v4/memory/insert").mock(
+        return_value=httpx.Response(202, json={"mutation_id": "mut-2", "status": "accepted"})
     )
+    respx.get("https://mock-mesa.internal/v4/mutations/mut-2").respond(
+        200, json={"mutation_id": "mut-2", "candidate_id": "cand", "state": "COMMITTED"}
+    )
+    respx.post("https://mock-mesa.internal/v4/sessions/sess-partial/end").respond(200, json={"status": "ended"})
 
     # 3. Retry only failed items
     retry_res = retry_delivery_failures(delivery_id="del-partial-1")
@@ -205,19 +225,26 @@ def test_partial_failure_and_retry_workflow(setup_publisher_env):
 
 @respx.mock
 def test_response_loss_retry_reuses_exact_idempotency_key(setup_publisher_env):
-    respx.get("https://mock-mesa.internal/v4/health").respond(200, json={"status": "ok"})
+    respx.get("https://mock-mesa.internal/health").respond(200, json={"status": "ok"})
+    respx.post("https://mock-mesa.internal/v4/sessions/start").respond(
+        201, json={"status": "started", "session_id": "sess-loss"}
+    )
     seen_keys = []
     call_count = 0
 
     def response_loss_then_commit(request):
         nonlocal call_count
         call_count += 1
-        seen_keys.append(request.headers["Idempotency-Key"])
+        seen_keys.append(json.loads(request.content)["idempotency_key"])
         if call_count == 1:
             raise httpx.ReadTimeout("response lost after request was sent", request=request)
-        return httpx.Response(200, json={"mutation_id": "mut-after-loss", "state": "COMMITTED"})
+        return httpx.Response(202, json={"mutation_id": "mut-after-loss", "status": "accepted"})
 
-    respx.post("https://mock-mesa.internal/v4/sources/chunks").mock(side_effect=response_loss_then_commit)
+    respx.post("https://mock-mesa.internal/v4/memory/insert").mock(side_effect=response_loss_then_commit)
+    respx.get("https://mock-mesa.internal/v4/mutations/mut-after-loss").respond(
+        200, json={"mutation_id": "mut-after-loss", "candidate_id": "cand", "state": "COMMITTED"}
+    )
+    respx.post("https://mock-mesa.internal/v4/sessions/sess-loss/end").respond(200, json={"status": "ended"})
 
     first = execute_publish_delivery(delivery_id="del-response-loss")
     assert first["status"] == "PARTIAL"

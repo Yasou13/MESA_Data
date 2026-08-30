@@ -2151,12 +2151,17 @@ def update_publisher_settings_endpoint(req: MesaTargetSettingsUpdateRequest, tar
         content_limit_chars=req.content_limit_chars,
         contract_source=(
             "configured"
-            if req.health_path and req.publish_path and "{mutation_id}" in req.mutation_status_path_template
+            if req.health_path
+            and req.session_start_path
+            and req.publish_path
+            and "{mutation_id}" in req.mutation_status_path_template
             else "unknown"
         ),
         health_path=req.health_path,
+        session_start_path=req.session_start_path,
         publish_path=req.publish_path,
         mutation_status_path_template=req.mutation_status_path_template,
+        session_end_path_template=req.session_end_path_template,
     )
     upsert_mesa_target_settings(conn, new_settings)
     conn.close()

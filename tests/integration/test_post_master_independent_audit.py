@@ -916,15 +916,16 @@ def test_control_44_to_53_mesa_publisher_all_mutation_states_and_security(tmp_pa
     assert "MESA target host is not the explicitly allowed host" in err
 
     # Control 44: Auth failures 401/403 -> reachable=True, authenticated=False
-    respx.get("https://mock-mesa.internal/v4/health").mock(
+    respx.get("https://mock-mesa.internal/health").mock(
         return_value=httpx.Response(401, json={"detail": "Unauthorized"})
     )
     valid_settings = MesaTargetSettings(
         target_key="default",
         base_url="https://mock-mesa.internal",
         contract_source="configured",
-        health_path="/v4/health",
-        publish_path="/v4/sources/chunks",
+        health_path="/health",
+        session_start_path="/v4/sessions/start",
+        publish_path="/v4/memory/insert",
         mutation_status_path_template="/v4/mutations/{mutation_id}",
     )
     client = MesaClient(valid_settings)
@@ -970,9 +971,18 @@ def test_control_44_to_53_mesa_publisher_all_mutation_states_and_security(tmp_pa
     build_release(release_id=rel_id)
 
     # Mock health 200, publish 200 COMMITTED
-    respx.get("https://mock-mesa.internal/v4/health").mock(return_value=httpx.Response(200, json={"status": "ok"}))
-    respx.post("https://mock-mesa.internal/v4/sources/chunks").mock(
-        return_value=httpx.Response(200, json={"mutation_id": "mut-1", "state": "COMMITTED"})
+    respx.get("https://mock-mesa.internal/health").mock(return_value=httpx.Response(200, json={"status": "ok"}))
+    respx.post("https://mock-mesa.internal/v4/sessions/start").mock(
+        return_value=httpx.Response(201, json={"status": "started", "session_id": "sess-audit"})
+    )
+    respx.post("https://mock-mesa.internal/v4/memory/insert").mock(
+        return_value=httpx.Response(202, json={"mutation_id": "mut-1", "status": "accepted"})
+    )
+    respx.get("https://mock-mesa.internal/v4/mutations/mut-1").mock(
+        return_value=httpx.Response(200, json={"mutation_id": "mut-1", "candidate_id": "cand", "state": "COMMITTED"})
+    )
+    respx.post("https://mock-mesa.internal/v4/sessions/sess-audit/end").mock(
+        return_value=httpx.Response(200, json={"status": "ended"})
     )
 
     del_id_1 = f"del-1-{uuid.uuid4().hex[:6]}"
@@ -1040,8 +1050,13 @@ def test_control_44_to_53_mesa_publisher_all_mutation_states_and_security(tmp_pa
     conn.close()
 
     # Retry only retries the failed item
-    respx.post("https://mock-mesa.internal/v4/sources/chunks").mock(
-        return_value=httpx.Response(200, json={"mutation_id": "mut-retry", "state": "COMMITTED"})
+    respx.post("https://mock-mesa.internal/v4/memory/insert").mock(
+        return_value=httpx.Response(202, json={"mutation_id": "mut-retry", "status": "accepted"})
+    )
+    respx.get("https://mock-mesa.internal/v4/mutations/mut-retry").mock(
+        return_value=httpx.Response(
+            200, json={"mutation_id": "mut-retry", "candidate_id": "cand", "state": "COMMITTED"}
+        )
     )
     res_retry = retry_delivery_failures(del_partial_id)
     assert res_retry["status"] == DeliveryStatus.COMMITTED.value
