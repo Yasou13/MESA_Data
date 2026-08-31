@@ -344,6 +344,8 @@ def execute_publish_delivery(
     expected_target_config_sha256: str | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     is_cancelled_cb: Callable[[], bool] | None = None,
+    max_inline_polls: int = 5,
+    poll_interval_seconds: float = 0.5,
 ) -> dict[str, Any]:
     """
     Executes an end-to-end MESA v4 publish delivery:
@@ -499,7 +501,6 @@ def execute_publish_delivery(
 
             final_item_state = initial_state
             if initial_state in (MutationState.QUEUED.value, MutationState.PROCESSING.value):
-                # Poll mutation until terminal state
                 update_delivery_item_state(
                     conn,
                     item_id=item_id,
@@ -507,8 +508,9 @@ def execute_publish_delivery(
                     remote_mutation_id=remote_mutation_id,
                 )
                 poll_attempts = 0
-                while poll_attempts < 5:
-                    time.sleep(0.5)
+                while poll_attempts < max_inline_polls:
+                    if poll_interval_seconds > 0:
+                        time.sleep(poll_interval_seconds)
                     poll_res = client.get_mutation_status(remote_mutation_id or "")
                     polled_state = poll_res.get("state")
                     if polled_state in (
