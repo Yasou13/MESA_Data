@@ -29,7 +29,7 @@ class MesaClient:
         self,
         settings: MesaTargetSettings,
         api_key: str | None = None,
-        timeout_seconds: float = 15.0,
+        timeout_seconds: float = 60.0,
     ):
         self.settings = settings
         self._api_key = api_key or os.environ.get("MESA_DATA_MESA_API_KEY") or os.environ.get("MESA_API_KEY")
