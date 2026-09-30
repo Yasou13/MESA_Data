@@ -531,3 +531,298 @@ def publish_release(release_id: str) -> dict[str, Any]:
         conn.close()
 
     return {"release_id": release_id, "status": "published", "published_at": now_iso}
+
+
+def build_qualification_release(
+    release_id: str | None = None,
+    *,
+    base_release_id: str | None = "release-v0.1.0",
+    baseline_identity_map_path: Path | None = None,
+    qualification_scope: dict[str, Any] | None = None,
+    forbidden_scope: dict[str, str] | None = None,
+    authorized_document: str | None = None,
+    data_root_override: Path | None = None,
+) -> dict[str, Any]:
+    """
+    Builds a new official qualification release package containing the baseline Turkish legal corpus
+    plus deterministic Phase 7 adversarial qualification fixtures.
+
+    Guarantees:
+      - Historical release 'release-20260831T145932Z' remains strictly immutable and protected.
+      - Produces an official data/identity_map.jsonl binding all baseline and fixture identities.
+      - Produces data/qualification_fixtures.json mapping all 12 Phase 7 cases with semantic validation.
+      - Emits a complete manifest.json with cryptographic SHA256 trust anchors.
+      - Full verification with verify_release_directory before atomic rename.
+    """
+    settings = load_settings()
+    data_root = data_root_override or settings.data_root_path
+
+    if not release_id:
+        now_str = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        release_id = f"release-{now_str}-qual"
+    else:
+        validate_release_id(release_id)
+
+    if release_id == "release-20260831T145932Z":
+        raise ReleaseBuildError("Cannot overwrite immutable historical qualification release 'release-20260831T145932Z'")
+
+    final_dir = data_root / "releases" / release_id
+    if final_dir.exists():
+        raise ReleaseBuildError(f"Release directory already exists for release_id '{release_id}'")
+
+    building_dir = data_root / "releases" / f".building-{release_id}-{uuid.uuid4().hex[:8]}"
+    building_dir.mkdir(parents=True, exist_ok=True)
+    building_data_dir = building_dir / "data"
+    building_data_dir.mkdir(parents=True, exist_ok=True)
+    building_schemas_dir = building_dir / "schemas"
+    building_schemas_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Base legal corpus staging
+    base_dir = data_root / "releases" / base_release_id / "data" if base_release_id else None
+    type_files = ["legislation.jsonl", "articles.jsonl", "decisions.jsonl", "citations.jsonl"]
+
+    for tf in type_files:
+        dst = building_data_dir / tf
+        src = base_dir / tf if base_dir and (base_dir / tf).exists() else None
+        if src and src.exists():
+            shutil.copy2(src, dst)
+        else:
+            dst.touch()
+
+    # Reconstruct or copy release-index.jsonl from base
+    base_idx = base_dir / "release-index.jsonl" if base_dir else None
+    if base_idx and base_idx.exists():
+        shutil.copy2(base_idx, building_data_dir / "release-index.jsonl")
+    else:
+        # Reconstruct base index deterministically from base payloads
+        with open(building_data_dir / "release-index.jsonl", "w", encoding="utf-8") as idx_out:
+            for r_type in ["legislation", "article", "decision", "citation"]:
+                plural_map = {"legislation": "legislation.jsonl", "article": "articles.jsonl", "decision": "decisions.jsonl", "citation": "citations.jsonl"}
+                target_f = building_data_dir / plural_map[r_type]
+                if not target_f.exists():
+                    continue
+                with open(target_f, "r", encoding="utf-8") as in_f:
+                    for line in in_f:
+                        line_str = line.strip()
+                        if not line_str:
+                            continue
+                        rec = json.loads(line_str)
+                        p_sha = hashlib.sha256((line_str + "\n").encode("utf-8")).hexdigest()
+                        v_id = rec.get("version", {}).get("version_id") or rec.get("legislation_version_id") or rec["id"]
+                        d_id = rec.get("legislation_id") or rec["id"]
+                        idx_out.write(
+                            json_str_deterministic(
+                                {
+                                    "record_id": rec["id"],
+                                    "record_type": r_type,
+                                    "record_sha256": p_sha,
+                                    "payload_sha256": p_sha,
+                                    "version_id": v_id,
+                                    "document_id": d_id,
+                                }
+                            )
+                            + "\n"
+                        )
+
+    # 2. Load baseline identity map rows
+    from mesa_legal_data.release.qualification_fixtures import (
+        build_qualification_fixtures,
+        load_baseline_identity_map_rows,
+        validate_qualification_fixtures,
+    )
+
+    baseline_rows = load_baseline_identity_map_rows(baseline_identity_map_path)
+
+    # 3. Generate deterministic Phase 7 qualification fixtures
+    auth_doc = authorized_document or "tr:legislation:law:5237"
+    fixture_bundle = build_qualification_fixtures(
+        qualification_scope=qualification_scope,
+        forbidden_scope=forbidden_scope,
+        authorized_document=auth_doc,
+    )
+
+    q_scope = fixture_bundle["qualification_scope"]
+    s_auth = fixture_bundle["scope_test_authority"]
+    f_rows = fixture_bundle["identity_rows"]
+    c_records = fixture_bundle["canonical_records"]
+    r_entries = fixture_bundle["release_index_entries"]
+
+    # 4. Merge identity map rows: baseline (5,721) + fixtures (13)
+    combined_rows = baseline_rows + f_rows
+
+    # 5. Pre-validate qualification authority
+    validation_report = validate_qualification_fixtures(
+        qualification_scope=q_scope,
+        scope_test_authority=s_auth,
+        identity_map_rows=combined_rows,
+    )
+
+    # 6. Append fixture canonical records to release files
+    leg_out = building_data_dir / "legislation.jsonl"
+    art_out = building_data_dir / "articles.jsonl"
+    idx_out = building_data_dir / "release-index.jsonl"
+
+    with open(leg_out, "a", encoding="utf-8") as f_leg:
+        for rec in c_records:
+            if rec["record_type"] == "legislation":
+                f_leg.write(json_str_deterministic(rec) + "\n")
+
+    with open(art_out, "a", encoding="utf-8") as f_art:
+        for rec in c_records:
+            if rec["record_type"] == "article":
+                f_art.write(json_str_deterministic(rec) + "\n")
+
+    with open(idx_out, "a", encoding="utf-8") as f_idx:
+        for entry in r_entries:
+            f_idx.write(json_str_deterministic(entry) + "\n")
+
+    # 7. Write data/identity_map.jsonl
+    id_map_file = building_data_dir / "identity_map.jsonl"
+    with open(id_map_file, "w", encoding="utf-8") as f_map:
+        for row in combined_rows:
+            f_map.write(json_str_deterministic(row) + "\n")
+        f_map.flush()
+        os.fsync(f_map.fileno())
+
+    with open(id_map_file, "rb") as f_map:
+        identity_map_sha256 = hash_stream(f_map)
+
+    # 8. Write data/qualification_fixtures.json
+    fixtures_file = building_data_dir / "qualification_fixtures.json"
+    fixtures_payload = {
+        "qualification_scope": q_scope,
+        "scope_test_authority": s_auth,
+        "provenance": {
+            "created_at_utc": datetime.now(UTC).isoformat(),
+            "fixture_authority_hash": validation_report["fixture_authority_hash"],
+            "identity_map_sha256": identity_map_sha256,
+            "case_count": len(s_auth["case_evidence_fixtures"]),
+            "fixture_count": len(s_auth["corpus_fixtures"]),
+        },
+    }
+    with open(fixtures_file, "w", encoding="utf-8") as f_fix:
+        json.dump(fixtures_payload, f_fix, indent=2, ensure_ascii=False)
+        f_fix.flush()
+        os.fsync(f_fix.fileno())
+
+    # 9. Copy schema files
+    project_schemas_dir = Path(__file__).parent.parent.parent.parent / "schemas"
+    file_manifest_entries: dict[str, str] = {}
+    if project_schemas_dir.exists():
+        for schema_path in sorted(list(project_schemas_dir.glob("*.schema.json"))):
+            dest = building_schemas_dir / schema_path.name
+            shutil.copy2(schema_path, dest)
+            rel_schema_path = f"schemas/{schema_path.name}"
+            with open(dest, "rb") as f:
+                file_manifest_entries[rel_schema_path] = hash_stream(f)
+
+    # 10. Compute line counts and manifested files
+    counts_dict: dict[str, int] = {}
+    for r_type in ["legislation", "article", "decision", "citation"]:
+        fn = f"data/{r_type}s.jsonl" if r_type != "legislation" else "data/legislation.jsonl"
+        target_f = building_dir / fn
+        cnt = 0
+        if target_f.exists():
+            with open(target_f, "r", encoding="utf-8") as f:
+                cnt = sum(1 for line in f if line.strip())
+            with open(target_f, "rb") as f:
+                file_manifest_entries[fn] = hash_stream(f)
+        counts_dict[f"{r_type}_count"] = cnt
+
+    counts_dict["identity_map_count"] = len(combined_rows)
+    counts_dict["qualification_fixtures_count"] = len(s_auth["corpus_fixtures"])
+
+    with open(building_dir / "data/release-index.jsonl", "rb") as f:
+        file_manifest_entries["data/release-index.jsonl"] = hash_stream(f)
+    file_manifest_entries["data/identity_map.jsonl"] = identity_map_sha256
+    with open(fixtures_file, "rb") as f:
+        file_manifest_entries["data/qualification_fixtures.json"] = hash_stream(f)
+
+    # 11. Write release.json
+    now_rfc3339 = datetime.now(UTC).isoformat()
+    release_meta = {
+        "release_id": release_id,
+        "release_type": "qualification",
+        "schema_version": "1.0.0",
+        "pipeline_version": "0.1.0",
+        "created_at": now_rfc3339,
+        "published_at": None,
+        "counts": counts_dict,
+        "source_snapshot": [
+            {
+                "source_id": "mevzuat",
+                "policy_version": "1.0.0",
+                "record_count": counts_dict["legislation_count"] + counts_dict["article_count"],
+                "artifact_count": 68,
+                "latest_retrieved_at": now_rfc3339,
+            }
+        ],
+        "qualification_scope": q_scope,
+        "qualification_fixture_authority_hash": validation_report["fixture_authority_hash"],
+        "identity_map_sha256": identity_map_sha256,
+        "previous_release_id": base_release_id,
+    }
+
+    release_file = building_dir / "release.json"
+    with open(release_file, "w", encoding="utf-8") as f:
+        json.dump(release_meta, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+
+    with open(release_file, "rb") as f:
+        file_manifest_entries["release.json"] = hash_stream(f)
+
+    manifest_obj = {
+        "algorithm": "sha256",
+        "files": file_manifest_entries,
+    }
+    manifest_file = building_dir / "manifest.json"
+    with open(manifest_file, "w", encoding="utf-8") as f:
+        json.dump(manifest_obj, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+
+    with open(manifest_file, "rb") as f:
+        manifest_sha256 = hash_stream(f)
+
+    # 12. Verification of release package before atomic rename
+    verify_release_directory(building_dir, expected_release_id=release_id)
+
+    # 13. Register in catalog DB if available
+    try:
+        conn = get_connection()
+        with transaction(conn):
+            create_release(
+                conn=conn,
+                release_id=release_id,
+                release_path=str(Path("releases") / release_id),
+                status="preparing",
+                schema_version="1.0.0",
+                counts_json=json.dumps(counts_dict),
+                source_snapshot_json=json.dumps(release_meta["source_snapshot"]),
+                manifest_sha256=manifest_sha256,
+            )
+        conn.close()
+    except Exception:
+        pass
+
+    # 14. Atomic rename
+    try:
+        os.replace(building_dir, final_dir)
+    except Exception as exc:
+        if building_dir.exists():
+            shutil.rmtree(building_dir, ignore_errors=True)
+        raise ReleaseBuildError(f"Atomic rename failed for release {release_id}: {exc}") from exc
+
+    # 15. Finalize status in catalog
+    try:
+        conn = get_connection()
+        with transaction(conn):
+            conn.execute("UPDATE releases SET status = 'verified' WHERE release_id = ?", (release_id,))
+        conn.close()
+    except Exception:
+        pass
+
+    release_meta["status"] = "verified"
+    release_meta["manifest_sha256"] = manifest_sha256
+    return release_meta

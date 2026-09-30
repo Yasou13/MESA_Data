@@ -403,6 +403,28 @@ def release_build(
         raise typer.Exit(code=1)
 
 
+@release_app.command("build-qualification")
+def release_build_qualification(
+    release_id: str | None = typer.Option(None, "--release-id", help="Optional qualification release ID"),
+    base_release_id: str | None = typer.Option("release-v0.1.0", "--base-release-id", help="Base release ID"),
+):
+    """Builds a frozen qualification release with Phase 7 adversarial scope fixtures."""
+    from mesa_legal_data.release import build_qualification_release
+
+    try:
+        manifest = build_qualification_release(
+            release_id=release_id,
+            base_release_id=base_release_id,
+        )
+        typer.secho(
+            f"Successfully built qualification release {manifest['release_id']}.",
+            fg=typer.colors.GREEN,
+        )
+    except Exception as e:
+        typer.secho(f"Error building qualification release: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
 @release_app.command("verify")
 def release_verify(
     release_id: str = typer.Option(..., "--release-id", help="Release ID to verify"),
