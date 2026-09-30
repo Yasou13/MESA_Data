@@ -14,7 +14,7 @@
   "properties": {
     "id": { "type": "string" },
     "record_type": { "type": "string" },
-    "jurisdiction": { "type": "string", "const": "TR" },
+    "jurisdiction": { "type": "string", "minLength": 2, "maxLength": 10 },
     "language": { "type": "string", "const": "tr" },
     "schema_version": { "type": "string" },
     "created_at": { "type": "string" },

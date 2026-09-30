@@ -20,10 +20,19 @@
         "legislation_count": { "type": "integer" },
         "article_count": { "type": "integer" },
         "decision_count": { "type": "integer" },
-        "citation_count": { "type": "integer" }
+        "citation_count": { "type": "integer" },
+        "identity_map_count": { "type": "integer" },
+        "qualification_fixtures_count": { "type": "integer" }
       },
       "additionalProperties": false
-    }
+    },
+    "release_type": { "type": "string" },
+    "pipeline_version": { "type": "string" },
+    "qualification_fixture_authority_hash": { "type": "string" },
+    "identity_map_sha256": { "type": "string" },
+    "qualification_scope": { "type": "object" },
+    "source_snapshot": { "type": "array" },
+    "previous_release_id": { "type": ["string", "null"] }
   },
   "additionalProperties": false
 }
