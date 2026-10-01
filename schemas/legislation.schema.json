@@ -20,7 +20,7 @@
   "properties": {
     "id": { "type": "string" },
     "record_type": { "type": "string", "const": "legislation" },
-    "jurisdiction": { "type": "string", "const": "TR" },
+    "jurisdiction": { "type": "string", "minLength": 2, "maxLength": 10 },
     "language": { "type": "string", "const": "tr" },
     "legislation_type": { "type": "string" },
     "number": { "type": "string" },

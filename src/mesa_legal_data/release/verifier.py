@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from mesa_legal_data.catalog import get_connection as get_catalog_connection
 from mesa_legal_data.catalog import get_release
@@ -165,6 +166,84 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
 
     if indexed_ids != seen_record_ids:
         raise ReleaseVerificationError("Release index membership does not exactly match packaged payloads")
+
+    # 5. Qualification Fixtures & Identity Map semantic verification
+    fixtures_file = release_dir / "data/qualification_fixtures.json"
+    identity_map_file = release_dir / "data/identity_map.jsonl"
+
+    if fixtures_file.exists() or identity_map_file.exists():
+        if not fixtures_file.exists():
+            raise ReleaseVerificationError("identity_map.jsonl is present but data/qualification_fixtures.json is missing")
+        if not identity_map_file.exists():
+            raise ReleaseVerificationError("qualification_fixtures.json is present but data/identity_map.jsonl is missing")
+
+        try:
+            with open(fixtures_file, "r", encoding="utf-8") as f:
+                fixtures_data = json.load(f)
+        except Exception as exc:
+            raise ReleaseVerificationError(f"Invalid JSON in data/qualification_fixtures.json: {exc}") from exc
+
+        if not isinstance(fixtures_data, dict):
+            raise ReleaseVerificationError("data/qualification_fixtures.json must be a JSON object")
+
+        q_scope = fixtures_data.get("qualification_scope")
+        s_authority = fixtures_data.get("scope_test_authority")
+        if not isinstance(q_scope, dict):
+            raise ReleaseVerificationError("qualification_fixtures.json missing 'qualification_scope' object")
+        if not isinstance(s_authority, dict):
+            raise ReleaseVerificationError("qualification_fixtures.json missing 'scope_test_authority' object")
+
+        identity_rows: list[dict[str, Any]] = []
+        with open(identity_map_file, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, start=1):
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                try:
+                    row_dict = json.loads(line_str)
+                except Exception as exc:
+                    raise ReleaseVerificationError(
+                        f"Invalid JSON in data/identity_map.jsonl at line {line_num}: {exc}"
+                    ) from exc
+                identity_rows.append(row_dict)
+
+        from mesa_legal_data.release.qualification_fixtures import (
+            QualificationFixtureError,
+            validate_qualification_fixtures,
+        )
+
+        try:
+            report = validate_qualification_fixtures(
+                qualification_scope=q_scope,
+                scope_test_authority=s_authority,
+                identity_map_rows=identity_rows,
+            )
+        except QualificationFixtureError as exc:
+            raise ReleaseVerificationError(
+                f"Phase 7 qualification fixture semantic validation failed: {exc}"
+            ) from exc
+
+        expected_map_sha = release_meta.get("identity_map_sha256")
+        if expected_map_sha:
+            with open(identity_map_file, "rb") as f:
+                actual_map_sha = hash_stream(f)
+            if actual_map_sha.lower() != expected_map_sha.lower():
+                raise ReleaseVerificationError(
+                    f"identity_map_sha256 mismatch: expected {expected_map_sha}, got {actual_map_sha}"
+                )
+
+        expected_auth_hash = release_meta.get("qualification_fixture_authority_hash")
+        if expected_auth_hash:
+            if expected_auth_hash.lower() != report["fixture_authority_hash"].lower():
+                raise ReleaseVerificationError(
+                    f"qualification_fixture_authority_hash mismatch: expected {expected_auth_hash}, got {report['fixture_authority_hash']}"
+                )
+
+        expected_id_count = counts.get("identity_map_count")
+        if expected_id_count is not None and expected_id_count != len(identity_rows):
+            raise ReleaseVerificationError(
+                f"identity_map_count mismatch: expected {expected_id_count}, got {len(identity_rows)}"
+            )
 
     return True
 
