@@ -191,7 +191,9 @@ def test_11_fixture_id_absent_from_identity_map(baseline_setup) -> None:
     fid = s_auth["case_evidence_fixtures"]["cross_tenant_search"][0]
     # Remove row from identity map
     filtered_rows = [r for r in rows if r.get("evidence_id") != fid]
-    with pytest.raises(QualificationFixtureError, match="is absent from frozen identity authority|unknown frozen identity"):
+    with pytest.raises(
+        QualificationFixtureError, match="is absent from frozen identity authority|unknown frozen identity"
+    ):
         validate_qualification_fixtures(
             qualification_scope=q_scope,
             scope_test_authority=s_auth,
@@ -412,7 +414,11 @@ def test_publisher_compatibility_for_qualification_fixtures(tmp_path: Path) -> N
             ver_id = row["version_id"]
 
             matching_articles = [
-                r for r in records if r["record_type"] == "article" and r["legislation_id"] == doc_id and r["legislation_version_id"] == ver_id
+                r
+                for r in records
+                if r["record_type"] == "article"
+                and r["legislation_id"] == doc_id
+                and r["legislation_version_id"] == ver_id
             ]
             assert len(matching_articles) >= 1, f"Missing article record for fixture {fixture_id}"
             art = matching_articles[0]
@@ -440,4 +446,3 @@ def test_publisher_compatibility_for_qualification_fixtures(tmp_path: Path) -> N
             )
             assert idemp.startswith("mesa-data:")
             assert len(idemp) == 74
-

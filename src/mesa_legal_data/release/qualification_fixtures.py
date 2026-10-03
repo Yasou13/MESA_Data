@@ -570,7 +570,9 @@ def build_qualification_fixtures(
             }
             canonical_records.append(leg_record)
             leg_payload_sha = hashlib.sha256(
-                (json.dumps(leg_record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+                (json.dumps(leg_record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                    "utf-8"
+                )
             ).hexdigest()
             release_index_entries.append(
                 {
@@ -681,9 +683,7 @@ def validate_qualification_fixtures(
     }
     missing_scope = sorted(required_scope_fields - qualification_scope.keys())
     if missing_scope:
-        raise QualificationFixtureError(
-            f"qualification_scope is missing required fields: {missing_scope}"
-        )
+        raise QualificationFixtureError(f"qualification_scope is missing required fields: {missing_scope}")
     tenant_id = qualification_scope["tenant_id"]
     workspace_id = qualification_scope["workspace_id"]
     dataset_ids = qualification_scope["dataset_ids"]
@@ -718,9 +718,7 @@ def validate_qualification_fixtures(
     }
     missing_auth = sorted(required_authority_fields - scope_test_authority.keys())
     if missing_auth:
-        raise QualificationFixtureError(
-            f"scope_test_authority is missing required fields: {missing_auth}"
-        )
+        raise QualificationFixtureError(f"scope_test_authority is missing required fields: {missing_auth}")
 
     forbidden_tenant = scope_test_authority["forbidden_tenant"]
     forbidden_dataset = scope_test_authority["forbidden_dataset"]
@@ -759,15 +757,11 @@ def validate_qualification_fixtures(
                 else QualificationIdentityRow.model_validate(raw_row)
             )
         except ValidationError as exc:
-            raise QualificationFixtureError(
-                f"invalid identity map row at line {idx}: {exc}"
-            ) from exc
+            raise QualificationFixtureError(f"invalid identity map row at line {idx}: {exc}") from exc
 
         pair = (row.mesa_chunk_id, row.source_chunk_id)
         if pair in seen_chunk_pairs:
-            raise QualificationFixtureError(
-                f"duplicate identity mapping at line {idx}: {pair!r}"
-            )
+            raise QualificationFixtureError(f"duplicate identity mapping at line {idx}: {pair!r}")
         seen_chunk_pairs.add(pair)
 
         rows_by_source_chunk.setdefault(row.source_chunk_id, []).append(row)
@@ -776,9 +770,7 @@ def validate_qualification_fixtures(
 
     # Authorized document presence in identity map
     if authorized_document not in rows_by_document_id:
-        raise QualificationFixtureError(
-            f"authorized_document {authorized_document!r} is absent from identity map"
-        )
+        raise QualificationFixtureError(f"authorized_document {authorized_document!r} is absent from identity map")
 
     # 4. Check case coverage
     if not isinstance(case_evidence_fixtures, dict):
@@ -801,19 +793,13 @@ def validate_qualification_fixtures(
             or not fixtures
             or any(not isinstance(fid, str) or not fid.strip() for fid in fixtures)
         ):
-            raise QualificationFixtureError(
-                f"case {case_id} requires at least one non-empty fixture ID"
-            )
+            raise QualificationFixtureError(f"case {case_id} requires at least one non-empty fixture ID")
         if len(fixtures) != len(set(fixtures)):
-            raise QualificationFixtureError(
-                f"case {case_id} contains duplicate fixture IDs"
-            )
+            raise QualificationFixtureError(f"case {case_id} contains duplicate fixture IDs")
         all_fixture_ids.extend(fixtures)
 
     if len(all_fixture_ids) != len(set(all_fixture_ids)):
-        raise QualificationFixtureError(
-            "fixture IDs must be unique across all Phase 7 cases"
-        )
+        raise QualificationFixtureError("fixture IDs must be unique across all Phase 7 cases")
 
     if not isinstance(corpus_fixtures, dict):
         raise QualificationFixtureError("corpus_fixtures must be an object")
@@ -821,9 +807,7 @@ def validate_qualification_fixtures(
     if set(corpus_fixtures.keys()) != set(all_fixture_ids):
         missing = sorted(set(all_fixture_ids) - set(corpus_fixtures.keys()))
         unreferenced = sorted(set(corpus_fixtures.keys()) - set(all_fixture_ids))
-        raise QualificationFixtureError(
-            f"corpus_fixtures mismatch; missing={missing}, unreferenced={unreferenced}"
-        )
+        raise QualificationFixtureError(f"corpus_fixtures mismatch; missing={missing}, unreferenced={unreferenced}")
 
     # 5. Semantic validation of each fixture
     for case_id in REQUIRED_SCOPE_CASE_IDS:
@@ -851,9 +835,7 @@ def validate_qualification_fixtures(
                     f"fixture {fixture_id!r} has identity_type {identity_type!r}; case {case_id} requires {expected_type!r}"
                 )
             if not isinstance(source_chunk_id, str) or not source_chunk_id:
-                raise QualificationFixtureError(
-                    f"fixture {fixture_id!r} lacks source_chunk_id binding"
-                )
+                raise QualificationFixtureError(f"fixture {fixture_id!r} lacks source_chunk_id binding")
 
             # Resolve bound rows
             if source_chunk_id not in rows_by_source_chunk:
@@ -863,9 +845,7 @@ def validate_qualification_fixtures(
 
             source_rows = rows_by_source_chunk[source_chunk_id]
             if identity_type == "chunk":
-                bound_rows = [
-                    r for r in source_rows if fixture_id in {r.mesa_chunk_id, r.source_chunk_id}
-                ]
+                bound_rows = [r for r in source_rows if fixture_id in {r.mesa_chunk_id, r.source_chunk_id}]
             elif identity_type == "evidence":
                 bound_rows = [r for r in source_rows if r.evidence_id == fixture_id]
             elif identity_type == "catalog":
@@ -923,14 +903,10 @@ def validate_qualification_fixtures(
                     )
             elif case_id == "wrong_jurisdiction_search":
                 if record.get("jurisdiction") in {None, "TR"}:
-                    raise QualificationFixtureError(
-                        f"wrong-jurisdiction fixture {fixture_id!r} is not outside TR"
-                    )
+                    raise QualificationFixtureError(f"wrong-jurisdiction fixture {fixture_id!r} is not outside TR")
             elif case_id == "stale_version_search":
                 if record.get("is_current") is not False:
-                    raise QualificationFixtureError(
-                        f"stale fixture {fixture_id!r} is not marked non-current"
-                    )
+                    raise QualificationFixtureError(f"stale fixture {fixture_id!r} is not marked non-current")
             elif case_id == "effective_date_boundary_search":
                 try:
                     vf = datetime.fromisoformat(str(record["valid_from"]).replace("Z", "+00:00"))
@@ -963,16 +939,10 @@ def load_baseline_identity_map_rows(
 ) -> list[dict[str, Any]]:
     """Loads and validates the 5,721 baseline identity map rows."""
     if baseline_path is None:
-        baseline_path = (
-            Path(__file__).parent.parent
-            / "resources"
-            / "frozen_qualification_baseline_identity_map.jsonl"
-        )
+        baseline_path = Path(__file__).parent.parent / "resources" / "frozen_qualification_baseline_identity_map.jsonl"
 
     if not baseline_path.exists():
-        raise QualificationFixtureError(
-            f"baseline identity map file not found: {baseline_path}"
-        )
+        raise QualificationFixtureError(f"baseline identity map file not found: {baseline_path}")
 
     raw_bytes = baseline_path.read_bytes()
     expected_sha256 = "960c4085e40082e88a5e1baf680c58fd2c5d8e00cefd2aaa180cb79e8338336d"
@@ -992,8 +962,6 @@ def load_baseline_identity_map_rows(
         rows.append(row_dict)
 
     if len(rows) != 5721:
-        raise QualificationFixtureError(
-            f"expected exactly 5721 baseline identity map rows, got {len(rows)}"
-        )
+        raise QualificationFixtureError(f"expected exactly 5721 baseline identity map rows, got {len(rows)}")
 
     return rows
