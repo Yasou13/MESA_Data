@@ -133,7 +133,7 @@ def test_native_v4_session_and_insert_payload_are_exact(monkeypatch):
             "title": "Madde 3",
             "source_ref": "https://authority.test/doc-1",
             "content": "canonical text",
-            "evidence_span": "",
+            "evidence_span": "canonical text",
             "revision_number": 2,
             "chunk_ordinal": 3,
             "finalize_revision": True,
@@ -157,6 +157,29 @@ def test_native_v4_session_and_insert_payload_are_exact(monkeypatch):
     result = client.publish_source_chunk(chunk, "stable-key", session_id="sess-1", finalize_revision=True)
     assert result["state"] == MutationState.QUEUED.value
     assert start.called and insert.called
+
+
+def test_native_v4_payload_rejects_chunks_larger_than_evidence_contract():
+    client = MesaClient(MesaTargetSettings(), api_key="secret")
+    chunk = SourceChunk(
+        chunk_id="v1:chunk:oversized",
+        document_id="doc-1",
+        version_id="v1",
+        chunk_type="general",
+        char_start=0,
+        char_end=4097,
+        ordinal=1,
+        content="A" * 4097,
+        content_hash="content-hash",
+    )
+
+    with pytest.raises(ValueError, match="evidence span contract"):
+        client.build_memory_insert_payload(
+            chunk,
+            session_id="sess-1",
+            idempotency_key="stable-key",
+            finalize_revision=True,
+        )
 
 
 @pytest.mark.parametrize(

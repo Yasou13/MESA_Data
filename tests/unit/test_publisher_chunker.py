@@ -121,3 +121,19 @@ def test_chunker_deterministic_invariants():
         assert c1.content == c2.content
         assert c1.char_start == c2.char_start
         assert c1.char_end == c2.char_end
+
+
+def test_chunker_caps_transport_chunks_to_mesa_evidence_span_contract():
+    canonical_text = "A" * 4500
+
+    chunks = plan_source_chunks(
+        document_id="doc-vector-contract",
+        version_id="doc-vector-contract:v1",
+        canonical_text=canonical_text,
+        records=[],
+        content_limit_chars=32768,
+    )
+
+    assert len(chunks) == 2
+    assert max(len(chunk.content) for chunk in chunks) <= 4096
+    assert "".join(chunk.content for chunk in chunks) == canonical_text
