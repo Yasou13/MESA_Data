@@ -59,4 +59,5 @@ ignore = ["BLE001", "B008", "DTZ007", "E501", "W293", "W291"]
 [tool.pytest.ini_options]
 markers = [
     "scale: Large-scale or heavy benchmark tests processing thousands of records",
+    "cross_repo: Optional compatibility test against a checked-out MESA source tree",
 ]

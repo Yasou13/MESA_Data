@@ -564,7 +564,9 @@ def build_qualification_release(
         validate_release_id(release_id)
 
     if release_id == "release-20260831T145932Z":
-        raise ReleaseBuildError("Cannot overwrite immutable historical qualification release 'release-20260831T145932Z'")
+        raise ReleaseBuildError(
+            "Cannot overwrite immutable historical qualification release 'release-20260831T145932Z'"
+        )
 
     final_dir = data_root / "releases" / release_id
     if final_dir.exists():
@@ -597,7 +599,12 @@ def build_qualification_release(
         # Reconstruct base index deterministically from base payloads
         with open(building_data_dir / "release-index.jsonl", "w", encoding="utf-8") as idx_out:
             for r_type in ["legislation", "article", "decision", "citation"]:
-                plural_map = {"legislation": "legislation.jsonl", "article": "articles.jsonl", "decision": "decisions.jsonl", "citation": "citations.jsonl"}
+                plural_map = {
+                    "legislation": "legislation.jsonl",
+                    "article": "articles.jsonl",
+                    "decision": "decisions.jsonl",
+                    "citation": "citations.jsonl",
+                }
                 target_f = building_data_dir / plural_map[r_type]
                 if not target_f.exists():
                     continue
@@ -608,7 +615,9 @@ def build_qualification_release(
                             continue
                         rec = json.loads(line_str)
                         p_sha = hashlib.sha256((line_str + "\n").encode("utf-8")).hexdigest()
-                        v_id = rec.get("version", {}).get("version_id") or rec.get("legislation_version_id") or rec["id"]
+                        v_id = (
+                            rec.get("version", {}).get("version_id") or rec.get("legislation_version_id") or rec["id"]
+                        )
                         d_id = rec.get("legislation_id") or rec["id"]
                         idx_out.write(
                             json_str_deterministic(
@@ -660,7 +669,7 @@ def build_qualification_release(
     # 6. Append fixture canonical records to release files
     leg_out = building_data_dir / "legislation.jsonl"
     art_out = building_data_dir / "articles.jsonl"
-    idx_out = building_data_dir / "release-index.jsonl"
+    release_index_path = building_data_dir / "release-index.jsonl"
 
     with open(leg_out, "a", encoding="utf-8") as f_leg:
         for rec in c_records:
@@ -672,7 +681,7 @@ def build_qualification_release(
             if rec["record_type"] == "article":
                 f_art.write(json_str_deterministic(rec) + "\n")
 
-    with open(idx_out, "a", encoding="utf-8") as f_idx:
+    with open(release_index_path, "a", encoding="utf-8") as f_idx:
         for entry in r_entries:
             f_idx.write(json_str_deterministic(entry) + "\n")
 

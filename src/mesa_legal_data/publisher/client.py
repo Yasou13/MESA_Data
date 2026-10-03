@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import httpx
 
 from mesa_legal_data.publisher.models import (
+    MESA_V4_EVIDENCE_SPAN_MAX_CHARS,
     MesaTargetSettings,
     MutationState,
     PreflightCheckItem,
@@ -391,6 +392,11 @@ class MesaClient:
         finalize_revision: bool,
     ) -> dict[str, Any]:
         """Map a frozen source chunk to the strict V4MemoryInsertRequest shape."""
+        if len(chunk.content) > MESA_V4_EVIDENCE_SPAN_MAX_CHARS:
+            raise ValueError(
+                "Source chunk exceeds the MESA V4 evidence span contract; "
+                "rebuild the deterministic chunk plan before publishing"
+            )
         metadata = {
             **chunk.metadata,
             "mesa_data_chunk_type": chunk.chunk_type,
@@ -410,7 +416,7 @@ class MesaClient:
             "title": chunk.title or f"Document {chunk.document_id} chunk {chunk.ordinal}",
             "source_ref": source_ref,
             "content": chunk.content,
-            "evidence_span": "",
+            "evidence_span": chunk.content,
             "revision_number": int(metadata.get("revision_number", 1)),
             "chunk_ordinal": chunk.ordinal,
             "finalize_revision": finalize_revision,

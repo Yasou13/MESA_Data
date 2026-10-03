@@ -173,9 +173,13 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
 
     if fixtures_file.exists() or identity_map_file.exists():
         if not fixtures_file.exists():
-            raise ReleaseVerificationError("identity_map.jsonl is present but data/qualification_fixtures.json is missing")
+            raise ReleaseVerificationError(
+                "identity_map.jsonl is present but data/qualification_fixtures.json is missing"
+            )
         if not identity_map_file.exists():
-            raise ReleaseVerificationError("qualification_fixtures.json is present but data/identity_map.jsonl is missing")
+            raise ReleaseVerificationError(
+                "qualification_fixtures.json is present but data/identity_map.jsonl is missing"
+            )
 
         try:
             with open(fixtures_file, "r", encoding="utf-8") as f:
@@ -219,9 +223,7 @@ def verify_release_directory(release_dir: Path, expected_release_id: str | None 
                 identity_map_rows=identity_rows,
             )
         except QualificationFixtureError as exc:
-            raise ReleaseVerificationError(
-                f"Phase 7 qualification fixture semantic validation failed: {exc}"
-            ) from exc
+            raise ReleaseVerificationError(f"Phase 7 qualification fixture semantic validation failed: {exc}") from exc
 
         expected_map_sha = release_meta.get("identity_map_sha256")
         if expected_map_sha:
