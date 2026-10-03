@@ -1,7 +1,7 @@
 from typing import Any
 
 from mesa_legal_data.publisher.hashing import calculate_content_hash
-from mesa_legal_data.publisher.models import SourceChunk
+from mesa_legal_data.publisher.models import MESA_V4_EVIDENCE_SPAN_MAX_CHARS, SourceChunk
 
 
 def _split_oversized_text(
@@ -82,6 +82,12 @@ def plan_source_chunks(
     if not canonical_text or not canonical_text.strip():
         return []
 
+    # MESA's current V4 insert contract accepts at most 4,096 characters in
+    # ``evidence_span``.  Every source chunk becomes the complete evidence
+    # payload for its deterministic fallback assertion, so the semantic limit
+    # is stricter than the 32,768-character transport-content limit.
+    chunk_limit_chars = min(content_limit_chars, MESA_V4_EVIDENCE_SPAN_MAX_CHARS)
+
     # Auto-resolve char_start and char_end if content is provided
     search_cursor = 0
     for r in records:
@@ -105,7 +111,7 @@ def plan_source_chunks(
 
     if not article_records:
         # Generic text without article records (e.g. unsegmented or single decision)
-        splits = _split_oversized_text(canonical_text, 0, content_limit_chars)
+        splits = _split_oversized_text(canonical_text, 0, chunk_limit_chars)
         for piece_idx, (c_start, c_end, piece_text) in enumerate(splits, start=1):
             chunk_id = (
                 f"{version_id}:chunk:{ordinal_counter:04d}"
@@ -136,7 +142,7 @@ def plan_source_chunks(
     if first_art_start > 0:
         preamble_text = canonical_text[:first_art_start]
         if preamble_text.strip():
-            splits = _split_oversized_text(preamble_text, 0, content_limit_chars)
+            splits = _split_oversized_text(preamble_text, 0, chunk_limit_chars)
             for piece_idx, (c_start, c_end, piece_text) in enumerate(splits, start=1):
                 chunk_id = (
                     f"{version_id}:chunk:{ordinal_counter:04d}"
@@ -170,7 +176,7 @@ def plan_source_chunks(
         art_num = art.get("article_number", "")
         art_title = art.get("title") or (f"Madde {art_num}" if art_num else "Madde")
 
-        splits = _split_oversized_text(art_text, a_start, content_limit_chars)
+        splits = _split_oversized_text(art_text, a_start, chunk_limit_chars)
         for piece_idx, (c_start, c_end, piece_text) in enumerate(splits, start=1):
             chunk_id = (
                 f"{version_id}:chunk:{ordinal_counter:04d}"
@@ -205,7 +211,7 @@ def plan_source_chunks(
     if last_art_end < len(canonical_text):
         annex_text = canonical_text[last_art_end:]
         if annex_text.strip():
-            splits = _split_oversized_text(annex_text, last_art_end, content_limit_chars)
+            splits = _split_oversized_text(annex_text, last_art_end, chunk_limit_chars)
             for piece_idx, (c_start, c_end, piece_text) in enumerate(splits, start=1):
                 chunk_id = (
                     f"{version_id}:chunk:{ordinal_counter:04d}"

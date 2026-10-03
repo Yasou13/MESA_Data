@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+MESA_V4_EVIDENCE_SPAN_MAX_CHARS = 4096
+
 
 class DeliveryStatus(str, Enum):
     PLANNED = "PLANNED"
