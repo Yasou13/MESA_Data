@@ -5,14 +5,14 @@ from pydantic import BaseModel, ConfigDict
 from mesa_legal_data.parsers.text_normalizer import normalize_text
 
 PARSER_NAME = "legislation_parser"
-PARSER_VERSION = "1.0.0"
+PARSER_VERSION = "1.1.0"
 
 
 class ParsedArticle(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     article_number: str
-    article_kind: str  # "standard", "additional", "temporary"
+    article_kind: str  # "standard", "additional", "temporary", "repeated"
     heading: str | None = None
     text: str
     char_start: int | None = None
@@ -29,7 +29,8 @@ class ParsedLegislation(BaseModel):
 
 
 ARTICLE_PATTERN = re.compile(
-    r"^(?P<kind>EK MADDE|GEÇİCİ MADDE|MADDE)\s+(?P<num>\d+|[A-ZÇĞİÖŞÜ]+)\s*[-–—:]?\s*(?P<heading>.*)$",
+    r"^(?P<kind>MÜKERRER MADDE|EK MADDE|GEÇİCİ MADDE|MADDE)\s+"
+    r"(?P<num>\d+(?:/[A-ZÇĞİÖŞÜ0-9]+)?|[A-ZÇĞİÖŞÜ]+)\s*[-–—:]?\s*(?P<heading>.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -66,6 +67,8 @@ def parse_legislation_text(text: str, auto_normalize: bool = True) -> ParsedLegi
             kind_str = "additional"
         elif raw_kind == "GEÇİCİ MADDE":
             kind_str = "temporary"
+        elif raw_kind == "MÜKERRER MADDE":
+            kind_str = "repeated"
 
         match_start = match.start()
         next_match_start = matches[idx].start() if idx < len(matches) else len(text)

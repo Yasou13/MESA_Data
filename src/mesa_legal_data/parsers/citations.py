@@ -52,9 +52,6 @@ for name, alias, num, kind in LEGAL_CODES:
     if alias:
         ALIAS_MAP[alias.upper()] = (num, kind)
 
-KNOWN_LEGISLATION_NUMBERS = {num for _, _, num, _ in LEGAL_CODES}
-
-
 class Citation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -70,7 +67,7 @@ class Citation(BaseModel):
 # Pattern 1: Numbered Law Citations with explicit context
 # e.g. "4857 sayılı Kanun'un 1. maddesi", "6698 sayılı Kişisel Verilerin Korunması Kanunu m. 9", "7500 sayılı Kanun 3. maddesi"
 NUMBERED_LAW_PATTERN = re.compile(
-    r"\b(?P<law_num>[1-9]\d{0,4})\s+sayılı\s+(?:[A-Za-zÇĞİÖŞÜçğıöşü\s]{0,50}?)(?:Kanun(?:u|un|una|unda|undan|a|da|dan|lar|ları)?|KHK(?:'nin|'ye|'de)?|Cumhurbaşkanlığı\s+Kararnamesi(?:'nin)?|Yasa(?:sı|nın)?)\b(?:\s*['’][A-Za-zçğıöşüÇĞİÖŞÜ]+)?(?:\s+(?:(?:(?:ek|geçici)\s+)?(?:madde|maddesi|m\.)\s*\.?\s*(?P<art_num_m>\d+|[A-ZÇĞİÖŞÜ]+)|(?P<art_num_num>\d+)(?:\.|\s*['’]?(?:nci|üncü|inci|ıncı|uncu))?\s*(?:maddesi|madde)|(?P<art_num_bare>\d+)\b))?",
+    r"\b(?P<law_num>[1-9]\d{0,4})\s+sayılı\s+(?:[A-Za-zÇĞİÖŞÜçğıöşü\s]{0,50}?)(?:Kanun(?:u|un|una|unda|undan|a|da|dan|lar|ları)?|KHK(?:'nin|'ye|'de)?|Cumhurbaşkanlığı\s+Kararnamesi(?:'nin)?|Yasa(?:sı|nın)?)\b(?:\s*['’][A-Za-zçğıöşüÇĞİÖŞÜ]+)?(?:\s+(?:(?:(?P<art_kind_m>ek|geçici|mükerrer)\s+)?(?:madde|maddesi|m\.)\s*\.?\s*(?P<art_num_m>\d+(?:/[A-ZÇĞİÖŞÜ0-9]+)?|[A-ZÇĞİÖŞÜ]+)|(?P<art_num_num>\d+(?:/[A-ZÇĞİÖŞÜ0-9]+)?)(?:\.|\s*['’]?(?:nci|üncü|inci|ıncı|uncu))?\s*(?:maddesi|madde)|(?P<art_num_bare>\d+(?:/[A-ZÇĞİÖŞÜ0-9]+)?)\b))?",
     re.IGNORECASE,
 )
 
@@ -80,7 +77,7 @@ ALIAS_NAMES = sorted(ALIAS_MAP.keys(), key=lambda x: len(x), reverse=True)
 ALIAS_PATTERN_STR = "|".join(re.escape(k) for k in ALIAS_NAMES)
 
 ALIAS_LAW_PATTERN = re.compile(
-    rf"\b(?P<alias>{ALIAS_PATTERN_STR})\b(?:\s*['’][A-Za-zçğıöşüÇĞİÖŞÜ]+)?(?:\s+(?:(?:(?:ek|geçici)\s+)?(?:madde|maddesi|m\.)\s*\.?\s*(?P<art_num_m>\d+|[A-ZÇĞİÖŞÜ]+)|(?P<art_num_num>\d+)(?:\.|\s*['’]?(?:nci|üncü|inci|ıncı|uncu))?\s*(?:maddesi|madde)|(?P<art_num_bare>\d+)\b))?",
+    rf"\b(?P<alias>{ALIAS_PATTERN_STR})\b(?:\s*['’][A-Za-zçğıöşüÇĞİÖŞÜ]+)?(?:\s+(?:(?:(?P<art_kind_m>ek|geçici|mükerrer)\s+)?(?:madde|maddesi|m\.)\s*\.?\s*(?P<art_num_m>\d+(?:/[A-ZÇĞİÖŞÜ0-9]+)?|[A-ZÇĞİÖŞÜ]+)|(?P<art_num_num>\d+(?:/[A-ZÇĞİÖŞÜ0-9]+)?)(?:\.|\s*['’]?(?:nci|üncü|inci|ıncı|uncu))?\s*(?:maddesi|madde)|(?P<art_num_bare>\d+(?:/[A-ZÇĞİÖŞÜ0-9]+)?)\b))?",
     re.IGNORECASE,
 )
 
@@ -115,6 +112,20 @@ def _detect_relation_hint(context_window: str) -> RelationHint | None:
     return None
 
 
+def _article_target_id(legislation_id: str, article_number: str | None, article_kind: str | None) -> str | None:
+    if not article_number:
+        return None
+    base_number, separator, suffix = article_number.partition("/")
+    # Turkish citations commonly use ``27/2`` and ``25/II`` for a paragraph
+    # or clause inside article 27/25. Alphabetic suffixes such as ``1/A`` are
+    # part of the article's legal identity and must remain in the target ID.
+    is_subdivision = bool(separator) and (suffix.isdigit() or set(suffix.upper()) <= set("IVXLCDM"))
+    normalized_number = base_number.lower() if is_subdivision else article_number.lower().replace("/", "-")
+    normalized_kind = (article_kind or "").lower()
+    prefix = {"ek": "ek-", "geçici": "gecici-", "mükerrer": "mukerrer-"}.get(normalized_kind, "")
+    return f"{legislation_id}:article:{prefix}{normalized_number}"
+
+
 def extract_citations(text: str) -> list[Citation]:
     """
     Extracts deterministic legal citations and references with exact canonical coordinate spans.
@@ -135,10 +146,11 @@ def extract_citations(text: str) -> list[Citation]:
         raw = text[start:end]
         law_num = match.group("law_num")
         art_num = match.group("art_num_m") or match.group("art_num_num") or match.group("art_num_bare")
+        art_kind = match.group("art_kind_m")
 
         leg_type = "constitution" if law_num == "2709" else "law"
         leg_id = f"tr:legislation:{leg_type}:{law_num}"
-        art_id = f"{leg_id}:article:{art_num}" if art_num else None
+        art_id = _article_target_id(leg_id, art_num, art_kind)
 
         window_start = max(0, start - 50)
         window_end = min(len(text), end + 100)
@@ -153,7 +165,9 @@ def extract_citations(text: str) -> list[Citation]:
                 char_end=end,
                 # A syntactically valid number is only a resolution candidate
                 # unless it belongs to the deterministic legislation registry.
-                citation_status=("RESOLVED" if law_num in KNOWN_LEGISLATION_NUMBERS else "EXTRACTED"),
+                # A registry match establishes a typed candidate, not that the
+                # cited article/version exists in the current legal corpus.
+                citation_status="EXTRACTED",
                 relation_hint=relation,
             )
         )
@@ -177,8 +191,9 @@ def extract_citations(text: str) -> list[Citation]:
 
         law_num, leg_type = law_tuple
         art_num = match.group("art_num_m") or match.group("art_num_num") or match.group("art_num_bare")
+        art_kind = match.group("art_kind_m")
         leg_id = f"tr:legislation:{leg_type}:{law_num}"
-        art_id = f"{leg_id}:article:{art_num}" if art_num else None
+        art_id = _article_target_id(leg_id, art_num, art_kind)
 
         window_start = max(0, start - 50)
         window_end = min(len(text), end + 100)
@@ -191,7 +206,7 @@ def extract_citations(text: str) -> list[Citation]:
                 target_article_id=art_id,
                 char_start=start,
                 char_end=end,
-                citation_status="RESOLVED",
+                citation_status="EXTRACTED",
                 relation_hint=relation,
             )
         )
