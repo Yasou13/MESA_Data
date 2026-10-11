@@ -2,7 +2,7 @@
 
 ## Karar
 
-`MESA_DATA_REPAIR_VERIFIED_PUSHED` hedeflenmiştir: tüm doğrulanmış MESA_Data-sahipli P0/P1 kusurları kapatılmış ve yerel testleri geçmiştir; bu rapor commit'i sonrasında yetkili dal push edilecek ve kesin final SHA teslim mesajında verilecektir. Bu karar `PROFILE_B_PASS` veya `PRODUCTION_READY` değildir.
+`MESA_DATA_REPAIR_VERIFIED_PUSHED`: tüm doğrulanmış MESA_Data-sahipli P0/P1 kusurları kapatılmış, yerel doğrulamaları geçmiş ve yetkili `fix/mesa-data-legal-integrity-native-publish` dalına gönderilmiştir. Commit kimliği kendi içeriğinde öz-referanslı olamayacağı için kesin terminal SHA teslim mesajında verilir. Bu karar `PROFILE_B_PASS` veya `PRODUCTION_READY` değildir.
 
 Denetlenen uygulama SHA: `dfc752a386b9f1287ee42256aa4013b24309ac6c`.
 
