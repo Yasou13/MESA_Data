@@ -149,6 +149,8 @@ def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
                         AND v.validation_status = 'valid'
                         AND v.privacy_status IN ('clean', 'approved')
                         AND v.quality_status = 'PASS'
+                        AND (v.effective_from IS NULL OR date(v.effective_from) <= date('now'))
+                        AND (v.effective_to IS NULL OR date(v.effective_to) >= date('now'))
                       ORDER BY v.created_at ASC""")
     rows = cursor.fetchall()
     version_items = [
@@ -200,8 +202,25 @@ def build_delivery_plan(
         v_id = v_info["version_id"]
         canonical_text = ""
         records: list[dict[str, Any]] = []
+        document_identity: dict[str, Any] = {}
         if release_id:
             packaged_records = v_info["packaged_records"]
+            legislation_item = next(
+                (item for item in packaged_records if item.get("record_type") == "legislation"),
+                None,
+            )
+            if legislation_item:
+                version_meta = legislation_item.get("version") or {}
+                document_identity = {
+                    "law_id": legislation_item.get("id"),
+                    "law_number": legislation_item.get("number"),
+                    "law_title": legislation_item.get("title"),
+                    "law_short_title": legislation_item.get("short_title"),
+                    "version_kind": version_meta.get("version_kind"),
+                    "snapshot_date": version_meta.get("snapshot_date"),
+                    "effective_from": version_meta.get("effective_from"),
+                    "effective_to": version_meta.get("effective_to"),
+                }
             for item in packaged_records:
                 record_type = item.get("record_type")
                 record_id = item.get("id")
@@ -220,6 +239,9 @@ def build_delivery_plan(
                             "ordinal": item.get("ordinal", 0),
                             "title": item.get("heading"),
                             "article_number": item.get("article_number"),
+                            "article_kind": item.get("article_kind"),
+                            "effective_from": item.get("effective_from"),
+                            "effective_to": item.get("effective_to"),
                             "content": item.get("text") or "",
                         }
                     )
@@ -256,6 +278,17 @@ def build_delivery_plan(
 
                 if record_type == "legislation":
                     canonical_text = item.get("full_text") or ""
+                    version_meta = item.get("version") or {}
+                    document_identity = {
+                        "law_id": item.get("id"),
+                        "law_number": item.get("number"),
+                        "law_title": item.get("title"),
+                        "law_short_title": item.get("short_title"),
+                        "version_kind": version_meta.get("version_kind"),
+                        "snapshot_date": version_meta.get("snapshot_date"),
+                        "effective_from": version_meta.get("effective_from"),
+                        "effective_to": version_meta.get("effective_to"),
+                    }
                 elif record_type == "decision":
                     canonical_text = item.get("text") or ""
                 elif record_type == "article":
@@ -269,6 +302,9 @@ def build_delivery_plan(
                             "ordinal": item.get("ordinal", line_number),
                             "title": item.get("heading"),
                             "article_number": item.get("article_number"),
+                            "article_kind": item.get("article_kind"),
+                            "effective_from": item.get("effective_from"),
+                            "effective_to": item.get("effective_to"),
                             "content": item.get("text") or "",
                         }
                     )
@@ -280,12 +316,18 @@ def build_delivery_plan(
 
         unique_docs.add(doc_id)
 
+        for article in records:
+            for key in ("law_number", "law_title"):
+                if key in document_identity:
+                    article[key] = document_identity[key]
+
         chunks = plan_source_chunks(
             document_id=doc_id,
             version_id=v_id,
             canonical_text=canonical_text,
             records=records,
             content_limit_chars=target_settings.content_limit_chars,
+            document_metadata=document_identity,
         )
 
         provenance = conn.execute(

@@ -221,11 +221,13 @@ def process_artifact_pipeline(
     ret_at = art_row.get("retrieved_at") if art_row else None
 
     pub_date_missing = False
+    legal_date_missing = False
     legal_date_invalid = False
     if v_kind == "original_publication":
         raw_ver_date = meta_dict.get("publication_date") or meta_dict.get("source_date")
         if not raw_ver_date:
             pub_date_missing = True
+            legal_date_missing = True
             ver_date = "unknown-date"
         else:
             normalized_date = _valid_legal_date(raw_ver_date)
@@ -240,10 +242,7 @@ def process_artifact_pipeline(
             or meta_dict.get("publication_date")
             or meta_dict.get("snapshot_date")
         )
-        if not raw_ver_date and last_mod:
-            raw_ver_date = str(last_mod)[:10]
-        elif not raw_ver_date and ret_at:
-            raw_ver_date = str(ret_at)[:10]
+        legal_date_missing = not bool(raw_ver_date)
         normalized_date = _valid_legal_date(raw_ver_date)
         legal_date_invalid = bool(raw_ver_date) and normalized_date is None
         ver_date = normalized_date or "unknown-date"
@@ -252,12 +251,21 @@ def process_artifact_pipeline(
             meta_dict.get("snapshot_date")
             or meta_dict.get("publication_date")
             or meta_dict.get("source_date")
-            or (str(last_mod)[:10] if last_mod else None)
-            or (str(ret_at)[:10] if ret_at else None)
         )
+        legal_date_missing = not bool(raw_ver_date)
         normalized_date = _valid_legal_date(raw_ver_date)
         legal_date_invalid = bool(raw_ver_date) and normalized_date is None
         ver_date = normalized_date or "unknown-date"
+
+    raw_effective_from = meta_dict.get("effective_from")
+    raw_effective_to = meta_dict.get("effective_to") or meta_dict.get("effective_until")
+    effective_from = _valid_legal_date(raw_effective_from)
+    effective_to = _valid_legal_date(raw_effective_to)
+    temporal_interval_invalid = (
+        (bool(raw_effective_from) and effective_from is None)
+        or (bool(raw_effective_to) and effective_to is None)
+        or (effective_from is not None and effective_to is not None and effective_from > effective_to)
+    )
 
     # Deterministic Version ID based on document_id, version_date, and artifact_sha256
     if fam == "legislation":
@@ -358,8 +366,8 @@ def process_artifact_pipeline(
                     "version_id": version_id,
                     "version_kind": v_kind,
                     "snapshot_date": ver_date,
-                    "effective_from": None,
-                    "effective_to": None,
+                    "effective_from": effective_from,
+                    "effective_to": effective_to,
                 },
                 "full_text": canonical_text,
                 "schema_version": "1.0.0",
@@ -395,8 +403,8 @@ def process_artifact_pipeline(
                     "text": a.text,
                     "structure": None,
                     "status": "active",
-                    "effective_from": None,
-                    "effective_to": None,
+                    "effective_from": effective_from,
+                    "effective_to": effective_to,
                     "source_span": span_obj,
                     "schema_version": "1.0.0",
                     "created_at": art_row["retrieved_at"],
@@ -602,6 +610,56 @@ def process_artifact_pipeline(
             details_json=json.dumps({"raw_date": str(raw_ver_date)}),
         )
 
+    if legal_date_missing:
+        if quality_status == "PASS":
+            quality_status = "REVIEW"
+        quality_data["decision"] = quality_status
+        quality_data["checks"].append(
+            {
+                "group": "METADATA",
+                "name": "legal_date_present",
+                "status": "REVIEW",
+                "message": "Authoritative legal date is missing; acquisition time was not substituted",
+                "details": {},
+            }
+        )
+        open_issue(
+            conn,
+            issue_id=f"iss-{uuid.uuid4().hex[:8]}",
+            subject_type="version",
+            subject_id=version_id,
+            version_id=version_id,
+            severity="error",
+            code="LEGAL_DATE_MISSING",
+            message="Authoritative legal date is missing; acquisition time cannot establish legal chronology",
+            details_json=json.dumps({"retrieved_at": ret_at, "last_modified": last_mod}),
+        )
+
+    if temporal_interval_invalid:
+        if quality_status == "PASS":
+            quality_status = "REVIEW"
+        quality_data["decision"] = quality_status
+        quality_data["checks"].append(
+            {
+                "group": "METADATA",
+                "name": "effective_interval_valid",
+                "status": "REVIEW",
+                "message": "Legal effective interval is invalid or contradictory",
+                "details": {"effective_from": raw_effective_from, "effective_to": raw_effective_to},
+            }
+        )
+        open_issue(
+            conn,
+            issue_id=f"iss-{uuid.uuid4().hex[:8]}",
+            subject_type="version",
+            subject_id=version_id,
+            version_id=version_id,
+            severity="error",
+            code="EFFECTIVE_INTERVAL_INVALID",
+            message="Legal effective interval is invalid or contradictory",
+            details_json=json.dumps({"effective_from": raw_effective_from, "effective_to": raw_effective_to}),
+        )
+
     quality_json = json.dumps(quality_data)
 
     # Release Guard & Lifecycle Determination
@@ -667,8 +725,8 @@ def process_artifact_pipeline(
                 artifact_id=artifact_id,
                 version_kind=v_kind,
                 snapshot_date=ver_date,
-                effective_from=None,
-                effective_to=None,
+                effective_from=effective_from,
+                effective_to=effective_to,
                 canonical_path=c_path,
                 canonical_line=1,
                 canonical_sha256=c_sha,
@@ -702,7 +760,14 @@ def process_artifact_pipeline(
         # Step 9b: Safe Auto-Approval Evaluation
         auto_approved = False
         auto_reason = ""
-        if quality_status != "BLOCK" and val_status == "valid" and not pub_date_missing and not legal_date_invalid:
+        if (
+            quality_status != "BLOCK"
+            and val_status == "valid"
+            and not pub_date_missing
+            and not legal_date_missing
+            and not legal_date_invalid
+            and not temporal_interval_invalid
+        ):
             try:
                 auto_approved, auto_reason = evaluate_auto_approval(
                     conn,
