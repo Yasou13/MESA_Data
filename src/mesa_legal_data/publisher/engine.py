@@ -202,6 +202,7 @@ def build_delivery_plan(
         v_id = v_info["version_id"]
         canonical_text = ""
         records: list[dict[str, Any]] = []
+        citations: list[dict[str, Any]] = []
         document_identity: dict[str, Any] = {}
         if release_id:
             packaged_records = v_info["packaged_records"]
@@ -245,6 +246,8 @@ def build_delivery_plan(
                             "content": item.get("text") or "",
                         }
                     )
+                elif record_type == "citation":
+                    citations.append(item)
             if not canonical_text.strip():
                 conn.close()
                 raise MesaClientError(f"Release {release_id} version {v_id} has no canonical document text")
@@ -308,6 +311,8 @@ def build_delivery_plan(
                             "content": item.get("text") or "",
                         }
                     )
+                elif record_type == "citation":
+                    citations.append(item)
             if not canonical_text.strip():
                 raise ValueError(f"Version {v_id} has no authoritative canonical document text")
         except (OSError, ValueError, json.JSONDecodeError):
@@ -329,6 +334,38 @@ def build_delivery_plan(
             content_limit_chars=target_settings.content_limit_chars,
             document_metadata=document_identity,
         )
+
+        # Canonical citation edges are release-owned records, not text inferred
+        # by the publisher. Carry only citations whose authoritative source span
+        # overlaps this chunk. Target versions stay null until a corpus-aware or
+        # human resolver verifies the exact legal version.
+        for chunk in chunks:
+            chunk_citations: list[dict[str, Any]] = []
+            for citation in citations:
+                span = citation.get("source_span") or {}
+                start = span.get("char_start")
+                end = span.get("char_end")
+                if not isinstance(start, int) or not isinstance(end, int) or start >= end:
+                    continue
+                if start >= chunk.char_end or end <= chunk.char_start:
+                    continue
+                chunk_citations.append(
+                    {
+                        "citation_id": citation.get("id"),
+                        "source_record_id": citation.get("source_record_id"),
+                        "source_version_id": citation.get("source_version_id") or v_id,
+                        "target_legislation_id": citation.get("target_legislation_id"),
+                        "target_article_id": citation.get("target_article_id"),
+                        "target_version_id": citation.get("target_version_id"),
+                        "citation_status": citation.get("citation_status"),
+                        "relation_hint": citation.get("relation_hint"),
+                        "char_start": start,
+                        "char_end": end,
+                        "fully_contained": start >= chunk.char_start and end <= chunk.char_end,
+                    }
+                )
+            if chunk_citations:
+                chunk.metadata["citations"] = chunk_citations
 
         provenance = conn.execute(
             """SELECT v.revision_number, v.supersedes_version_id, a.source_url, a.source_id, a.sha256

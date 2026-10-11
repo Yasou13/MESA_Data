@@ -108,7 +108,7 @@ def test_final_panel_confirmation_binds_exact_release_manifest_and_target(tmp_pa
     art_v1 = _helper_create_law_artifact(
         tmp_path,
         doc_id,
-        "<html><body><h1>Panel V1</h1><p><b>Madde 1-</b> Frozen.</p></body></html>",
+        "<html><body><h1>Panel V1</h1><p><b>Madde 1-</b> 6098 sayılı Kanunun 1/A maddesi değiştirilmiştir.</p></body></html>",
         "art-panel-final-v1",
         pub_date="2026-01-01",
     )
@@ -198,6 +198,22 @@ def test_final_panel_confirmation_binds_exact_release_manifest_and_target(tmp_pa
     assert authorization_details["scope"]["estimated_chunks"] > 0
     frozen_chunks, _ = build_delivery_plan(release_id=captured["release_id"])
     assert {chunk.version_id for chunk, _ in frozen_chunks} == {v1["version_id"]}
+    citation_metadata = [citation for chunk, _ in frozen_chunks for citation in chunk.metadata.get("citations", [])]
+    assert citation_metadata == [
+        {
+            "citation_id": citation_metadata[0]["citation_id"],
+            "source_record_id": doc_id,
+            "source_version_id": v1["version_id"],
+            "target_legislation_id": "tr:legislation:law:6098",
+            "target_article_id": "tr:legislation:law:6098:article:1-a",
+            "target_version_id": None,
+            "citation_status": "EXTRACTED",
+            "relation_hint": "amends",
+            "char_start": citation_metadata[0]["char_start"],
+            "char_end": citation_metadata[0]["char_end"],
+            "fully_contained": True,
+        }
+    ]
 
 
 def test_master_a_chronology_current_version_selection(tmp_path, monkeypatch):
