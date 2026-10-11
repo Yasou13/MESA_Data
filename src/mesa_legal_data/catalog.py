@@ -345,9 +345,10 @@ def recompute_document_current_version(
             overlaps = max(left["effective_from"], right["effective_from"]) <= min(
                 left["effective_to"], right["effective_to"]
             )
-            explicitly_ordered = left.get("supersedes_version_id") == right["version_id"] or right.get(
-                "supersedes_version_id"
-            ) == left["version_id"]
+            explicitly_ordered = (
+                left.get("supersedes_version_id") == right["version_id"]
+                or right.get("supersedes_version_id") == left["version_id"]
+            )
             if overlaps and left["canonical_sha256"] != right["canonical_sha256"] and not explicitly_ordered:
                 conflicting_ids.update((left["version_id"], right["version_id"]))
 
@@ -398,9 +399,7 @@ def recompute_document_current_version(
     ]
     ambiguity_group = [chosen, *same_date_candidates]
     ambiguity_ids = {item["version_id"] for item in ambiguity_group}
-    has_explicit_supersession = any(
-        item.get("supersedes_version_id") in ambiguity_ids for item in ambiguity_group
-    )
+    has_explicit_supersession = any(item.get("supersedes_version_id") in ambiguity_ids for item in ambiguity_group)
     if same_date_candidates and not has_explicit_supersession:
         doc_cur = conn.cursor()
         doc_cur.execute("SELECT current_version_id FROM documents WHERE document_id = ?", (document_id,))

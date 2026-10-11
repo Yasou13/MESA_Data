@@ -52,6 +52,7 @@ for name, alias, num, kind in LEGAL_CODES:
     if alias:
         ALIAS_MAP[alias.upper()] = (num, kind)
 
+
 class Citation(BaseModel):
     model_config = ConfigDict(frozen=True)
 

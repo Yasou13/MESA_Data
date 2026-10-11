@@ -116,7 +116,13 @@ def plan_source_chunks(
     for article in article_records:
         start = article.get("char_start")
         end = article.get("char_end")
-        if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end > len(canonical_text) or start >= end:
+        if (
+            not isinstance(start, int)
+            or not isinstance(end, int)
+            or start < 0
+            or end > len(canonical_text)
+            or start >= end
+        ):
             raise ValueError(f"Invalid article source span: [{start}, {end}]")
         if start < previous_end:
             raise ValueError(f"Article source spans overlap at offset {start}")

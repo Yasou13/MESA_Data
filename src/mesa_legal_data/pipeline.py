@@ -248,9 +248,7 @@ def process_artifact_pipeline(
         ver_date = normalized_date or "unknown-date"
     else:
         raw_ver_date = (
-            meta_dict.get("snapshot_date")
-            or meta_dict.get("publication_date")
-            or meta_dict.get("source_date")
+            meta_dict.get("snapshot_date") or meta_dict.get("publication_date") or meta_dict.get("source_date")
         )
         legal_date_missing = not bool(raw_ver_date)
         normalized_date = _valid_legal_date(raw_ver_date)

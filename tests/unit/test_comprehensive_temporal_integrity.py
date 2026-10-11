@@ -62,10 +62,13 @@ def test_acquisition_time_is_not_used_as_legal_snapshot_date(tmp_path, monkeypat
     assert version["snapshot_date"] == "unknown-date"
     assert version["quality_status"] == "REVIEW"
     conn = get_connection()
-    assert conn.execute(
-        "SELECT count(*) FROM validation_issues WHERE version_id = ? AND code = 'LEGAL_DATE_MISSING'",
-        (version["version_id"],),
-    ).fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM validation_issues WHERE version_id = ? AND code = 'LEGAL_DATE_MISSING'",
+            (version["version_id"],),
+        ).fetchone()[0]
+        == 1
+    )
     conn.close()
 
 
@@ -102,10 +105,13 @@ def test_contradictory_declared_effective_interval_requires_review(tmp_path, mon
     )
     assert version["quality_status"] == "REVIEW"
     conn = get_connection()
-    assert conn.execute(
-        "SELECT count(*) FROM validation_issues WHERE version_id = ? AND code = 'EFFECTIVE_INTERVAL_INVALID'",
-        (version["version_id"],),
-    ).fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM validation_issues WHERE version_id = ? AND code = 'EFFECTIVE_INTERVAL_INVALID'",
+            (version["version_id"],),
+        ).fetchone()[0]
+        == 1
+    )
     conn.close()
 
 
@@ -162,9 +168,12 @@ def test_overlapping_bounded_effective_intervals_force_review(tmp_path, monkeypa
         (first["version_id"], second["version_id"]),
     ).fetchall()
     assert all(row[1:] == ("pending", "REVIEW") for row in rows)
-    assert conn.execute(
-        "SELECT count(*) FROM validation_issues WHERE code = 'VERSION_EFFECTIVE_INTERVAL_AMBIGUITY' AND status = 'open'"
-    ).fetchone()[0] == 2
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM validation_issues WHERE code = 'VERSION_EFFECTIVE_INTERVAL_AMBIGUITY' AND status = 'open'"
+        ).fetchone()[0]
+        == 2
+    )
     conn.close()
 
 
