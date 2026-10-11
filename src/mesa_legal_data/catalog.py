@@ -268,6 +268,7 @@ def recompute_document_current_version(
         return None
 
     parsed_versions = []
+    as_of = datetime.now(UTC).date().isoformat()
     for r in rows:
         meta_dict: dict[str, Any] = {}
         if r[13]:
@@ -285,6 +286,17 @@ def recompute_document_current_version(
         )
         legal_date = _normalize_legal_date(legal_date_str)
         has_known_date = legal_date is not None
+        effective_from = _normalize_legal_date(r[3])
+        effective_to = _normalize_legal_date(r[4])
+        selection_start = effective_from or legal_date
+        if selection_start is None:
+            temporal_rank = 0  # unknown legal chronology
+        elif selection_start > as_of:
+            temporal_rank = 1  # enacted/published but not yet in force
+        elif effective_to is not None and effective_to < as_of:
+            temporal_rank = 2  # historical, no longer in force
+        else:
+            temporal_rank = 3  # in force as of today
 
         parsed_versions.append(
             {
@@ -292,6 +304,10 @@ def recompute_document_current_version(
                 "version_kind": r[1],
                 "legal_date": legal_date or "0000-00-00",
                 "has_known_date": has_known_date,
+                "effective_from": effective_from,
+                "effective_to": effective_to,
+                "selection_start": selection_start or "0000-00-00",
+                "temporal_rank": temporal_rank,
                 "canonical_sha256": r[5],
                 "revision_number": r[6] or 1,
                 "supersedes_version_id": r[7],
@@ -305,7 +321,8 @@ def recompute_document_current_version(
 
     def sort_key(item):
         return (
-            1 if item["has_known_date"] else 0,
+            item["temporal_rank"],
+            item["selection_start"],
             item["legal_date"],
             item["revision_number"],
             item["created_at"],
@@ -313,6 +330,65 @@ def recompute_document_current_version(
 
     sorted_versions = sorted(parsed_versions, key=sort_key, reverse=True)
     chosen = sorted_versions[0]
+
+    # Two bounded, explicitly declared effective intervals with different
+    # content must not silently compete for the same legal instant. Open-ended
+    # consolidated snapshots are intentionally excluded: their chronology is
+    # already ordered by legal date unless a bounded contradiction is declared.
+    conflicting_ids: set[str] = set()
+    for index, left in enumerate(parsed_versions):
+        if not left["effective_from"] or not left["effective_to"]:
+            continue
+        for right in parsed_versions[index + 1 :]:
+            if not right["effective_from"] or not right["effective_to"]:
+                continue
+            overlaps = max(left["effective_from"], right["effective_from"]) <= min(
+                left["effective_to"], right["effective_to"]
+            )
+            explicitly_ordered = (
+                left.get("supersedes_version_id") == right["version_id"]
+                or right.get("supersedes_version_id") == left["version_id"]
+            )
+            if overlaps and left["canonical_sha256"] != right["canonical_sha256"] and not explicitly_ordered:
+                conflicting_ids.update((left["version_id"], right["version_id"]))
+
+    if conflicting_ids:
+        now = datetime.now(UTC).isoformat()
+        for conflicting in parsed_versions:
+            if conflicting["version_id"] not in conflicting_ids:
+                continue
+            conflicting_id = conflicting["version_id"]
+            issue_id = "iss-version-interval-" + hashlib.sha256(conflicting_id.encode("utf-8")).hexdigest()[:16]
+            conn.execute(
+                """INSERT OR IGNORE INTO validation_issues (
+                       issue_id, subject_type, subject_id, version_id, record_instance_id,
+                       severity, code, message, details_json, status, opened_at
+                   ) VALUES (?, 'version', ?, ?, NULL, 'error', 'VERSION_EFFECTIVE_INTERVAL_AMBIGUITY',
+                             'Different content has a contradictory bounded effective interval without explicit supersession',
+                             ?, 'open', ?)""",
+                (
+                    issue_id,
+                    conflicting_id,
+                    conflicting_id,
+                    json.dumps(
+                        {
+                            "effective_from": conflicting["effective_from"],
+                            "effective_to": conflicting["effective_to"],
+                            "document_id": document_id,
+                        }
+                    ),
+                    now,
+                ),
+            )
+            conn.execute(
+                """UPDATE versions
+                   SET approval_status = 'pending', auto_approved = 0, quality_status = 'REVIEW'
+                   WHERE version_id = ?""",
+                (conflicting_id,),
+            )
+            conn.execute("UPDATE records SET approval_status = 'pending' WHERE version_id = ?", (conflicting_id,))
+            conflicting["approval_status"] = "pending"
+            conflicting["quality_status"] = "REVIEW"
 
     same_date_candidates = [
         v
@@ -322,7 +398,8 @@ def recompute_document_current_version(
         and v["canonical_sha256"] != chosen["canonical_sha256"]
     ]
     ambiguity_group = [chosen, *same_date_candidates]
-    has_explicit_supersession = any(item.get("supersedes_version_id") for item in ambiguity_group)
+    ambiguity_ids = {item["version_id"] for item in ambiguity_group}
+    has_explicit_supersession = any(item.get("supersedes_version_id") in ambiguity_ids for item in ambiguity_group)
     if same_date_candidates and not has_explicit_supersession:
         doc_cur = conn.cursor()
         doc_cur.execute("SELECT current_version_id FROM documents WHERE document_id = ?", (document_id,))
@@ -987,6 +1064,8 @@ def iter_records_for_release(
               AND v.validation_status = 'valid'
               AND v.quality_status = 'PASS'
               AND v.privacy_status IN ('clean', 'approved')
+              AND (v.effective_from IS NULL OR date(v.effective_from) <= date('now'))
+              AND (v.effective_to IS NULL OR date(v.effective_to) >= date('now'))
         )
         SELECT r.record_id, r.record_type, r.record_sha256, r.canonical_path, r.canonical_line,
                r.version_id, v.document_id

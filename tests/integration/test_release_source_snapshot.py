@@ -53,7 +53,7 @@ def test_release_source_snapshot_exact(tmp_path, monkeypatch):
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json='{"publication_date":"2026-01-01"}',
     )
 
     upsert_document(conn, "tr:decision:aym:1", "decision", "aym_decision", "TR", "AYM 1", "2026/1", "fetched")
@@ -75,7 +75,7 @@ def test_release_source_snapshot_exact(tmp_path, monkeypatch):
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json='{"publication_date":"2026-01-01"}',
     )
     conn.close()
 

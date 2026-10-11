@@ -149,6 +149,8 @@ def get_ready_versions_and_content(conn) -> tuple[list[dict[str, Any]], int]:
                         AND v.validation_status = 'valid'
                         AND v.privacy_status IN ('clean', 'approved')
                         AND v.quality_status = 'PASS'
+                        AND (v.effective_from IS NULL OR date(v.effective_from) <= date('now'))
+                        AND (v.effective_to IS NULL OR date(v.effective_to) >= date('now'))
                       ORDER BY v.created_at ASC""")
     rows = cursor.fetchall()
     version_items = [
@@ -200,8 +202,26 @@ def build_delivery_plan(
         v_id = v_info["version_id"]
         canonical_text = ""
         records: list[dict[str, Any]] = []
+        citations: list[dict[str, Any]] = []
+        document_identity: dict[str, Any] = {}
         if release_id:
             packaged_records = v_info["packaged_records"]
+            legislation_item = next(
+                (item for item in packaged_records if item.get("record_type") == "legislation"),
+                None,
+            )
+            if legislation_item:
+                version_meta = legislation_item.get("version") or {}
+                document_identity = {
+                    "law_id": legislation_item.get("id"),
+                    "law_number": legislation_item.get("number"),
+                    "law_title": legislation_item.get("title"),
+                    "law_short_title": legislation_item.get("short_title"),
+                    "version_kind": version_meta.get("version_kind"),
+                    "snapshot_date": version_meta.get("snapshot_date"),
+                    "effective_from": version_meta.get("effective_from"),
+                    "effective_to": version_meta.get("effective_to"),
+                }
             for item in packaged_records:
                 record_type = item.get("record_type")
                 record_id = item.get("id")
@@ -220,9 +240,14 @@ def build_delivery_plan(
                             "ordinal": item.get("ordinal", 0),
                             "title": item.get("heading"),
                             "article_number": item.get("article_number"),
+                            "article_kind": item.get("article_kind"),
+                            "effective_from": item.get("effective_from"),
+                            "effective_to": item.get("effective_to"),
                             "content": item.get("text") or "",
                         }
                     )
+                elif record_type == "citation":
+                    citations.append(item)
             if not canonical_text.strip():
                 conn.close()
                 raise MesaClientError(f"Release {release_id} version {v_id} has no canonical document text")
@@ -256,6 +281,17 @@ def build_delivery_plan(
 
                 if record_type == "legislation":
                     canonical_text = item.get("full_text") or ""
+                    version_meta = item.get("version") or {}
+                    document_identity = {
+                        "law_id": item.get("id"),
+                        "law_number": item.get("number"),
+                        "law_title": item.get("title"),
+                        "law_short_title": item.get("short_title"),
+                        "version_kind": version_meta.get("version_kind"),
+                        "snapshot_date": version_meta.get("snapshot_date"),
+                        "effective_from": version_meta.get("effective_from"),
+                        "effective_to": version_meta.get("effective_to"),
+                    }
                 elif record_type == "decision":
                     canonical_text = item.get("text") or ""
                 elif record_type == "article":
@@ -269,9 +305,14 @@ def build_delivery_plan(
                             "ordinal": item.get("ordinal", line_number),
                             "title": item.get("heading"),
                             "article_number": item.get("article_number"),
+                            "article_kind": item.get("article_kind"),
+                            "effective_from": item.get("effective_from"),
+                            "effective_to": item.get("effective_to"),
                             "content": item.get("text") or "",
                         }
                     )
+                elif record_type == "citation":
+                    citations.append(item)
             if not canonical_text.strip():
                 raise ValueError(f"Version {v_id} has no authoritative canonical document text")
         except (OSError, ValueError, json.JSONDecodeError):
@@ -280,13 +321,51 @@ def build_delivery_plan(
 
         unique_docs.add(doc_id)
 
+        for article in records:
+            for key in ("law_number", "law_title"):
+                if key in document_identity:
+                    article[key] = document_identity[key]
+
         chunks = plan_source_chunks(
             document_id=doc_id,
             version_id=v_id,
             canonical_text=canonical_text,
             records=records,
             content_limit_chars=target_settings.content_limit_chars,
+            document_metadata=document_identity,
         )
+
+        # Canonical citation edges are release-owned records, not text inferred
+        # by the publisher. Carry only citations whose authoritative source span
+        # overlaps this chunk. Target versions stay null until a corpus-aware or
+        # human resolver verifies the exact legal version.
+        for chunk in chunks:
+            chunk_citations: list[dict[str, Any]] = []
+            for citation in citations:
+                span = citation.get("source_span") or {}
+                start = span.get("char_start")
+                end = span.get("char_end")
+                if not isinstance(start, int) or not isinstance(end, int) or start >= end:
+                    continue
+                if start >= chunk.char_end or end <= chunk.char_start:
+                    continue
+                chunk_citations.append(
+                    {
+                        "citation_id": citation.get("id"),
+                        "source_record_id": citation.get("source_record_id"),
+                        "source_version_id": citation.get("source_version_id") or v_id,
+                        "target_legislation_id": citation.get("target_legislation_id"),
+                        "target_article_id": citation.get("target_article_id"),
+                        "target_version_id": citation.get("target_version_id"),
+                        "citation_status": citation.get("citation_status"),
+                        "relation_hint": citation.get("relation_hint"),
+                        "char_start": start,
+                        "char_end": end,
+                        "fully_contained": start >= chunk.char_start and end <= chunk.char_end,
+                    }
+                )
+            if chunk_citations:
+                chunk.metadata["citations"] = chunk_citations
 
         provenance = conn.execute(
             """SELECT v.revision_number, v.supersedes_version_id, a.source_url, a.source_id, a.sha256

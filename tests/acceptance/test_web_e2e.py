@@ -44,6 +44,7 @@ def test_web_e2e_acceptance_flow(tmp_path, monkeypatch):
             "family": "legislation",
             "document_type": "law",
             "title": "Türk Medeni Kanunu",
+            "publication_date": "2026-01-01",
         },
         files={"file": ("payload.html", law_text.encode("utf-8"), "text/html")},
         headers={"X-MESA-Requested-With": "web-admin"},

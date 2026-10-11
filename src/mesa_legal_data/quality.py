@@ -235,6 +235,35 @@ def evaluate_quality(
     elif is_legislation:
         checks.append(CheckResult("STRUCTURE", "article_plausibility", "PASS", f"Parsed {len(art_recs)} articles"))
 
+        fallback_only_articles = [
+            article
+            for article in art_recs
+            if str(article.get("text") or "").strip().casefold()
+            == f"madde {str(article.get('article_number') or '').strip()}".casefold()
+        ]
+        if len(fallback_only_articles) == len(art_recs):
+            checks.append(
+                CheckResult(
+                    "STRUCTURE",
+                    "article_body_presence",
+                    "BLOCK",
+                    "Every parsed article is header-only; substantive article text is missing",
+                    {"article_ids": [article.get("id") for article in fallback_only_articles]},
+                )
+            )
+        elif fallback_only_articles:
+            checks.append(
+                CheckResult(
+                    "STRUCTURE",
+                    "article_body_presence",
+                    "REVIEW",
+                    "One or more parsed articles contain only a header fallback",
+                    {"article_ids": [article.get("id") for article in fallback_only_articles]},
+                )
+            )
+        else:
+            checks.append(CheckResult("STRUCTURE", "article_body_presence", "PASS", "Article bodies are present"))
+
     # Coverage evaluation
     cov_dict = None
     if coverage:

@@ -1,0 +1,13 @@
+stage,producer_field,consumer_field,verification,provenance_hash
+raw,artifacts.sha256,canonical.source.artifact_sha256,PASS,SHA-256
+raw,artifacts.raw_path,canonical.source.artifact_path,PASS,SHA-256
+version,versions.version_id,canonical.version.version_id,PASS,canonical_sha256
+article,article.id,chunk.metadata.article_id,PASS,content_hash
+article,article.article_kind,chunk.metadata.article_kind,PASS,content_hash
+article,article.source_span,chunk.char_start/char_end,PASS,content_hash
+temporal,version.effective_from/to,chunk.metadata.effective_from/to,PASS,manifest_sha256
+citation,citation.source_version_id,chunk.metadata.citations[].source_version_id,PASS,manifest_sha256
+citation,citation.target_version_id,chunk.metadata.citations[].target_version_id,PASS_NULL_UNTIL_VERIFIED,manifest_sha256
+release,release-index.version/document/record,publisher frozen membership,PASS,manifest_sha256
+payload,chunk.content_hash,metadata.mesa_data_content_hash,PASS,idempotency_key
+payload,release.manifest_sha256,delivery.release_manifest_sha256,PASS,manifest_sha256

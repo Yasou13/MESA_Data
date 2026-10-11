@@ -47,7 +47,7 @@ def test_audit_event_recording_and_coverage(tmp_path, monkeypatch):
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json='{"publication_date":"2026-01-01"}',
     )
 
     # 1. Direct log_audit_event check

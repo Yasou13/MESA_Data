@@ -45,7 +45,7 @@ def test_release_state_machine_and_doctor(tmp_path, monkeypatch):
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json='{"publication_date":"2026-01-01"}',
     )
     conn.close()
 

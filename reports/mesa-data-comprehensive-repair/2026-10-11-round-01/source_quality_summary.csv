@@ -1,0 +1,10 @@
+fixture,source_type,units_expected,units_observed,quality_result,warning_or_blocker,scope
+extended_article_identity,synthetic_text,5,5,PASS,,DEV_ONLY
+structural_gap,synthetic_text,1_gap,1_gap,PASS,,DEV_ONLY
+overlapping_spans,synthetic_text,REJECT,REJECT,BLOCK,span_overlap,DEV_ONLY
+missing_legal_date,synthetic_html,REVIEW,REVIEW,REVIEW,LEGAL_DATE_MISSING,DEV_ONLY
+invalid_effective_interval,synthetic_html,REVIEW,REVIEW,REVIEW,EFFECTIVE_INTERVAL_INVALID,DEV_ONLY
+overlapping_effective_intervals,synthetic_html,2_review,2_review,REVIEW,VERSION_EFFECTIVE_INTERVAL_AMBIGUITY,DEV_ONLY
+header_only_legislation,synthetic_html,BLOCK,BLOCK,BLOCK,article_body_presence,DEV_ONLY
+cp1254_encoding,synthetic_bytes,2_tests,2_pass,PASS,,DEV_ONLY
+official_profile_b,official_test,NOT_RUN,NOT_RUN,UNVERIFIED,protected evidence not accessed,EXTERNAL

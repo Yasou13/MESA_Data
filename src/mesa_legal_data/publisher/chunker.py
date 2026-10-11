@@ -67,6 +67,7 @@ def plan_source_chunks(
     canonical_text: str,
     records: list[dict[str, Any]],
     content_limit_chars: int = 32768,
+    document_metadata: dict[str, Any] | None = None,
 ) -> list[SourceChunk]:
     """
     Deterministically transforms canonical text and version records into ordered SourceChunks.
@@ -87,10 +88,15 @@ def plan_source_chunks(
     # payload for its deterministic fallback assertion, so the semantic limit
     # is stricter than the 32,768-character transport-content limit.
     chunk_limit_chars = min(content_limit_chars, MESA_V4_EVIDENCE_SPAN_MAX_CHARS)
+    document_identity = dict(document_metadata or {})
 
-    # Auto-resolve char_start and char_end if content is provided
+    # Work on shallow copies so coordinate recovery never mutates canonical
+    # records owned by the caller.
+    normalized_records = [dict(record) for record in records]
+
+    # Auto-resolve char_start and char_end if content is provided.
     search_cursor = 0
-    for r in records:
+    for r in normalized_records:
         if r.get("char_start") is None and r.get("content"):
             pos = canonical_text.find(r["content"], search_cursor)
             if pos != -1:
@@ -98,13 +104,29 @@ def plan_source_chunks(
                 r["char_end"] = pos + len(r["content"])
                 search_cursor = r["char_end"]
 
-    # Filter and sort article records by char_start
+    # Filter and sort article records by char_start.
     article_records = [
         r
-        for r in records
+        for r in normalized_records
         if r.get("record_type") == "article" and r.get("char_start") is not None and r.get("char_end") is not None
     ]
     article_records.sort(key=lambda r: (r.get("char_start", 0), r.get("ordinal", 0)))
+
+    previous_end = 0
+    for article in article_records:
+        start = article.get("char_start")
+        end = article.get("char_end")
+        if (
+            not isinstance(start, int)
+            or not isinstance(end, int)
+            or start < 0
+            or end > len(canonical_text)
+            or start >= end
+        ):
+            raise ValueError(f"Invalid article source span: [{start}, {end}]")
+        if start < previous_end:
+            raise ValueError(f"Article source spans overlap at offset {start}")
+        previous_end = end
 
     chunks: list[SourceChunk] = []
     ordinal_counter = 1
@@ -131,7 +153,7 @@ def plan_source_chunks(
                     ordinal=ordinal_counter,
                     content=piece_text,
                     content_hash=c_hash,
-                    metadata={"piece_index": piece_idx, "total_pieces": len(splits)},
+                    metadata={**document_identity, "piece_index": piece_idx, "total_pieces": len(splits)},
                 )
             )
             ordinal_counter += 1
@@ -162,15 +184,48 @@ def plan_source_chunks(
                         ordinal=ordinal_counter,
                         content=piece_text,
                         content_hash=c_hash,
-                        metadata={"piece_index": piece_idx, "total_pieces": len(splits)},
+                        metadata={**document_identity, "piece_index": piece_idx, "total_pieces": len(splits)},
                     )
                 )
                 ordinal_counter += 1
 
-    # 2. Article Chunks
+    # 2. Article Chunks and meaningful structural gaps. Parser boundaries may
+    # deliberately exclude headings such as BÖLÜM/KISIM between articles; those
+    # bytes remain canonical evidence and must not disappear from publication.
+    previous_end = first_art_start
     for art in article_records:
         a_start = int(art["char_start"])
         a_end = int(art["char_end"])
+        if a_start > previous_end:
+            gap_text = canonical_text[previous_end:a_start]
+            if gap_text.strip():
+                gap_splits = _split_oversized_text(gap_text, previous_end, chunk_limit_chars)
+                for piece_idx, (c_start, c_end, piece_text) in enumerate(gap_splits, start=1):
+                    chunk_id = (
+                        f"{version_id}:chunk:{ordinal_counter:04d}"
+                        if len(gap_splits) == 1
+                        else f"{version_id}:chunk:{ordinal_counter:04d}:p{piece_idx}"
+                    )
+                    chunks.append(
+                        SourceChunk(
+                            chunk_id=chunk_id,
+                            document_id=document_id,
+                            version_id=version_id,
+                            chunk_type="general",
+                            title="Yapısal Başlık",
+                            char_start=c_start,
+                            char_end=c_end,
+                            ordinal=ordinal_counter,
+                            content=piece_text,
+                            content_hash=calculate_content_hash(piece_text),
+                            metadata={
+                                **document_identity,
+                                "piece_index": piece_idx,
+                                "total_pieces": len(gap_splits),
+                            },
+                        )
+                    )
+                    ordinal_counter += 1
         art_text = canonical_text[a_start:a_end]
         art_id = art.get("record_id", "")
         art_num = art.get("article_number", "")
@@ -197,14 +252,27 @@ def plan_source_chunks(
                     content=piece_text,
                     content_hash=c_hash,
                     metadata={
+                        **document_identity,
                         "article_id": art_id,
                         "article_number": art_num,
+                        **{
+                            key: art[key]
+                            for key in (
+                                "article_kind",
+                                "law_number",
+                                "law_title",
+                                "effective_from",
+                                "effective_to",
+                            )
+                            if key in art
+                        },
                         "piece_index": piece_idx,
                         "total_pieces": len(splits),
                     },
                 )
             )
             ordinal_counter += 1
+        previous_end = a_end
 
     # 3. Annex / Trailing Chunk (if meaningful content exists after last article)
     last_art_end = article_records[-1].get("char_end", len(canonical_text))
@@ -231,7 +299,7 @@ def plan_source_chunks(
                         ordinal=ordinal_counter,
                         content=piece_text,
                         content_hash=c_hash,
-                        metadata={"piece_index": piece_idx, "total_pieces": len(splits)},
+                        metadata={**document_identity, "piece_index": piece_idx, "total_pieces": len(splits)},
                     )
                 )
                 ordinal_counter += 1

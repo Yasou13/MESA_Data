@@ -34,6 +34,7 @@ from mesa_legal_data.catalog import (
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.parsers.citations import extract_citations
 from mesa_legal_data.parsers.coverage import compute_parsing_coverage
+from mesa_legal_data.parsers.legislation import PARSER_VERSION as LEGISLATION_PARSER_VERSION
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.publisher.client import MesaClient, MesaClientError
 from mesa_legal_data.publisher.engine import build_delivery_plan, execute_publish_delivery, retry_delivery_failures
@@ -367,8 +368,16 @@ def test_control_11_and_12_certified_and_uncertified_parser_auto_approval(tmp_pa
     upsert_source_operational_settings(
         conn, "cert_src", enabled=True, auto_approval_enabled=True, weekly_sample_count=0
     )
-    # Certify legislation_parser 1.0.0 for cert_src
-    set_parser_certification(conn, "cert_src", "legislation_parser", "1.0.0", certified=True, certified_by="auditor")
+    # Certification is deliberately exact-version scoped; parser changes require
+    # an explicit recertification instead of inheriting trust from older output.
+    set_parser_certification(
+        conn,
+        "cert_src",
+        "legislation_parser",
+        LEGISLATION_PARSER_VERSION,
+        certified=True,
+        certified_by="auditor",
+    )
     conn.close()
 
     # Ingest doc with certified parser -> auto_approved == True

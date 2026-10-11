@@ -35,6 +35,8 @@ def build_article_id(legislation_id: str, article_number: str, article_kind: str
         prefix = "ek-"
     elif article_kind == "temporary":
         prefix = "gecici-"
+    elif article_kind == "repeated":
+        prefix = "mukerrer-"
     else:
         prefix = ""
     return f"{legislation_id}:article:{prefix}{norm_num}"

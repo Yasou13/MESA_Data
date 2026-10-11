@@ -66,7 +66,7 @@ def test_large_release_streaming_and_corrupt_rollback(tmp_path, monkeypatch):
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json='{"publication_date":"2026-01-01"}',
     )
     conn.close()
 

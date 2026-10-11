@@ -1,0 +1,74 @@
+[
+  {
+    "id": "MD-P0-001",
+    "severity": "P0",
+    "owner": "MESA_Data",
+    "proof": "tests/unit/test_comprehensive_legal_identity.py::test_article_parser_preserves_extended_turkish_article_identity",
+    "fix_sha": "0a5cd5c",
+    "verification_state": "VERIFIED_FIXED"
+  },
+  {
+    "id": "MD-P0-002",
+    "severity": "P0",
+    "owner": "MESA_Data",
+    "proof": "tests/unit/test_comprehensive_legal_identity.py::test_chunk_plan_is_lossless_and_rejects_overlapping_article_identity",
+    "fix_sha": "0a5cd5c",
+    "verification_state": "VERIFIED_FIXED"
+  },
+  {
+    "id": "MD-P0-003",
+    "severity": "P0",
+    "owner": "MESA_Data",
+    "proof": "tests/unit/test_comprehensive_temporal_integrity.py::test_acquisition_time_is_not_used_as_legal_snapshot_date",
+    "fix_sha": "9500542",
+    "verification_state": "VERIFIED_FIXED"
+  },
+  {
+    "id": "MD-P0-004",
+    "severity": "P0",
+    "owner": "MESA_Data",
+    "proof": "tests/unit/test_comprehensive_temporal_integrity.py future/overlap/invalid interval tests",
+    "fix_sha": "9500542",
+    "verification_state": "VERIFIED_FIXED"
+  },
+  {
+    "id": "MD-P0-005",
+    "severity": "P0",
+    "owner": "MESA_Data",
+    "proof": "tests/unit/test_comprehensive_temporal_integrity.py::test_header_only_legislation_cannot_pass_quality_gate",
+    "fix_sha": "9500542",
+    "verification_state": "VERIFIED_FIXED"
+  },
+  {
+    "id": "MD-P0-006",
+    "severity": "P0",
+    "owner": "MESA_Data",
+    "proof": "tests/integration/test_master_mvp_closure.py::test_final_panel_confirmation_binds_exact_release_manifest_and_target",
+    "fix_sha": "17ce8f8",
+    "verification_state": "VERIFIED_FIXED"
+  },
+  {
+    "id": "MD-P1-001",
+    "severity": "P1",
+    "owner": "MESA_Data",
+    "proof": "tests/unit/test_comprehensive_legal_identity.py citation cases",
+    "fix_sha": "0a5cd5c",
+    "verification_state": "VERIFIED_FIXED_FAIL_CLOSED"
+  },
+  {
+    "id": "MD-P1-002",
+    "severity": "P1",
+    "owner": "MESA_Data",
+    "proof": "tests/integration/test_master_mvp_closure.py native citation metadata assertion",
+    "fix_sha": "dfc752a",
+    "verification_state": "VERIFIED_FIXED_PRODUCER"
+  },
+  {
+    "id": "EXTERNAL-P0-001",
+    "severity": "P0_EXTERNAL",
+    "owner": "MESA/runtime",
+    "proof": "MESA_SOURCE_ROOT unset; cross-repo test skipped",
+    "fix_sha": null,
+    "verification_state": "UNVERIFIED_ENV"
+  }
+]
