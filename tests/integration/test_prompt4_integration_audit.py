@@ -420,7 +420,9 @@ def test_kontrol_4_citations_lifecycle_and_semantics():
     cits_num = extract_citations("5237 sayılı Türk Ceza Kanunu madde 81 uyarınca")
     assert len(cits_num) >= 1
     assert cits_num[0].target_legislation_id == "tr:legislation:law:5237"
-    assert cits_num[0].citation_status == "RESOLVED"
+    # A syntactically mapped target remains a candidate until the referenced
+    # law/article/version is verified against the corpus.
+    assert cits_num[0].citation_status == "EXTRACTED"
     assert cits_num[0].char_start is not None
     assert "5237 sayılı" in cits_num[0].raw_text
 

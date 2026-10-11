@@ -130,6 +130,7 @@ def test_final_hardening_acceptance_gate(tmp_path, monkeypatch):
         document_id="tr:legislation:law:4721",
         family="legislation",
         title="Türk Medeni Kanunu",
+        publication_date="2026-01-01",
     )
     assert art.artifact_id.startswith("sha256:")
 

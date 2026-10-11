@@ -57,7 +57,7 @@ def test_bulk_review_streaming_scale_and_single_pass(tmp_path, monkeypatch):
         None,
         "fetched",
         None,
-        "{}",
+        '{"publication_date":"2026-01-01"}',
     )
     conn.close()
 

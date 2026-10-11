@@ -103,6 +103,7 @@ def test_master_security_and_scale_acceptance_gate(tmp_path, monkeypatch):
         document_id="tr:legislation:constitution:2709",
         family="legislation",
         title="Anayasa",
+        publication_date="2026-01-01",
     )
     assert art.artifact_id.startswith("sha256:")
 

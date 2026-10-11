@@ -54,7 +54,7 @@ def test_canonical_file_opened_only_once_per_part(tmp_path, monkeypatch):
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json='{"publication_date":"2026-01-01"}',
     )
     conn.close()
 

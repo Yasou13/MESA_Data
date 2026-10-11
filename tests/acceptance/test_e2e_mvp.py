@@ -85,7 +85,7 @@ def test_e2e_mvp_acceptance_flow(tmp_path, monkeypatch):
         last_modified=None,
         transport_status="fetched",
         error_code=None,
-        metadata_json="{}",
+        metadata_json='{"publication_date":"2026-01-01"}',
     )
     conn.close()
 
