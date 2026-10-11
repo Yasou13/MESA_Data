@@ -1,0 +1,15 @@
+producer_field,consumer_field,expected,observed,status
+session.tenant_id,session tenant scope,nonempty,target settings emitted,CONTRACT_ONLY
+session.workspace_id,session workspace scope,nonempty,target settings emitted,CONTRACT_ONLY
+session.dataset_ids,session dataset scope,one configured dataset,list emitted,CONTRACT_ONLY
+insert.document_id,canonical document identity,stable law/decision ID,emitted and mock asserted,PASS_MOCK
+insert.revision_id,legal version identity,exact frozen version,emitted and mock asserted,PASS_MOCK
+insert.chunk_id,chunk identity,deterministic within version,emitted and replay tested,PASS_MOCK
+insert.content/evidence_span,retrieval evidence,identical canonical slice <=4096,validated,PASS_MOCK
+insert.metadata.article_id,article identity,parent law plus kind/number,validated,PASS_MOCK
+insert.metadata.citations,graph evidence,typed span/version candidate,validated producer side,PASS_MOCK
+insert.idempotency_key,server idempotency,stable body field,stable key tested consumer unknown,CONTRACT_ONLY
+response.mutation_id,remote mutation identity,required for nonterminal,fail closed if absent,PASS_MOCK
+response.state,ledger terminal state,explicit COMMITTED only,normalization tested,PASS_MOCK
+GET /v4/mutations/{id},reconciliation,terminal poll after async/timeout,stateful mock tested,CONTRACT_ONLY
+server projections,SQL/vector/graph provenance,document/version/chunk/span/hash,no runtime available,UNVERIFIED_ENV
