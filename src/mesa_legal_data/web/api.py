@@ -2242,7 +2242,7 @@ async def prepare_publisher_release_endpoint(target_key: str = "default"):
 
 
 @router.post("/publisher/publish")
-def start_publisher_delivery_endpoint(req: MesaPublishRequest):
+def start_publisher_delivery_endpoint(req: MesaPublishRequest, request: Request):
     from mesa_legal_data.operations import submit_operation
 
     conn = get_connection()
@@ -2279,16 +2279,37 @@ def start_publisher_delivery_endpoint(req: MesaPublishRequest):
         error_response("PREFLIGHT_FAILED", f"Preflight checks failed: {'; '.join(failed_msgs)}", status_code=400)
 
     delivery_id = f"del-{uuid.uuid4().hex[:12]}"
+    actor = extract_actor(request)
     op_id = submit_operation(
         conn,
         operation_type="mesa_v4_delivery",
-        requested_by="web-user",
+        requested_by=actor,
         input_dict={
             "delivery_id": delivery_id,
             "release_id": req.release_id,
+            "manifest_sha256": req.manifest_sha256,
             "target_key": req.target_key,
             "target_config_sha256": req.target_config_sha256,
+            "scope": summary.model_dump(),
         },
+    )
+    log_audit_event(
+        conn,
+        actor=actor,
+        action="mesa_publish_authorize",
+        subject_type="release",
+        subject_id=req.release_id,
+        new_sha256=req.manifest_sha256,
+        details_json=json.dumps(
+            {
+                "operation_id": op_id,
+                "delivery_id": delivery_id,
+                "target_key": req.target_key,
+                "target_config_sha256": req.target_config_sha256,
+                "scope": summary.model_dump(),
+            },
+            sort_keys=True,
+        ),
     )
     conn.close()
     return ok_response({"operation_id": op_id, "delivery_id": delivery_id, "summary": summary.model_dump()})

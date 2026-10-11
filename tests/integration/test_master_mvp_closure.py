@@ -158,6 +158,7 @@ def test_final_panel_confirmation_binds_exact_release_manifest_and_target(tmp_pa
 
     def fake_submit(conn, *, operation_type, requested_by, input_dict):
         captured.update(input_dict)
+        captured["requested_by"] = requested_by
         return "op-frozen-final"
 
     monkeypatch.setattr("mesa_legal_data.operations.submit_operation", fake_submit)
@@ -167,7 +168,7 @@ def test_final_panel_confirmation_binds_exact_release_manifest_and_target(tmp_pa
     )
     response = client.post(
         "/api/publisher/publish",
-        headers=WEB_HEADERS,
+        headers={**WEB_HEADERS, "X-MESA-Actor": "release-authorizer"},
         json={
             "target_key": prepared["target_key"],
             "release_id": prepared["release_id"],
@@ -177,6 +178,24 @@ def test_final_panel_confirmation_binds_exact_release_manifest_and_target(tmp_pa
     )
     assert response.status_code == 200
     assert captured["release_id"] == prepared["release_id"]
+    assert captured["manifest_sha256"] == prepared["manifest_sha256"]
+    assert captured["requested_by"] == "release-authorizer"
+    assert captured["scope"]["estimated_chunks"] > 0
+    conn = get_connection()
+    authorization = conn.execute(
+        """SELECT actor, new_sha256, details_json
+           FROM audit_events
+           WHERE action = 'mesa_publish_authorize' AND subject_id = ?
+           ORDER BY created_at DESC LIMIT 1""",
+        (prepared["release_id"],),
+    ).fetchone()
+    conn.close()
+    assert authorization is not None
+    assert authorization[0] == "release-authorizer"
+    assert authorization[1] == prepared["manifest_sha256"]
+    authorization_details = json.loads(authorization[2])
+    assert authorization_details["target_config_sha256"] == prepared["target_config_sha256"]
+    assert authorization_details["scope"]["estimated_chunks"] > 0
     frozen_chunks, _ = build_delivery_plan(release_id=captured["release_id"])
     assert {chunk.version_id for chunk, _ in frozen_chunks} == {v1["version_id"]}
 
