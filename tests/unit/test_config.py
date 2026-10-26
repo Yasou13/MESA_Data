@@ -6,9 +6,12 @@ from pydantic import ValidationError
 from mesa_legal_data.config import SettingsModel, load_settings, load_sources
 
 
-def test_load_settings_defaults():
-    settings = load_settings()
+def test_load_settings_defaults(monkeypatch):
+    monkeypatch.delenv("MESA_DATA_DATA_ROOT", raising=False)
+    monkeypatch.delenv("MESA_DATA_MESA_STAGING_DB", raising=False)
+    settings = SettingsModel(_env_file=None)
     assert settings.data_root == "/storage/mesa-legal-data/data"
+    assert settings.mesa_staging_db == "/storage/mesa-legal-data/data/mesa_staging.sqlite"
     assert settings.environment == "development"
     assert settings.log_level == "INFO"
     assert settings.http_proxy is None

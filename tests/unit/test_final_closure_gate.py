@@ -9,6 +9,7 @@ from mesa_legal_data.harvest.budgets import (
     record_circuit_breaker_result,
     reset_circuit_breaker,
 )
+from mesa_legal_data.harvest.config import load_harvest_config
 from mesa_legal_data.harvest.models import ItemStatus
 from mesa_legal_data.harvest.queue import (
     get_harvest_item_by_id,
@@ -98,7 +99,9 @@ def test_crash_after_artifact_commit_resumes_without_redownload(tmp_path, monkey
         lambda art_id: type("PipeRes", (), {"status": "approved", "version_id": "ver-123"})(),
     )
 
-    res = run_harvest_batch(db_path=db_path)
+    harvest_cfg = load_harvest_config()
+    harvest_cfg.target.minimum_free_disk_bytes = 100
+    res = run_harvest_batch(harvest_cfg=harvest_cfg, db_path=db_path)
     assert res["processed"] == 1
     assert res["succeeded"] == 1
 
@@ -136,7 +139,9 @@ def test_resumed_exceptions_cannot_cause_secondary_invalid_transitions(tmp_path,
 
     monkeypatch.setattr("mesa_legal_data.harvest.runner.run_pipeline_item", failing_pipeline)
 
-    res = run_harvest_batch(db_path=db_path)
+    harvest_cfg = load_harvest_config()
+    harvest_cfg.target.minimum_free_disk_bytes = 100
+    res = run_harvest_batch(harvest_cfg=harvest_cfg, db_path=db_path)
     assert res["processed"] == 1
     assert res["retry_wait"] == 1
 
@@ -268,7 +273,9 @@ def test_idle_harvest_run_returns_clean_zero_result(tmp_path):
 
     apply_harvest_migrations(db_path)
 
-    res = run_harvest_batch(db_path=db_path)
+    harvest_cfg = load_harvest_config()
+    harvest_cfg.target.minimum_free_disk_bytes = 100
+    res = run_harvest_batch(harvest_cfg=harvest_cfg, db_path=db_path)
     assert res == {
         "processed": 0,
         "succeeded": 0,
