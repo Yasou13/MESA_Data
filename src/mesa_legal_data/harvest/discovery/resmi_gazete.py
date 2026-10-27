@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 from mesa_legal_data.harvest.models import DiscoveredDocument
 from mesa_legal_data.harvest.normalization import build_canonical_key
+from mesa_legal_data.parsers.text_normalizer import normalize_text
 from mesa_legal_data.sources.url_fetcher import fetch_discovery_html
 
 SECTION_TYPE_MAP: dict[str, tuple[str, str]] = {
@@ -23,11 +24,63 @@ SECTION_TYPE_MAP: dict[str, tuple[str, str]] = {
     "DANIŞTAY KARARLARI": ("decision", "court_decision"),
 }
 
+HEADER_SECTION_MAP: dict[str, str] = {
+    "KANUNLAR": "KANUNLAR",
+    "KANUN": "KANUNLAR",
+    "CUMHURBAŞKANLIĞI KARARNAMELERİ": "CUMHURBAŞKANLIĞI KARARNAMELERİ",
+    "CUMHURBAŞKANLIĞI KARARNAMESİ": "CUMHURBAŞKANLIĞI KARARNAMELERİ",
+    "CUMHURBAŞKANI KARARLARI": "CUMHURBAŞKANI KARARLARI",
+    "CUMHURBAŞKANI KARARI": "CUMHURBAŞKANI KARARLARI",
+    "YÖNETMELİKLER": "YÖNETMELİKLER",
+    "YÖNETMELİK": "YÖNETMELİKLER",
+    "TEBLİĞLER": "TEBLİĞLER",
+    "TEBLİĞ": "TEBLİĞLER",
+    "YARGI BÖLÜMÜ": "YARGI BÖLÜMÜ",
+    "ANAYASA MAHKEMESİ KARARLARI": "ANAYASA MAHKEMESİ KARARLARI",
+    "ANAYASA MAHKEMESİ KARARI": "ANAYASA MAHKEMESİ KARARLARI",
+    "YARGITAY KARARLARI": "YARGITAY KARARLARI",
+    "YARGITAY KARARI": "YARGITAY KARARLARI",
+    "DANIŞTAY KARARLARI": "DANIŞTAY KARARLARI",
+    "DANIŞTAY KARARI": "DANIŞTAY KARARLARI",
+}
+
 EXCLUDED_SECTIONS = {
     "İLÂN BÖLÜMÜ",
     "ARTIRMA, EKSİLTME VE İHALE İLÂNLARI",
     "ÇEŞİTLİ İLÂNLAR",
     "İLAN BÖLÜMÜ",
+}
+
+ALL_EXCLUDED_HEADERS: set[str] = {
+    "İLÂN BÖLÜMÜ",
+    "İLAN BÖLÜMÜ",
+    "ARTIRMA, EKSİLTME VE İHALE İLÂNLARI",
+    "ARTIRMA, EKSİLTME VE İHALE İLÂNI",
+    "ARTIRMA, EKSİLTME VE İHALE İLANLARI",
+    "ARTIRMA, EKSİLTME VE İHALE İLANI",
+    "ÇEŞİTLİ İLÂNLAR",
+    "ÇEŞİTLİ İLÂN",
+    "ÇEŞİTLİ İLANLAR",
+    "ÇEŞİTLİ İLAN",
+    "İLÂNLAR",
+    "İLANLAR",
+    "İLÂN",
+    "İLAN",
+    "YARGI İLÂNLARI",
+    "YARGI İLÂNI",
+    "YARGI İLANLARI",
+    "YARGI İLANI",
+}
+
+OTHER_SECTION_HEADERS: set[str] = {
+    "TBMM KARARI",
+    "TBMM KARARLARI",
+    "KURUL KARARI",
+    "KURUL KARARLARI",
+    "ATAMA KARARI",
+    "ATAMA KARARLARI",
+    "GENELGE",
+    "GENELGELER",
 }
 
 NON_DOCUMENT_STEMS = {
@@ -110,20 +163,24 @@ class ResmiGazeteDiscoveryAdapter:
 
         elements = soup.find_all(["h1", "h2", "h3", "h4", "div", "p", "a"])
         for el in elements:
-            text_upper = el.get_text(strip=True).upper()
+            text_norm = re.sub(r"\s+", " ", el.get_text() or "").strip()
+            text_upper = text_norm.upper()
 
-            # Section header detection
-            for sec_key in SECTION_TYPE_MAP:
-                if sec_key in text_upper:
-                    current_section = sec_key
-                    break
+            # Section header detection: exact match only
+            if el.name != "a":
+                if text_upper in HEADER_SECTION_MAP:
+                    current_section = HEADER_SECTION_MAP[text_upper]
+                elif text_upper in ALL_EXCLUDED_HEADERS:
+                    current_section = text_upper
+                elif text_upper in OTHER_SECTION_HEADERS:
+                    current_section = text_upper
 
-            for ex_key in EXCLUDED_SECTIONS:
-                if ex_key in text_upper:
-                    current_section = ex_key
-                    break
-
-            if current_section in EXCLUDED_SECTIONS:
+            if (
+                current_section in EXCLUDED_SECTIONS
+                or current_section in ALL_EXCLUDED_HEADERS
+                or "İLAN" in current_section
+                or "İLÂN" in current_section
+            ):
                 continue
 
             if el.name == "a" and el.get("href"):
@@ -132,10 +189,18 @@ class ResmiGazeteDiscoveryAdapter:
                     continue
 
                 full_url = urljoin(page_url, href)
+                if "ilanlar" in full_url.lower():
+                    continue
+
                 if not is_resmi_gazete_document_link(full_url, pub_date):
                     continue
 
-                title = el.get_text(strip=True) or "Resmî Gazete Belgesi"
+                raw_title = el.get_text() or ""
+                cleaned_title = normalize_text(raw_title)
+                title = " ".join(line.strip() for line in cleaned_title.splitlines() if line.strip())
+                title = re.sub(r"^[\s\u2010-\u2015\u2212\-–—]+", "", title).strip()
+                if not title:
+                    title = "Resmî Gazete Belgesi"
 
                 if current_section in SECTION_TYPE_MAP:
                     family, doc_type = SECTION_TYPE_MAP[current_section]
@@ -148,7 +213,31 @@ class ResmiGazeteDiscoveryAdapter:
 
                 doc_id_part = link_stem
                 canonical_key = build_canonical_key("resmi_gazete", family, doc_type, pub_date.isoformat(), doc_id_part)
-                document_id = f"tr:{family}:{doc_type}:rg-{doc_id_part}"
+
+                num_id: str | None = None
+                if doc_type == "law":
+                    m_law = re.search(r"^\s*(\d{3,5})\b", title)
+                    if m_law:
+                        num_id = m_law.group(1)
+                elif doc_type == "presidential_decree":
+                    m_decree = re.search(r"Kararname\s+Numaras[ıi]\s*:\s*(\d+)", title, re.IGNORECASE)
+                    if not m_decree:
+                        m_decree = re.search(
+                            r"\b(\d+)\s+Say[ıi]l[ıi]\s+Cumhurba[şs]kanl[ıi][ğg][ıi]\s+Kararnamesi",
+                            title,
+                            re.IGNORECASE,
+                        )
+                    if m_decree:
+                        num_id = m_decree.group(1)
+                elif doc_type == "presidential_decision":
+                    m_dec = re.search(r"Karar\s+Say[ıi]s[ıi]\s*:\s*(\d+)", title, re.IGNORECASE)
+                    if m_dec:
+                        num_id = m_dec.group(1)
+
+                if num_id:
+                    document_id = f"tr:{family}:{doc_type}:{num_id}"
+                else:
+                    document_id = f"tr:{family}:{doc_type}:rg-{doc_id_part}"
 
                 discovered.append(
                     DiscoveredDocument(

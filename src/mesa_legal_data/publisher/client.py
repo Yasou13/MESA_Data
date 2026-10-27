@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -13,6 +15,18 @@ from mesa_legal_data.publisher.models import (
     PreflightReport,
     SourceChunk,
 )
+
+# Mirrors mesa_storage/legal_identity.py::LAW_IDS in MESA, without 2709: MESA main
+# rejects "2709" at insert and dead-letters "Anayasa" (its canonical form fails its own
+# re-check), so Constitution chunks are sent without legal_identity.
+MESA_LEGAL_IDENTITY_LAW_NUMBERS = frozenset({"4721", "6098", "6100", "6102", "2577", "5237", "5271", "4857", "6698"})
+
+# MESA input_validation.MAX_METADATA_BYTES, measured the same way MESA measures it.
+MESA_METADATA_MAX_BYTES = 16 * 1024
+
+
+def _metadata_size(metadata: dict[str, Any]) -> int:
+    return len(json.dumps(metadata, sort_keys=True, default=str).encode())
 
 
 class MesaClientError(Exception):
@@ -404,10 +418,17 @@ class MesaClient:
             "mesa_data_char_end": chunk.char_end,
             "mesa_data_content_hash": chunk.content_hash,
         }
+        # MESA rejects metadata over 16 KB; drop trailing citations until it fits.
+        citations = list(metadata.get("citations") or [])
+        while citations and _metadata_size(metadata) > MESA_METADATA_MAX_BYTES:
+            citations.pop()
+            metadata["citations"] = citations
+        if "citations" in metadata and not citations:
+            del metadata["citations"]
         source_ref = metadata.get("authoritative_source_ref") or metadata.get("source_url")
         if not isinstance(source_ref, str) or not source_ref.strip():
             source_ref = f"mesa-data://releases/{metadata.get('release_id', 'current')}/documents/{chunk.document_id}/revisions/{chunk.version_id}/chunks/{chunk.chunk_id}"
-        return {
+        payload = {
             "session_id": session_id,
             "dataset_id": self.settings.dataset_id,
             "document_id": chunk.document_id,
@@ -424,6 +445,16 @@ class MesaClient:
             "metadata": metadata,
             "idempotency_key": idempotency_key,
         }
+        law_number = str(metadata.get("law_number", ""))
+        article_number = str(metadata.get("article_number", ""))
+        if (
+            chunk.chunk_type == "article"
+            and metadata.get("article_kind") == "standard"
+            and law_number in MESA_LEGAL_IDENTITY_LAW_NUMBERS
+            and re.fullmatch(r"\d+[A-Za-zÇĞİÖŞÜçğıöşü]?", article_number)
+        ):
+            payload["legal_identity"] = {"law_id": law_number, "article_id": article_number}
+        return payload
 
     def publish_source_chunk(
         self,

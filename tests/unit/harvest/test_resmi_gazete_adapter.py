@@ -1,4 +1,6 @@
+import re
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -6,6 +8,7 @@ from mesa_legal_data.harvest.discovery.resmi_gazete import (
     DiscoveryStructureChangedError,
     ResmiGazeteDiscoveryAdapter,
 )
+from mesa_legal_data.parsers.encoding import decode_source_bytes
 
 SAMPLE_RESMI_GAZETE_HTML = """
 <!DOCTYPE html>
@@ -61,3 +64,102 @@ def test_resmi_gazete_adapter_structure_changed():
     pub_date = date(2026, 8, 7)
     with pytest.raises(DiscoveryStructureChangedError):
         adapter.parse_html_fihrist("", pub_date, "https://www.resmigazete.gov.tr/empty")
+
+
+def test_golden_resmi_gazete_20260812():
+    golden_path = Path(__file__).resolve().parents[2] / "golden" / "resmi_gazete" / "20260812.htm"
+    html_content, _ = decode_source_bytes(golden_path.read_bytes(), is_html=True)
+    adapter = ResmiGazeteDiscoveryAdapter()
+    pub_date = date(2026, 8, 12)
+    docs = adapter.parse_html_fihrist(
+        html_content, pub_date, "https://www.resmigazete.gov.tr/eskiler/2026/08/20260812.htm"
+    )
+
+    # 1. Regulation link 20260812-2.htm -> type regulation
+    reg_docs = [d for d in docs if "20260812-2.htm" in d.document_url]
+    assert len(reg_docs) == 1
+    reg_doc = reg_docs[0]
+    assert reg_doc.document_type == "regulation"
+    assert reg_doc.family == "legislation"
+    assert "Binaların Yıkılması" in reg_doc.title
+
+    # 2. Every title has no \r, \n, \xa0, control chars, or leading dashes
+    for d in docs:
+        assert "\r" not in d.title
+        assert "\n" not in d.title
+        assert "\xa0" not in d.title
+        assert not re.search(r"[\x00-\x1f\x7f-\x9f]", d.title)
+        assert not d.title.startswith("–")
+        assert not d.title.startswith("-")
+
+    # 3. No link in an İLAN / İLÂN section is returned
+    for d in docs:
+        assert "İLAN" not in d.section.upper()
+        assert "İLÂN" not in d.section.upper()
+        assert "ilanlar" not in d.document_url
+
+
+def test_golden_resmi_gazete_20260813():
+    golden_path = Path(__file__).resolve().parents[2] / "golden" / "resmi_gazete" / "20260813.htm"
+    html_content, _ = decode_source_bytes(golden_path.read_bytes(), is_html=True)
+    adapter = ResmiGazeteDiscoveryAdapter()
+    pub_date = date(2026, 8, 13)
+    docs = adapter.parse_html_fihrist(
+        html_content, pub_date, "https://www.resmigazete.gov.tr/eskiler/2026/08/20260813.htm"
+    )
+
+    # Decision link 20260813-0.pdf -> type presidential_decision, document_id tr:legislation:presidential_decision:11606
+    dec_docs = [d for d in docs if "20260813-0.pdf" in d.document_url]
+    assert len(dec_docs) == 1
+    dec_doc = dec_docs[0]
+    assert dec_doc.document_type == "presidential_decision"
+    assert dec_doc.document_id == "tr:legislation:presidential_decision:11606"
+    assert "Özel Tüketim Vergisi" in dec_doc.title
+
+    for d in docs:
+        assert "\r" not in d.title
+        assert "\n" not in d.title
+        assert "\xa0" not in d.title
+        assert not re.search(r"[\x00-\x1f\x7f-\x9f]", d.title)
+        assert not d.title.startswith("–")
+        assert not d.title.startswith("-")
+        assert "İLAN" not in d.section.upper()
+        assert "İLÂN" not in d.section.upper()
+
+
+def test_golden_resmi_gazete_20260809_laws_and_decrees():
+    golden_path = Path(__file__).resolve().parents[2] / "golden" / "resmi_gazete" / "20260809.htm"
+    html_content, _ = decode_source_bytes(golden_path.read_bytes(), is_html=True)
+    adapter = ResmiGazeteDiscoveryAdapter()
+    pub_date = date(2026, 8, 9)
+    docs = adapter.parse_html_fihrist(
+        html_content, pub_date, "https://www.resmigazete.gov.tr/eskiler/2026/08/20260809.htm"
+    )
+
+    # Law links -> type law, document_id tr:legislation:law:<number>, title keeps its number
+    law7592 = [d for d in docs if "20260809-2.htm" in d.document_url]
+    assert len(law7592) == 1
+    assert law7592[0].document_type == "law"
+    assert law7592[0].document_id == "tr:legislation:law:7592"
+    assert law7592[0].title.startswith("7592")
+    assert "Yükseköğretim Kanunu" in law7592[0].title
+
+    # Presidential decree -> kararname number
+    decree199 = [d for d in docs if "20260809-3.pdf" in d.document_url]
+    assert len(decree199) == 1
+    assert decree199[0].document_type == "presidential_decree"
+    assert decree199[0].document_id == "tr:legislation:presidential_decree:199"
+
+    # Presidential decision -> Karar Sayısı
+    decision11577 = [d for d in docs if "20260809-13.pdf" in d.document_url]
+    assert len(decision11577) == 1
+    assert decision11577[0].document_type == "presidential_decision"
+    assert decision11577[0].document_id == "tr:legislation:presidential_decision:11577"
+
+    for d in docs:
+        assert "\r" not in d.title
+        assert "\n" not in d.title
+        assert "\xa0" not in d.title
+        assert not re.search(r"[\x00-\x1f\x7f-\x9f]", d.title)
+        assert "İLAN" not in d.section.upper()
+        assert "İLÂN" not in d.section.upper()

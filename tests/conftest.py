@@ -1,10 +1,31 @@
 import ipaddress
+import os
 import socket
 import time
 
 import pytest
 
 from mesa_legal_data.sources import request_control
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolate_session_data_root(tmp_path_factory):
+    session_tmp = tmp_path_factory.mktemp("mesa_data_session")
+    staging_db = session_tmp / "mesa_staging.sqlite"
+    old_data_root = os.environ.get("MESA_DATA_DATA_ROOT")
+    old_staging_db = os.environ.get("MESA_DATA_MESA_STAGING_DB")
+    os.environ["MESA_DATA_DATA_ROOT"] = str(session_tmp)
+    os.environ["MESA_DATA_MESA_STAGING_DB"] = str(staging_db)
+    yield session_tmp
+    if old_data_root is not None:
+        os.environ["MESA_DATA_DATA_ROOT"] = old_data_root
+    else:
+        os.environ.pop("MESA_DATA_DATA_ROOT", None)
+    if old_staging_db is not None:
+        os.environ["MESA_DATA_MESA_STAGING_DB"] = old_staging_db
+    else:
+        os.environ.pop("MESA_DATA_MESA_STAGING_DB", None)
+
 
 KNOWN_TEST_HOSTS = {
     "mevzuat.gov.tr": ["1.1.1.1"],

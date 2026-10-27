@@ -36,6 +36,7 @@ def import_manual_file(
     publication_date: str | None = None,
     stable_key: str | None = None,
     sources_yaml_path: Path | None = None,
+    extra_metadata: dict | None = None,
 ) -> FetchedArtifact:
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -61,7 +62,72 @@ def import_manual_file(
     with open(file_path, "rb") as f:
         artifact_sha256 = hash_stream(f)
 
-    # 3. Path construction
+    # 3. Path construction & Duplicate check
+    artifact_id = f"sha256:{artifact_sha256}"
+    conn = get_connection()
+    existing = get_artifact(conn, artifact_id)
+    if existing:
+        if existing.get("document_id") and existing["document_id"] != document_id:
+            conn.close()
+            raise ArtifactDocumentCollisionError(
+                "ARTIFACT_DOCUMENT_COLLISION: identical payload is already bound to a different document"
+            )
+        doc_key = stable_key if stable_key else secure_slug(document_id)
+        upsert_document(
+            conn=conn,
+            document_id=document_id,
+            family=family,
+            document_type=document_type,
+            jurisdiction=jurisdiction,
+            title=title,
+            stable_key=doc_key,
+            lifecycle_status="fetched",
+        )
+        dup_meta = {}
+        if extra_metadata:
+            dup_meta.update(extra_metadata)
+        dup_meta["publication_date"] = publication_date
+        insert_artifact(
+            conn=conn,
+            artifact_id=existing["artifact_id"],
+            document_id=document_id,
+            source_id=existing["source_id"],
+            source_url=existing["source_url"],
+            retrieved_at=existing["retrieved_at"],
+            fetch_method=existing["fetch_method"],
+            http_status=existing["http_status"],
+            declared_content_type=existing["declared_content_type"],
+            detected_content_type=existing["detected_content_type"],
+            byte_size=existing["byte_size"],
+            sha256=artifact_sha256,
+            raw_path=existing["raw_path"],
+            etag=existing["etag"],
+            last_modified=existing["last_modified"],
+            transport_status=existing["transport_status"],
+            error_code=existing["error_code"],
+            metadata_json=json.dumps(dup_meta),
+        )
+        refreshed = get_artifact(conn, artifact_id) or existing
+        conn.close()
+        return FetchedArtifact(
+            artifact_id=artifact_id,
+            document_id=document_id or existing["document_id"],
+            source_id=source_id,
+            source_url=f"file://{file_path.resolve()}",
+            retrieved_at=existing["retrieved_at"],
+            fetch_method="manual",
+            http_status=200,
+            declared_content_type=detected_mime,
+            detected_content_type=detected_mime,
+            byte_size=existing["byte_size"],
+            sha256=artifact_sha256,
+            raw_path=existing["raw_path"],
+            transport_status=existing.get("transport_status", "verified"),
+            is_duplicate=True,
+            metadata=json.loads(refreshed.get("metadata_json") or "{}"),
+        )
+    conn.close()
+
     ext = file_path.suffix if file_path.suffix else ".bin"
     doc_key = stable_key if stable_key else secure_slug(document_id)
     year = datetime.now(UTC).year
@@ -83,26 +149,30 @@ def import_manual_file(
     # 5. Metadata json
     retrieved_at = datetime.now(UTC).isoformat()
     byte_size = os.path.getsize(file_path)
-    artifact_id = f"sha256:{artifact_sha256}"
 
-    meta_dict = {
-        "artifact_id": artifact_id,
-        "document_key": doc_key,
-        "source_id": source_id,
-        "source_url": f"file://{file_path.resolve()}",
-        "retrieved_at": retrieved_at,
-        "publication_date": publication_date,
-        "fetch_method": "manual",
-        "http_status": 200,
-        "declared_content_type": detected_mime,
-        "detected_content_type": detected_mime,
-        "byte_size": byte_size,
-        "sha256": artifact_sha256,
-        "etag": None,
-        "last_modified": None,
-        "collector_version": "1.0.0",
-        "access_policy_version": policy.policy_version,
-    }
+    meta_dict = {}
+    if extra_metadata:
+        meta_dict.update(extra_metadata)
+    meta_dict.update(
+        {
+            "artifact_id": artifact_id,
+            "document_key": doc_key,
+            "source_id": source_id,
+            "source_url": f"file://{file_path.resolve()}",
+            "retrieved_at": retrieved_at,
+            "publication_date": publication_date,
+            "fetch_method": "manual",
+            "http_status": 200,
+            "declared_content_type": detected_mime,
+            "detected_content_type": detected_mime,
+            "byte_size": byte_size,
+            "sha256": artifact_sha256,
+            "etag": None,
+            "last_modified": None,
+            "collector_version": "1.0.0",
+            "access_policy_version": policy.policy_version,
+        }
+    )
 
     metadata_path = full_target_payload.parent / "metadata.json"
     import io
@@ -194,6 +264,7 @@ def import_manual_url(
     publication_date: str | None = None,
     stable_key: str | None = None,
     sources_yaml_path: Path | None = None,
+    extra_metadata: dict | None = None,
 ) -> FetchedArtifact:
     import io
 
@@ -262,6 +333,11 @@ def import_manual_url(
                 stable_key=doc_key,
                 lifecycle_status="fetched",
             )
+            dup_meta = {}
+            if extra_metadata:
+                dup_meta.update(extra_metadata)
+            dup_meta["publication_date"] = publication_date
+
             insert_artifact(
                 conn=conn,
                 artifact_id=existing["artifact_id"],
@@ -280,7 +356,7 @@ def import_manual_url(
                 last_modified=existing["last_modified"],
                 transport_status=existing["transport_status"],
                 error_code=existing["error_code"],
-                metadata_json=json.dumps({"publication_date": publication_date}),
+                metadata_json=json.dumps(dup_meta),
             )
             refreshed = get_artifact(conn, artifact_id) or existing
             conn.close()
@@ -324,24 +400,29 @@ def import_manual_url(
         retrieved_at = datetime.now(UTC).isoformat()
         byte_size = os.path.getsize(temp_file)
 
-        meta_dict = {
-            "artifact_id": artifact_id,
-            "document_key": doc_key,
-            "source_id": source_id,
-            "source_url": url,
-            "retrieved_at": retrieved_at,
-            "fetch_method": "manual_url",
-            "http_status": status_code,
-            "declared_content_type": declared_content_type,
-            "detected_content_type": detected_mime,
-            "byte_size": byte_size,
-            "sha256": artifact_sha256,
-            "etag": headers.get("etag"),
-            "last_modified": headers.get("last-modified"),
-            "publication_date": publication_date,
-            "collector_version": "1.0.0",
-            "access_policy_version": policy.policy_version,
-        }
+        meta_dict = {}
+        if extra_metadata:
+            meta_dict.update(extra_metadata)
+        meta_dict.update(
+            {
+                "artifact_id": artifact_id,
+                "document_key": doc_key,
+                "source_id": source_id,
+                "source_url": url,
+                "retrieved_at": retrieved_at,
+                "fetch_method": "manual_url",
+                "http_status": status_code,
+                "declared_content_type": declared_content_type,
+                "detected_content_type": detected_mime,
+                "byte_size": byte_size,
+                "sha256": artifact_sha256,
+                "etag": headers.get("etag"),
+                "last_modified": headers.get("last-modified"),
+                "publication_date": publication_date,
+                "collector_version": "1.0.0",
+                "access_policy_version": policy.policy_version,
+            }
+        )
 
         metadata_path = full_target_payload.parent / "metadata.json"
         meta_bytes = json.dumps(meta_dict, indent=2).encode("utf-8")

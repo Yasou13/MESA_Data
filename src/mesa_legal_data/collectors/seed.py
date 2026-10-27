@@ -1,8 +1,11 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+from mesa_legal_data.catalog import get_connection, get_document
 from mesa_legal_data.models import FetchedArtifact
+from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.sources import import_manual_file, import_manual_url
 
 
@@ -26,10 +29,17 @@ def run_seed_collection(
     """
     Collects seed legislation. If local_fixtures_dir is provided, imports from local files;
     otherwise imports via URL. Continues on individual item failures and reports them.
+    Runs process_artifact_pipeline for every artifact that is new in this run.
+    Prints, per item: number, title, collected / unchanged / failed, pipeline status.
     """
     items = load_seed_config(config_path)
-    collected = []
-    skipped: list[tuple[str, str, str]] = []  # (number, title, reason)
+    collected: list[FetchedArtifact] = []
+
+    today_utc = datetime.now(UTC).strftime("%Y-%m-%d")
+    extra_meta = {
+        "snapshot_date": today_utc,
+        "source_role": "consolidated_text",
+    }
 
     for item in items:
         doc_id = item["document_id"]
@@ -40,6 +50,14 @@ def run_seed_collection(
         source_id = "mevzuat"
 
         try:
+            conn = get_connection()
+            try:
+                document = get_document(conn, doc_id)
+            finally:
+                conn.close()
+            item_metadata = dict(extra_meta)
+            if document and document["current_version_id"]:
+                item_metadata["supersedes_version_id"] = document["current_version_id"]
             if local_fixtures_dir and (local_fixtures_dir / f"{number}.pdf").exists():
                 fixture_file = local_fixtures_dir / f"{number}.pdf"
                 artifact = import_manual_file(
@@ -49,6 +67,7 @@ def run_seed_collection(
                     family=family,
                     document_type=doc_type,
                     title=title,
+                    extra_metadata=item_metadata,
                 )
             else:
                 source_url = item["source_url"]
@@ -59,23 +78,29 @@ def run_seed_collection(
                     family=family,
                     document_type=doc_type,
                     title=title,
+                    extra_metadata=item_metadata,
                 )
+
+            is_dup = getattr(artifact, "is_duplicate", False)
+            if is_dup:
+                item_status = "unchanged"
+                pipe_status = "skipped"
+            else:
+                item_status = "collected"
+                try:
+                    pipe_status = process_artifact_pipeline(artifact.artifact_id)
+                except Exception as p_err:
+                    pipe_status = f"pipeline error: {p_err}"
+
             collected.append(artifact)
+            print(f"{number} {title}: {item_status}, pipeline: {pipe_status}")
+
         except Exception as e:
-            err_msg = str(e).lower()
-            # Skip if artifact already exists or sha256 UNIQUE constraint
-            if "already exists" in err_msg or "unique constraint" in err_msg:
-                skipped.append((number, title, "already exists"))
-                continue
-            # Log failure but continue with remaining items
-            skipped.append((number, title, str(e)))
+            err_msg = str(e)
+            if "already exists" in err_msg.lower() or "unique constraint" in err_msg.lower():
+                print(f"{number} {title}: unchanged, pipeline: skipped")
+            else:
+                print(f"{number} {title}: failed, pipeline: skipped ({err_msg[:80]})")
             continue
-
-    if skipped:
-        import sys
-
-        for number, title, reason in skipped:
-            short_reason = reason if "already exists" in reason else reason[:120]
-            print(f"  ⚠ Skipped {number} ({title}): {short_reason}", file=sys.stderr)
 
     return collected

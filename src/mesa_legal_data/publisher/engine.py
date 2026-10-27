@@ -336,11 +336,11 @@ def build_delivery_plan(
         )
 
         # Canonical citation edges are release-owned records, not text inferred
-        # by the publisher. Carry only citations whose authoritative source span
-        # overlaps this chunk. Target versions stay null until a corpus-aware or
-        # human resolver verifies the exact legal version.
+        # by the publisher. Carry the targets of citations whose authoritative
+        # source span overlaps this chunk. MESA metadata allows no objects inside
+        # lists, so each citation is its target id; unresolved ones are dropped.
         for chunk in chunks:
-            chunk_citations: list[dict[str, Any]] = []
+            chunk_citations: list[str] = []
             for citation in citations:
                 span = citation.get("source_span") or {}
                 start = span.get("char_start")
@@ -349,21 +349,9 @@ def build_delivery_plan(
                     continue
                 if start >= chunk.char_end or end <= chunk.char_start:
                     continue
-                chunk_citations.append(
-                    {
-                        "citation_id": citation.get("id"),
-                        "source_record_id": citation.get("source_record_id"),
-                        "source_version_id": citation.get("source_version_id") or v_id,
-                        "target_legislation_id": citation.get("target_legislation_id"),
-                        "target_article_id": citation.get("target_article_id"),
-                        "target_version_id": citation.get("target_version_id"),
-                        "citation_status": citation.get("citation_status"),
-                        "relation_hint": citation.get("relation_hint"),
-                        "char_start": start,
-                        "char_end": end,
-                        "fully_contained": start >= chunk.char_start and end <= chunk.char_end,
-                    }
-                )
+                target = citation.get("target_article_id") or citation.get("target_legislation_id")
+                if isinstance(target, str) and target and target not in chunk_citations:
+                    chunk_citations.append(target)
             if chunk_citations:
                 chunk.metadata["citations"] = chunk_citations
 
