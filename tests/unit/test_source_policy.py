@@ -47,13 +47,30 @@ def test_source_policy_unknown_source():
         )
 
 
-def test_source_policy_disabled_source():
-    # yargitay is enabled: false in sources.yaml
+def test_source_policy_disabled_source(tmp_path):
+    sources_yaml_path = tmp_path / "sources.yaml"
+    sources_yaml_path.write_text(
+        'version: "1.0.0"\n'
+        "sources:\n"
+        "  yargitay:\n"
+        "    name: Disabled Yargitay\n"
+        "    authority: Yargitay\n"
+        "    base_url: https://karararama.yargitay.gov.tr/\n"
+        "    access_mode: manual\n"
+        "    enabled: false\n"
+        "    families: [decision]\n"
+        "    source_role: official_case_law\n"
+        '    policy_version: "1.0.0"\n'
+        "    http: {user_agent: MESA-Legal-Data-Test/1.0}\n"
+        "    allowed_content_types: [text/html]\n",
+        encoding="utf-8",
+    )
     with pytest.raises(SourcePolicyError, match="SOURCE_DISABLED"):
         validate_source_policy(
             source_id="yargitay",
             url="https://karararama.yargitay.gov.tr/doc.html",
             document_family="decision",
+            sources_yaml_path=sources_yaml_path,
         )
 
 

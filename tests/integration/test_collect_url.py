@@ -14,13 +14,30 @@ def test_collect_url_disabled_source_fails(tmp_path, monkeypatch):
     db_path = get_db_path()
     migrate(None, db_path)
 
-    # Yargitay is disabled in sources.yaml
+    sources_yaml_path = tmp_path / "sources.yaml"
+    sources_yaml_path.write_text(
+        'version: "1.0.0"\n'
+        "sources:\n"
+        "  yargitay:\n"
+        "    name: Disabled Yargitay\n"
+        "    authority: Yargitay\n"
+        "    base_url: https://karararama.yargitay.gov.tr/\n"
+        "    access_mode: manual\n"
+        "    enabled: false\n"
+        "    families: [decision]\n"
+        "    source_role: official_case_law\n"
+        '    policy_version: "1.0.0"\n'
+        "    http: {user_agent: MESA-Legal-Data-Test/1.0}\n"
+        "    allowed_content_types: [text/html]\n",
+        encoding="utf-8",
+    )
     with pytest.raises(SourcePolicyError, match="SOURCE_DISABLED"):
         import_manual_url(
             url="https://karararama.yargitay.gov.tr/doc.html",
             source_id="yargitay",
             document_id="tr:case-law:yargitay:2026:1",
             family="decision",
+            sources_yaml_path=sources_yaml_path,
         )
 
 
