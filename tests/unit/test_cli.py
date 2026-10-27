@@ -125,3 +125,50 @@ def test_source_cli_commands(monkeypatch, tmp_path):
         assert get_parser_certification(conn, "mevzuat", "legislation_parser", "1.1.0") is False
     finally:
         conn.close()
+
+
+def test_publish_target_cli_persists_web_defaults_and_hash(tmp_path, monkeypatch):
+    from mesa_legal_data.catalog import get_connection, migrate
+    from mesa_legal_data.publisher.engine import target_config_sha256
+    from mesa_legal_data.publisher.ledger import get_mesa_target_settings
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MESA_DATA_MESA_API_KEY", "never-print-this-key")
+    migrate()
+    result = runner.invoke(
+        app,
+        [
+            "publish",
+            "target",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--tenant-id",
+            "tenant",
+            "--workspace-id",
+            "workspace",
+            "--dataset-id",
+            "laws",
+            "--agent-id",
+            "cli-publisher",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    conn = get_connection()
+    settings = get_mesa_target_settings(conn)
+    conn.close()
+    assert settings.base_url == "http://127.0.0.1:8000"
+    assert (settings.tenant_id, settings.workspace_id, settings.dataset_id, settings.agent_id) == (
+        "tenant",
+        "workspace",
+        "laws",
+        "cli-publisher",
+    )
+    assert settings.contract_source == "configured"
+    assert settings.content_limit_chars == 32768
+    assert settings.health_path == "/health"
+    assert settings.session_start_path == "/v4/sessions/start"
+    assert settings.publish_path == "/v4/memory/insert"
+    assert settings.mutation_status_path_template == "/v4/mutations/{mutation_id}"
+    assert settings.session_end_path_template == "/v4/sessions/{session_id}/end"
+    assert target_config_sha256(settings) in result.output
+    assert "never-print-this-key" not in result.output

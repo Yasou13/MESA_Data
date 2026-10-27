@@ -9,9 +9,11 @@ from mesa_legal_data.harvest.cli import harvest_app
 app = typer.Typer(help="MESA Legal Data CLI")
 collect_app = typer.Typer(help="Collect legal data artifacts from sources.")
 source_app = typer.Typer(help="Manage source operational settings and parser certifications.")
+publish_app = typer.Typer(help="Configure MESA and publish a human-confirmed verified release.")
 app.add_typer(collect_app, name="collect")
 app.add_typer(harvest_app, name="harvest")
 app.add_typer(source_app, name="source")
+app.add_typer(publish_app, name="publish")
 
 
 @app.command()
@@ -788,6 +790,169 @@ def source_certify_parser(
         )
     finally:
         conn.close()
+
+
+@publish_app.command("target")
+def publish_target(
+    base_url: str = typer.Option(..., "--base-url"),
+    tenant_id: str = typer.Option(..., "--tenant-id"),
+    workspace_id: str = typer.Option(..., "--workspace-id"),
+    dataset_id: str = typer.Option(..., "--dataset-id"),
+    agent_id: str = typer.Option(..., "--agent-id"),
+    target_key: str = typer.Option("default", "--target-key"),
+    content_limit_chars: int = typer.Option(32768, "--content-limit-chars", min=1024, max=32768),
+    health_path: str = typer.Option("/health", "--health-path"),
+    session_start_path: str = typer.Option("/v4/sessions/start", "--session-start-path"),
+    publish_path: str = typer.Option("/v4/memory/insert", "--publish-path"),
+    mutation_status_path_template: str = typer.Option("/v4/mutations/{mutation_id}", "--mutation-status-path-template"),
+    session_end_path_template: str = typer.Option("/v4/sessions/{session_id}/end", "--session-end-path-template"),
+):
+    """Save the non-secret MESA target and print its confirmation hash."""
+    from mesa_legal_data.catalog import get_connection
+    from mesa_legal_data.publisher.engine import target_config_sha256
+    from mesa_legal_data.publisher.ledger import upsert_mesa_target_settings
+    from mesa_legal_data.publisher.models import MesaTargetSettings
+    from mesa_legal_data.web.schemas import MesaTargetSettingsUpdateRequest
+
+    try:
+        request = MesaTargetSettingsUpdateRequest(
+            base_url=base_url,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            dataset_id=dataset_id,
+            agent_id=agent_id,
+            content_limit_chars=content_limit_chars,
+            health_path=health_path,
+            session_start_path=session_start_path,
+            publish_path=publish_path,
+            mutation_status_path_template=mutation_status_path_template,
+            session_end_path_template=session_end_path_template,
+        )
+        settings = MesaTargetSettings(
+            target_key=target_key,
+            **request.model_dump(),
+            contract_source=(
+                "configured"
+                if request.health_path
+                and request.session_start_path
+                and request.publish_path
+                and "{mutation_id}" in request.mutation_status_path_template
+                else "unknown"
+            ),
+        )
+        conn = get_connection()
+        try:
+            upsert_mesa_target_settings(conn, settings)
+        finally:
+            conn.close()
+        typer.echo(f"Target config SHA-256: {target_config_sha256(settings)}")
+    except Exception as exc:
+        typer.secho(f"Target configuration failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@publish_app.command("run")
+def publish_run(
+    release_id: str = typer.Option(..., "--release-id"),
+    confirm_manifest: str = typer.Option(..., "--confirm-manifest"),
+    confirm_target: str = typer.Option(..., "--confirm-target"),
+    target_key: str = typer.Option("default", "--target-key"),
+    by: str = typer.Option("cli", "--by", help="Human authorizing this delivery"),
+):
+    """Publish the confirmed immutable release synchronously; succeed only on COMMITTED."""
+    import json
+    import uuid
+
+    from mesa_legal_data.audit import log_audit_event
+    from mesa_legal_data.catalog import get_connection, get_release
+    from mesa_legal_data.publisher.client import MesaClient
+    from mesa_legal_data.publisher.engine import build_delivery_plan, execute_publish_delivery, target_config_sha256
+    from mesa_legal_data.publisher.ledger import get_mesa_target_settings
+    from mesa_legal_data.web.schemas import MesaPublishRequest
+
+    try:
+        request = MesaPublishRequest(
+            release_id=release_id,
+            manifest_sha256=confirm_manifest,
+            target_config_sha256=confirm_target,
+            target_key=target_key,
+        )
+        conn = get_connection()
+        try:
+            settings = get_mesa_target_settings(conn, target_key)
+            release = get_release(conn, release_id)
+            if not release:
+                raise ValueError(f"RELEASE_NOT_FOUND: {release_id}")
+            if release["status"] not in ("verified", "published"):
+                raise ValueError(f"RELEASE_STATUS_INVALID: {release['status']}")
+            if release["manifest_sha256"] != request.manifest_sha256:
+                raise ValueError("RELEASE_CONFIRMATION_MISMATCH: confirmed manifest does not match")
+            if target_config_sha256(settings) != request.target_config_sha256:
+                raise ValueError("TARGET_CONFIRMATION_MISMATCH: MESA target changed after confirmation")
+            _, summary = build_delivery_plan(target_key=target_key, release_id=release_id)
+            report = MesaClient(settings=settings).run_preflight_checks(
+                ready_documents_count=summary.ready_documents,
+                ready_versions_count=summary.ready_versions,
+                estimated_chunks_count=summary.estimated_chunks,
+                total_canonical_bytes=summary.total_canonical_bytes,
+                blocked_versions_count=summary.blocked_versions_excluded,
+                unreadable_versions_count=summary.unreadable_versions_excluded,
+            )
+            if report.overall_status == "FAIL":
+                raise ValueError(
+                    "PREFLIGHT_FAILED: " + "; ".join(c.message for c in report.checks if c.status == "FAIL")
+                )
+            delivery_id = f"del-{uuid.uuid4().hex[:12]}"
+            log_audit_event(
+                conn,
+                actor=by,
+                action="mesa_publish_authorize",
+                subject_type="release",
+                subject_id=release_id,
+                new_sha256=request.manifest_sha256,
+                details_json=json.dumps(
+                    {
+                        "delivery_id": delivery_id,
+                        "target_key": target_key,
+                        "target_config_sha256": request.target_config_sha256,
+                        "scope": summary.model_dump(),
+                    },
+                    sort_keys=True,
+                ),
+            )
+        finally:
+            conn.close()
+        result = execute_publish_delivery(
+            delivery_id=delivery_id,
+            release_id=release_id,
+            target_key=target_key,
+            expected_target_config_sha256=request.target_config_sha256,
+        )
+    except Exception as exc:
+        typer.secho(f"Publish failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    typer.echo(f"Delivery {result['delivery_id']}: {result['status']}")
+    if result["status"] != "COMMITTED":
+        raise typer.Exit(code=1)
+
+
+@publish_app.command("status")
+def publish_status(delivery_id: str):
+    """Print a delivery's persisted status and counters."""
+    import json
+
+    from mesa_legal_data.catalog import get_connection
+    from mesa_legal_data.publisher.ledger import get_delivery
+
+    conn = get_connection()
+    try:
+        delivery = get_delivery(conn, delivery_id)
+    finally:
+        conn.close()
+    if not delivery:
+        typer.secho(f"Delivery not found: {delivery_id}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(delivery, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

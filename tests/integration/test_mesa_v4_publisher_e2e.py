@@ -255,3 +255,182 @@ def test_response_loss_retry_reuses_exact_idempotency_key(setup_publisher_env):
     assert retried["retried_count"] == 1
     assert len(seen_keys) == 3
     assert seen_keys[0] == seen_keys[2]
+
+
+@pytest.fixture
+def cli_verified_release(tmp_path, monkeypatch):
+    from mesa_legal_data.catalog import approve_version_with_checks, get_release, get_version_for_artifact
+    from mesa_legal_data.pipeline import process_artifact_pipeline
+    from mesa_legal_data.publisher.engine import target_config_sha256
+    from mesa_legal_data.release.builder import build_release
+    from mesa_legal_data.release.verifier import verify_release
+    from mesa_legal_data.sources.manual import import_manual_file
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MESA_DATA_MESA_API_KEY", "test-secret")
+    migrate()
+    source = tmp_path / "tbk.html"
+    source.write_text(
+        "<!DOCTYPE html><html><body><h1>6098 TÜRK BORÇLAR KANUNU</h1>"
+        "<p>MADDE 1- Sözleşme, tarafların iradelerini karşılıklı ve birbirine uygun olarak açıklamalarıyla kurulur.</p>"
+        "</body></html>",
+        encoding="utf-8",
+    )
+    artifact = import_manual_file(
+        source,
+        source_id="mevzuat",
+        document_id="tr:legislation:law:6098",
+        extra_metadata={"snapshot_date": "2026-10-27"},
+    )
+    process_artifact_pipeline(artifact.artifact_id)
+    conn = get_connection()
+    version = get_version_for_artifact(conn, artifact.artifact_id)
+    approve_version_with_checks(conn, version["version_id"], reviewer="test-human")
+    settings = MesaTargetSettings(base_url="http://127.0.0.1:8000", contract_source="configured")
+    upsert_mesa_target_settings(conn, settings)
+    conn.close()
+    build_release("cli-release")
+    assert verify_release("cli-release")
+    conn = get_connection()
+    release = get_release(conn, "cli-release")
+    conn.close()
+    return tmp_path, release, target_config_sha256(settings)
+
+
+@respx.mock
+def test_cli_publish_verified_release_and_repeat(cli_verified_release):
+    from typer.testing import CliRunner
+
+    from mesa_legal_data.cli import app
+
+    _, release, target_hash = cli_verified_release
+    base = "http://127.0.0.1:8000"
+    respx.get(base + "/health").respond(200, json={"status": "ok"})
+    starts = respx.post(base + "/v4/sessions/start").respond(201, json={"session_id": "cli-session"})
+    inserts = respx.post(base + "/v4/memory/insert").respond(
+        202, json={"mutation_id": "cli-mutation", "status": "accepted"}
+    )
+    respx.get(base + "/v4/mutations/cli-mutation").respond(200, json={"state": "COMMITTED"})
+    respx.post(base + "/v4/sessions/cli-session/end").respond(200, json={"status": "ended"})
+    args = [
+        "publish",
+        "run",
+        "--release-id",
+        release["release_id"],
+        "--confirm-manifest",
+        release["manifest_sha256"],
+        "--confirm-target",
+        target_hash,
+    ]
+    runner = CliRunner()
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert "COMMITTED" in result.output
+    assert inserts.call_count == 2  # Heading preamble and one numbered article.
+    payloads = [json.loads(call.request.content) for call in inserts.calls]
+    assert [payload["metadata"]["mesa_data_chunk_type"] for payload in payloads] == ["preamble", "article"]
+    assert "legal_identity" not in payloads[0]
+    assert payloads[1]["legal_identity"] == {"law_id": "6098", "article_id": "1"}
+    conn = get_connection()
+    delivery_id, status = conn.execute("SELECT delivery_id, status FROM mesa_deliveries").fetchone()
+    assert status == "COMMITTED"
+    assert delivery_id in result.output
+    events = conn.execute(
+        "SELECT actor, subject_id, new_sha256, details_json FROM audit_events WHERE action = 'mesa_publish_authorize'"
+    ).fetchall()
+    assert len(events) == 1
+    assert events[0][0] == "cli"
+    assert events[0][1:3] == (release["release_id"], release["manifest_sha256"])
+    details = json.loads(events[0][3])
+    assert details["delivery_id"] == delivery_id
+    assert details["target_config_sha256"] == target_hash
+    assert details["scope"]["ready_versions"] == 1
+    assert conn.execute("SELECT count(*) FROM operation_jobs").fetchone()[0] == 0
+    conn.close()
+    status_result = runner.invoke(app, ["publish", "status", delivery_id])
+    assert status_result.exit_code == 0, status_result.output
+    assert "COMMITTED" in status_result.output and delivery_id in status_result.output
+    repeated = runner.invoke(app, args)
+    assert repeated.exit_code == 0, repeated.output
+    assert inserts.call_count == 2
+    assert starts.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "scenario, error",
+    [
+        ("manifest", "RELEASE_CONFIRMATION_MISMATCH"),
+        ("target", "TARGET_CONFIRMATION_MISMATCH"),
+        ("unverified", "RELEASE_STATUS_INVALID"),
+        ("missing_release", "RELEASE_NOT_FOUND"),
+        ("missing_confirmation", "Missing option"),
+        ("tamper", "File hash mismatch"),
+        ("preflight", "PREFLIGHT_FAILED"),
+    ],
+)
+@respx.mock
+def test_cli_publish_rejects_before_sending(cli_verified_release, scenario, error):
+    from typer.testing import CliRunner
+
+    from mesa_legal_data.cli import app
+
+    root, release, target_hash = cli_verified_release
+    manifest = release["manifest_sha256"]
+    release_id = release["release_id"]
+    if scenario == "manifest":
+        manifest = "0" * 64
+    elif scenario == "target":
+        target_hash = "0" * 64
+    elif scenario == "unverified":
+        conn = get_connection()
+        conn.execute("UPDATE releases SET status = 'preparing' WHERE release_id = ?", (release_id,))
+        conn.close()
+    elif scenario == "missing_release":
+        release_id = "missing-release"
+    elif scenario == "tamper":
+        (root / "releases" / release_id / "data" / "articles.jsonl").write_text("{}\n")
+    respx.get("http://127.0.0.1:8000/health").respond(503 if scenario == "preflight" else 200, json={"status": "ok"})
+    args = ["publish", "run", "--release-id", release_id, "--confirm-manifest", manifest]
+    if scenario != "missing_confirmation":
+        args += ["--confirm-target", target_hash]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code != 0
+    assert error.lower() in result.output.lower(), result.output
+    assert not any(call.request.method == "POST" for call in respx.calls)
+    conn = get_connection()
+    assert conn.execute("SELECT count(*) FROM mesa_deliveries").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM audit_events WHERE action = 'mesa_publish_authorize'").fetchone()[0] == 0
+    conn.close()
+
+
+@respx.mock
+def test_cli_publish_exits_nonzero_unless_committed(cli_verified_release):
+    from typer.testing import CliRunner
+
+    from mesa_legal_data.cli import app
+
+    _, release, target_hash = cli_verified_release
+    base = "http://127.0.0.1:8000"
+    respx.get(base + "/health").respond(200, json={"status": "ok"})
+    respx.post(base + "/v4/sessions/start").respond(201, json={"session_id": "cli-session"})
+    respx.post(base + "/v4/memory/insert").respond(202, json={"mutation_id": "cli-mutation", "status": "accepted"})
+    respx.get(base + "/v4/mutations/cli-mutation").respond(200, json={"state": "REJECTED"})
+    result = CliRunner().invoke(
+        app,
+        [
+            "publish",
+            "run",
+            "--release-id",
+            release["release_id"],
+            "--confirm-manifest",
+            release["manifest_sha256"],
+            "--confirm-target",
+            target_hash,
+        ],
+    )
+    assert result.exit_code != 0
+    assert "FAILED" in result.output or "PARTIAL" in result.output, result.output
+    conn = get_connection()
+    delivery = conn.execute("SELECT delivery_id, status FROM mesa_deliveries").fetchone()
+    assert delivery[0] in result.output
+    conn.close()
