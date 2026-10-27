@@ -8,8 +8,10 @@ from mesa_legal_data.harvest.cli import harvest_app
 
 app = typer.Typer(help="MESA Legal Data CLI")
 collect_app = typer.Typer(help="Collect legal data artifacts from sources.")
+source_app = typer.Typer(help="Manage source operational settings and parser certifications.")
 app.add_typer(collect_app, name="collect")
 app.add_typer(harvest_app, name="harvest")
+app.add_typer(source_app, name="source")
 
 
 @app.command()
@@ -640,6 +642,130 @@ def sync_cmd(
         "Note: Pipeline stopped before MESA push (MESA push must be triggered manually via Web Panel).",
         fg=typer.colors.YELLOW,
     )
+
+
+@source_app.command("show")
+def source_show(
+    source_id: str = typer.Argument(..., help="Source identifier, e.g. resmi_gazete, mevzuat, aym"),
+):
+    """Shows operational settings and parser certifications for a source."""
+    from mesa_legal_data.catalog import (
+        get_connection,
+        get_db_path,
+        get_source_operational_settings,
+        list_parser_certifications,
+    )
+
+    db_path = get_db_path()
+    if not db_path.exists():
+        typer.secho(f"Catalog database not found at {db_path}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    conn = get_connection()
+    try:
+        settings = get_source_operational_settings(conn, source_id)
+        certs = list_parser_certifications(conn, source_id=source_id)
+
+        typer.secho(f"=== Source Operational Settings: {source_id} ===", fg=typer.colors.CYAN, bold=True)
+        typer.echo(f"Enabled                : {settings['enabled']}")
+        typer.echo(f"Auto-approval Enabled  : {settings['auto_approval_enabled']}")
+        typer.echo(f"Weekly Sample Count    : {settings['weekly_sample_count']}")
+        typer.echo(f"Updated At             : {settings.get('updated_at', '-')}")
+        typer.echo(f"Updated By             : {settings.get('updated_by', '-')}")
+
+        typer.secho("\n=== Parser Certifications ===", fg=typer.colors.CYAN, bold=True)
+        if not certs:
+            typer.echo("No parser certifications found.")
+        else:
+            for cert in certs:
+                status_color = typer.colors.GREEN if cert["certified"] else typer.colors.RED
+                status_text = "CERTIFIED" if cert["certified"] else "REVOKED"
+                typer.echo(
+                    f"- {cert['parser_name']} v{cert['parser_version']}: "
+                    + typer.style(status_text, fg=status_color, bold=True)
+                    + f" (by {cert.get('certified_by', '-')}, at {cert.get('certified_at', '-')})"
+                )
+    finally:
+        conn.close()
+
+
+@source_app.command("auto-approval")
+def source_auto_approval(
+    source_id: str = typer.Argument(..., help="Source identifier, e.g. resmi_gazete, mevzuat"),
+    enable: bool = typer.Option(..., "--enable/--disable", help="Enable or disable auto-approval"),
+    by: str = typer.Option("operator", "--by", help="Operator name or identifier"),
+):
+    """Enables or disables auto-approval for a source."""
+    from mesa_legal_data.catalog import (
+        get_connection,
+        get_db_path,
+        get_source_operational_settings,
+        upsert_source_operational_settings,
+    )
+
+    db_path = get_db_path()
+    if not db_path.exists():
+        typer.secho(f"Catalog database not found at {db_path}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    conn = get_connection()
+    try:
+        current = get_source_operational_settings(conn, source_id)
+        upsert_source_operational_settings(
+            conn,
+            source_id=source_id,
+            enabled=current["enabled"],
+            auto_approval_enabled=enable,
+            weekly_sample_count=current["weekly_sample_count"],
+            updated_by=by,
+        )
+        action = "enabled" if enable else "disabled"
+        typer.secho(
+            f"Auto-approval {action} for source '{source_id}' by {by}.",
+            fg=typer.colors.GREEN,
+        )
+    finally:
+        conn.close()
+
+
+@source_app.command("certify-parser")
+def source_certify_parser(
+    source_id: str = typer.Argument(..., help="Source identifier, e.g. resmi_gazete, mevzuat"),
+    parser: str = typer.Option(..., "--parser", help="Parser name"),
+    version: str = typer.Option(..., "--version", help="Parser version"),
+    by: str = typer.Option("operator", "--by", help="Operator name or identifier"),
+    revoke: bool = typer.Option(False, "--revoke", help="Revoke certification instead of certifying"),
+):
+    """Certifies or revokes certification for a parser version for a source."""
+    from mesa_legal_data.catalog import (
+        get_connection,
+        get_db_path,
+        set_parser_certification,
+    )
+
+    db_path = get_db_path()
+    if not db_path.exists():
+        typer.secho(f"Catalog database not found at {db_path}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    conn = get_connection()
+    try:
+        set_parser_certification(
+            conn,
+            source_id=source_id,
+            parser_name=parser,
+            parser_version=version,
+            certified=not revoke,
+            certified_by=by,
+        )
+        action = "revoked" if revoke else "certified"
+        color = typer.colors.YELLOW if revoke else typer.colors.GREEN
+        typer.secho(
+            f"Parser '{parser}' v{version} {action} for source '{source_id}' by {by}.",
+            fg=color,
+        )
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
