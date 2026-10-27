@@ -3,6 +3,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+from mesa_legal_data.catalog import get_connection, get_document
 from mesa_legal_data.models import FetchedArtifact
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.sources import import_manual_file, import_manual_url
@@ -51,6 +52,14 @@ def run_seed_collection(
 
         try:
             reset_run_budget(source_id)
+            conn = get_connection()
+            try:
+                document = get_document(conn, doc_id)
+            finally:
+                conn.close()
+            item_metadata = dict(extra_meta)
+            if document and document["current_version_id"]:
+                item_metadata["supersedes_version_id"] = document["current_version_id"]
             if local_fixtures_dir and (local_fixtures_dir / f"{number}.pdf").exists():
                 fixture_file = local_fixtures_dir / f"{number}.pdf"
                 artifact = import_manual_file(
@@ -60,7 +69,7 @@ def run_seed_collection(
                     family=family,
                     document_type=doc_type,
                     title=title,
-                    extra_metadata=extra_meta,
+                    extra_metadata=item_metadata,
                 )
             else:
                 source_url = item["source_url"]
@@ -71,7 +80,7 @@ def run_seed_collection(
                     family=family,
                     document_type=doc_type,
                     title=title,
-                    extra_metadata=extra_meta,
+                    extra_metadata=item_metadata,
                 )
 
             is_dup = getattr(artifact, "is_duplicate", False)
