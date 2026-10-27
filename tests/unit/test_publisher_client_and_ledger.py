@@ -159,6 +159,36 @@ def test_native_v4_session_and_insert_payload_are_exact(monkeypatch):
     assert start.called and insert.called
 
 
+def test_native_v4_payload_metadata_is_flat_and_within_mesa_limit():
+    client = MesaClient(MesaTargetSettings(), api_key="secret")
+    targets = [f"tr:legislation:law:6098:article:{n}" for n in range(1, 1000)]
+    chunk = SourceChunk(
+        chunk_id="v1:chunk:1",
+        document_id="doc-1",
+        version_id="v1",
+        chunk_type="article",
+        char_start=0,
+        char_end=4,
+        ordinal=1,
+        content="text",
+        content_hash="content-hash",
+        metadata={"citations": targets},
+    )
+    metadata = client.build_memory_insert_payload(
+        chunk, session_id="sess-1", idempotency_key="stable-key", finalize_revision=True
+    )["metadata"]
+    # Same measure and nesting rule as MESA's input validation.
+    assert len(json.dumps(metadata, sort_keys=True, default=str).encode()) <= 16 * 1024
+    for value in metadata.values():
+        assert not isinstance(value, dict)
+        if isinstance(value, list):
+            assert all(not isinstance(item, (dict, list)) for item in value)
+    kept = metadata["citations"]
+    assert 0 < len(kept) < len(targets)
+    assert kept == targets[: len(kept)]
+    assert chunk.metadata["citations"] == targets
+
+
 def test_native_v4_payload_rejects_chunks_larger_than_evidence_contract():
     client = MesaClient(MesaTargetSettings(), api_key="secret")
     chunk = SourceChunk(

@@ -31,7 +31,7 @@ from mesa_legal_data.harvest.queue import _check_canonical_committed
 from mesa_legal_data.harvest.service_bridge import run_pipeline_item
 from mesa_legal_data.hashing import hash_stream
 from mesa_legal_data.pipeline import process_artifact_pipeline
-from mesa_legal_data.publisher.client import MesaClientError
+from mesa_legal_data.publisher.client import MesaClient, MesaClientError
 from mesa_legal_data.publisher.engine import build_delivery_plan, execute_publish_delivery
 from mesa_legal_data.publisher.ledger import upsert_mesa_target_settings
 from mesa_legal_data.publisher.models import DeliveryStatus, MesaTargetSettings
@@ -199,21 +199,18 @@ def test_final_panel_confirmation_binds_exact_release_manifest_and_target(tmp_pa
     frozen_chunks, _ = build_delivery_plan(release_id=captured["release_id"])
     assert {chunk.version_id for chunk, _ in frozen_chunks} == {v1["version_id"]}
     citation_metadata = [citation for chunk, _ in frozen_chunks for citation in chunk.metadata.get("citations", [])]
-    assert citation_metadata == [
-        {
-            "citation_id": citation_metadata[0]["citation_id"],
-            "source_record_id": doc_id,
-            "source_version_id": v1["version_id"],
-            "target_legislation_id": "tr:legislation:law:6098",
-            "target_article_id": "tr:legislation:law:6098:article:1-a",
-            "target_version_id": None,
-            "citation_status": "EXTRACTED",
-            "relation_hint": "amends",
-            "char_start": citation_metadata[0]["char_start"],
-            "char_end": citation_metadata[0]["char_end"],
-            "fully_contained": True,
-        }
-    ]
+    assert citation_metadata == ["tr:legislation:law:6098:article:1-a"]
+    # MESA rejects metadata with objects or lists inside lists, and metadata over 16 KB.
+    client = MesaClient(MesaTargetSettings(), api_key="secret")
+    for chunk, key in frozen_chunks:
+        metadata = client.build_memory_insert_payload(
+            chunk, session_id="sess-1", idempotency_key=key, finalize_revision=False
+        )["metadata"]
+        assert len(json.dumps(metadata, sort_keys=True, default=str).encode()) <= 16 * 1024
+        for value in metadata.values():
+            assert not isinstance(value, dict)
+            if isinstance(value, list):
+                assert all(not isinstance(item, (dict, list)) for item in value)
 
 
 def test_master_a_chronology_current_version_selection(tmp_path, monkeypatch):
