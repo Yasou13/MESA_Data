@@ -335,3 +335,52 @@ def test_delivery_ledger_and_cross_release_dedup(db_conn):
     # historical delivery evidence must not be presented as current committed state.
     doc_status = get_document_mesa_status(db_conn, "doc-1")
     assert doc_status["status"] == "Update Pending"
+
+
+@respx.mock
+def test_legal_identity_only_for_known_standard_numbered_articles(monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("MESA_DATA_MESA_ALLOWED_HOST", "mesa-contract.test")
+    client = MesaClient(
+        MesaTargetSettings(base_url="https://mesa-contract.test", contract_source="configured"), api_key="secret"
+    )
+    captured = []
+
+    def insert(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(202, json={"status": "accepted", "mutation_id": "mut-identity"})
+
+    respx.post("https://mesa-contract.test/v4/memory/insert").mock(side_effect=insert)
+    cases = [
+        ("6098", "standard", "12", "article", {"law_id": "6098", "article_id": "12"}),
+        ("6698", "standard", "12A", "article", {"law_id": "6698", "article_id": "12A"}),
+        ("9999", "standard", "12", "article", None),
+        ("6098", "temporary", "12", "article", None),
+        ("6098", "additional", "12", "article", None),
+        ("6098", "repeated", "12", "article", None),
+        ("6098", "standard", "12/A", "article", None),
+        ("6098", "standard", "12", "general", None),
+    ]
+    for law_number, article_kind, article_number, chunk_type, expected in cases:
+        chunk = SourceChunk(
+            chunk_id="v1:chunk:12",
+            document_id=f"tr:legislation:law:{law_number}",
+            version_id="v1",
+            chunk_type=chunk_type,
+            char_start=0,
+            char_end=4,
+            ordinal=1,
+            content="test",
+            content_hash="hash",
+            metadata={"law_number": law_number, "article_kind": article_kind, "article_number": article_number},
+        )
+        client.publish_source_chunk(chunk, "stable-key", session_id="sess-1", finalize_revision=True)
+        payload = captured[-1]
+        if expected is None:
+            assert "legal_identity" not in payload
+        else:
+            assert payload.get("legal_identity") == expected
+        assert payload["idempotency_key"] == "stable-key"
+        assert payload["revision_id"] == "v1"
+        assert payload["content"] == payload["evidence_span"] == "test"

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -12,6 +13,11 @@ from mesa_legal_data.publisher.models import (
     PreflightCheckItem,
     PreflightReport,
     SourceChunk,
+)
+
+# Mirrors mesa_storage/legal_identity.py::LAW_IDS in MESA.
+MESA_LEGAL_IDENTITY_LAW_NUMBERS = frozenset(
+    {"2709", "4721", "6098", "6100", "6102", "2577", "5237", "5271", "4857", "6698"}
 )
 
 
@@ -407,7 +413,7 @@ class MesaClient:
         source_ref = metadata.get("authoritative_source_ref") or metadata.get("source_url")
         if not isinstance(source_ref, str) or not source_ref.strip():
             source_ref = f"mesa-data://releases/{metadata.get('release_id', 'current')}/documents/{chunk.document_id}/revisions/{chunk.version_id}/chunks/{chunk.chunk_id}"
-        return {
+        payload = {
             "session_id": session_id,
             "dataset_id": self.settings.dataset_id,
             "document_id": chunk.document_id,
@@ -424,6 +430,16 @@ class MesaClient:
             "metadata": metadata,
             "idempotency_key": idempotency_key,
         }
+        law_number = str(metadata.get("law_number", ""))
+        article_number = str(metadata.get("article_number", ""))
+        if (
+            chunk.chunk_type == "article"
+            and metadata.get("article_kind") == "standard"
+            and law_number in MESA_LEGAL_IDENTITY_LAW_NUMBERS
+            and re.fullmatch(r"\d+[A-Za-zÇĞİÖŞÜçğıöşü]?", article_number)
+        ):
+            payload["legal_identity"] = {"law_id": law_number, "article_id": article_number}
+        return payload
 
     def publish_source_chunk(
         self,
