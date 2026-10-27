@@ -237,8 +237,8 @@ def process_artifact_pipeline(
     elif fam == "decision":
         dec_parsed_pre = parse_decision_text(canonical_text)
         raw_ver_date = (
-            getattr(dec_parsed_pre, "decision_date", None)
-            or meta_dict.get("decision_date")
+            meta_dict.get("decision_date")
+            or getattr(dec_parsed_pre, "decision_date", None)
             or meta_dict.get("publication_date")
             or meta_dict.get("snapshot_date")
         )
@@ -451,6 +451,13 @@ def process_artifact_pipeline(
         else:
             # Decision family
             dec_parsed = parse_decision_text(canonical_text)
+            dec_parsed = dec_parsed.model_copy(
+                update={
+                    field: meta_dict[field]
+                    for field in ("court", "chamber", "esas_no", "karar_no", "decision_date")
+                    if meta_dict.get(field)
+                }
+            )
             dec_id = build_decision_id(
                 dec_parsed.court or "unknown",
                 dec_parsed.chamber,

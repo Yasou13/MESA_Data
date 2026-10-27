@@ -210,6 +210,28 @@ def collect_seed(
         raise typer.Exit(code=1)
 
 
+@collect_app.command("bedesten")
+def collect_bedesten_cli(
+    unit: str = typer.Option(..., "--unit", help="HGK, CGK or IBK"),
+    from_date: str = typer.Option(..., "--from", help="First decision date (YYYY-MM-DD, from 2021-01-01)"),
+    to_date: str | None = typer.Option(None, "--to", help="Last decision date (YYYY-MM-DD)"),
+    limit: int = typer.Option(10, "--limit", min=1),
+):
+    """Collect scoped Yargıtay decisions and run the pipeline."""
+    from datetime import date
+
+    from mesa_legal_data.sources.bedesten import collect_bedesten
+
+    try:
+        artifacts = collect_bedesten(
+            unit, date.fromisoformat(from_date), date.fromisoformat(to_date) if to_date else None, limit=limit
+        )
+        typer.echo(f"Collected {len(artifacts)} Bedesten decisions.")
+    except Exception as exc:
+        typer.secho(f"Bedesten collection failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def report():
     """Generates quality and catalog summary report."""

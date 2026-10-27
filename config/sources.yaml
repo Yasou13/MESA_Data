@@ -7,7 +7,7 @@ sources:
     base_url: "https://www.resmigazete.gov.tr/"
     access_mode: "approved_web"
     enabled: true
-    families: ["legislation"]
+    families: ["legislation", "decision"]
     source_role: "original_publication"
     policy_version: "1.0.0"
     http:
@@ -76,17 +76,20 @@ sources:
     authority: "T.C. Yargıtay Başkanlığı"
     base_url: "https://karararama.yargitay.gov.tr/"
     access_mode: "manual"
-    enabled: false
+    enabled: true
     families: ["decision"]
     source_role: "official_case_law"
     policy_version: "1.0.0"
     http:
       user_agent: "MESA-Legal-Data/1.0 (+https://github.com/mesa-legal-data)"
       concurrency: 1
-      min_interval_seconds: 15
+      min_interval_seconds: 6
       timeout_seconds: 30
       retries: 2
       max_requests_per_run: 10
       max_download_bytes: 52428800
     allowed_content_types:
       - "text/html"
+      - "application/pdf"
+    allowed_hosts:
+      - "bedesten.adalet.gov.tr"

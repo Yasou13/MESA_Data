@@ -18,8 +18,8 @@ class ParsedDecision(BaseModel):
     verdict: str | None = None
 
 
-ESAS_NO_PATTERN = re.compile(r"Esas\s*No\s*[:\s]*([0-9]{4}\s*/\s*[0-9]+)", re.IGNORECASE)
-KARAR_NO_PATTERN = re.compile(r"Karar\s*No\s*[:\s]*([0-9]{4}\s*/\s*[0-9]+)", re.IGNORECASE)
+ESAS_NO_PATTERN = re.compile(r"Esas\s*(?:No|Sayısı)\s*[:\s]*([0-9]{4}\s*/\s*[0-9]+)", re.IGNORECASE)
+KARAR_NO_PATTERN = re.compile(r"Karar\s*(?:No|Sayısı)\s*[:\s]*([0-9]{4}\s*/\s*[0-9]+)", re.IGNORECASE)
 KARAR_TARIHI_PATTERN = re.compile(r"Karar\s*Tarihi\s*[:\s]*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4})", re.IGNORECASE)
 
 
