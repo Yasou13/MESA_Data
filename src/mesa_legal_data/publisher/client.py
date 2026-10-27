@@ -15,10 +15,10 @@ from mesa_legal_data.publisher.models import (
     SourceChunk,
 )
 
-# Mirrors mesa_storage/legal_identity.py::LAW_IDS in MESA.
-MESA_LEGAL_IDENTITY_LAW_NUMBERS = frozenset(
-    {"2709", "4721", "6098", "6100", "6102", "2577", "5237", "5271", "4857", "6698"}
-)
+# Mirrors mesa_storage/legal_identity.py::LAW_IDS in MESA, without 2709: MESA main
+# rejects "2709" at insert and dead-letters "Anayasa" (its canonical form fails its own
+# re-check), so Constitution chunks are sent without legal_identity.
+MESA_LEGAL_IDENTITY_LAW_NUMBERS = frozenset({"4721", "6098", "6100", "6102", "2577", "5237", "5271", "4857", "6698"})
 
 
 class MesaClientError(Exception):

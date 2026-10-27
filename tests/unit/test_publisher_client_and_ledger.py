@@ -355,6 +355,7 @@ def test_legal_identity_only_for_known_standard_numbered_articles(monkeypatch):
     cases = [
         ("6098", "standard", "12", "article", {"law_id": "6098", "article_id": "12"}),
         ("6698", "standard", "12A", "article", {"law_id": "6698", "article_id": "12A"}),
+        ("2709", "standard", "12", "article", None),
         ("9999", "standard", "12", "article", None),
         ("6098", "temporary", "12", "article", None),
         ("6098", "additional", "12", "article", None),
