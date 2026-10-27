@@ -194,7 +194,7 @@ def collect_url(
 def collect_seed(
     fixtures_dir: Path | None = typer.Option(None, "--fixtures-dir", help="Optional local directory with PDF fixtures"),
 ):
-    """Imports the 12 core seed legislation items."""
+    """Imports core seed legislation items."""
     from mesa_legal_data.collectors.seed import run_seed_collection
 
     try:
