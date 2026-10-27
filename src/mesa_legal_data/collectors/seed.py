@@ -7,7 +7,6 @@ from mesa_legal_data.catalog import get_connection, get_document
 from mesa_legal_data.models import FetchedArtifact
 from mesa_legal_data.pipeline import process_artifact_pipeline
 from mesa_legal_data.sources import import_manual_file, import_manual_url
-from mesa_legal_data.sources.request_control import reset_run_budget
 
 
 def load_seed_config(config_path: Path | None = None) -> list[dict]:
@@ -51,7 +50,6 @@ def run_seed_collection(
         source_id = "mevzuat"
 
         try:
-            reset_run_budget(source_id)
             conn = get_connection()
             try:
                 document = get_document(conn, doc_id)

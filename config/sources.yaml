@@ -40,7 +40,7 @@ sources:
       min_interval_seconds: 5
       timeout_seconds: 30
       retries: 3
-      max_requests_per_run: 25
+      max_requests_per_run: 60
       max_download_bytes: 52428800
     allowed_content_types:
       - "application/pdf"

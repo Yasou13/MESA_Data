@@ -1,6 +1,7 @@
 import sqlite3
 
 import pytest
+import respx
 from typer.testing import CliRunner
 
 from mesa_legal_data.catalog import get_db_path
@@ -189,3 +190,53 @@ seed_legislation:
     cursor.execute("SELECT count(*) FROM versions WHERE document_id = 'tr:legislation:law:4721'")
     assert cursor.fetchone()[0] == 1
     conn.close()
+
+
+def test_mevzuat_run_budget_covers_the_seed_list():
+    from mesa_legal_data.sources.url_fetcher import validate_source_request
+
+    policy = validate_source_request(
+        source_id="mevzuat", document_family="legislation", url="https://www.mevzuat.gov.tr/MevzuatMetin/1.5.6098.pdf"
+    )
+    assert policy.max_requests_per_run >= len(load_seed_config())
+
+
+@respx.mock
+def test_seed_collection_keeps_one_request_budget_per_run(tmp_path, monkeypatch, capsys):
+    from mesa_legal_data.catalog import migrate
+    from mesa_legal_data.collectors.seed import run_seed_collection
+    from mesa_legal_data.sources import request_control
+    from mesa_legal_data.sources.url_fetcher import validate_source_request
+
+    monkeypatch.setenv("MESA_DATA_DATA_ROOT", str(tmp_path))
+    migrate()
+    urls = [f"https://www.mevzuat.gov.tr/MevzuatMetin/1.5.{n}.pdf" for n in ("6098", "4721")]
+    config = tmp_path / "seed.yaml"
+    config.write_text(
+        "seed_legislation:\n"
+        + "".join(
+            f'  - number: "{n}"\n    document_id: "tr:legislation:law:{n}"\n    title: "Kanun {n}"\n'
+            f'    source_url: "{url}"\n'
+            for n, url in zip(("6098", "4721"), urls, strict=True)
+        ),
+        encoding="utf-8",
+    )
+    routes = [
+        respx.get(url).respond(
+            status_code=200,
+            headers={"content-type": "text/html"},
+            content=f"<!DOCTYPE html><html><body><p>MADDE 1- Kanun {i}.</p></body></html>".encode(),
+        )
+        for i, url in enumerate(urls)
+    ]
+    policy = validate_source_request(source_id="mevzuat", document_family="legislation", url=urls[0])
+    budget = request_control.get_run_budget("mevzuat", policy.max_requests_per_run)
+    for _ in range(policy.max_requests_per_run - 1):
+        budget.consume()
+
+    collected = run_seed_collection(config_path=config)
+
+    assert [a.document_id for a in collected] == ["tr:legislation:law:6098"]
+    assert routes[0].call_count == 1
+    assert routes[1].call_count == 0
+    assert "4721 Kanun 4721: failed" in capsys.readouterr().out
